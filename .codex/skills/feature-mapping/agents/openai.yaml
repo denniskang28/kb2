@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Mapping"
+  short_description: "Create lean Feature routes from REQ, DES, and UI anchors"
+  default_prompt: "Use $feature-mapping to create the lean Feature map from the approved analysis and UI references."

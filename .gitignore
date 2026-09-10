@@ -1,0 +1,35 @@
+# Operating system and editors
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+.local/
+secrets/
+*.key
+*.pem
+
+# Build, test, model, and experiment artifacts
+build/
+dist/
+target/
+node_modules/
+coverage/
+test-results/
+playwright-report/
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.runtime/
+.artifacts/
+.datasets/private/
+
+# Local Codex and Story Pipeline state
+.codex/config.toml
+.story-pipeline/runtime/

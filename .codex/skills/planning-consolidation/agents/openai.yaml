@@ -1,0 +1,4 @@
+interface:
+  display_name: "Planning Consolidation"
+  short_description: "Archive completed Lean Harness delivery evidence"
+  default_prompt: "Use $planning-consolidation to propose a phase-close archive without changing active work yet."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Story Technical Design"
+  short_description: "Design implementation from the Story contract and code"
+  default_prompt: "Use $story-design for S-001 to create its just-in-time technical design."

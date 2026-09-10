@@ -1,0 +1,4 @@
+interface:
+  display_name: "Story Development"
+  short_description: "Implement from the self-contained Story and design"
+  default_prompt: "Use $story-development for S-001 with its approved Story technical design."

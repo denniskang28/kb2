@@ -1,0 +1,4 @@
+interface:
+  display_name: "Story Pipeline"
+  short_description: "Deliver from a self-contained Story with minimal context"
+  default_prompt: "Use $story-pipeline for S-001 to run its complete Story-local delivery pipeline."

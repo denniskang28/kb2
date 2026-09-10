@@ -1,0 +1,4 @@
+interface:
+  display_name: "Story Review"
+  short_description: "Review delivery against Story, design, code, and tests"
+  default_prompt: "Use $review for S-001 to review the current diff against its Story contract and technical design."

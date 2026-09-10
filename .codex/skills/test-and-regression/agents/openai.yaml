@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test and Regression"
+  short_description: "Verify Story acceptance without loading global planning"
+  default_prompt: "Use $test-and-regression for S-001 to verify its acceptance and regression surface."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Requirement Capture"
+  short_description: "Maintain a concise phased PRD from product discussion"
+  default_prompt: "Use $requirement-capture to checkpoint the confirmed functional requirements from this discussion."

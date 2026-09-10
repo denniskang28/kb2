@@ -1,0 +1,4 @@
+interface:
+  display_name: "Optional Feature Design"
+  short_description: "Clarify selected cross-Story behavior only when needed"
+  default_prompt: "Use $feature-design for FEAT-001 to resolve the specified shared design question only."

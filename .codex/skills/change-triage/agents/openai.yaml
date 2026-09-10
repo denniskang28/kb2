@@ -1,0 +1,4 @@
+interface:
+  display_name: "Change Triage"
+  short_description: "Route changes to PRD, design, UI, Story, or code"
+  default_prompt: "Use $change-triage to classify this change and select its smallest correct owner."

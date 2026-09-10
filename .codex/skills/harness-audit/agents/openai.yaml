@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lean Harness Audit"
+  short_description: "Check provenance and readiness without completeness theater"
+  default_prompt: "Use $harness-audit for S-001 to check its self-contained contract and source anchors."

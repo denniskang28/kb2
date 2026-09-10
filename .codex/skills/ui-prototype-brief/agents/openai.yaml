@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Prototype Brief"
+  short_description: "Create a governed prompt for an external UI tool"
+  default_prompt: "Use $ui-prototype-brief to create the HTML prototype prompt from the approved product analysis."

@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "harness": {
+    "adapter": "kb-lite-lean-v1",
+    "storiesDirectory": "docs/stories",
+    "storyDesignsDirectory": "docs/designs/stories",
+    "productRequirementsPath": "docs/prd.md",
+    "coreDesignPath": "docs/core-design.md",
+    "currentStatePath": "docs/current-state.md"
+  },
+  "execution": {
+    "baseBranch": "main",
+    "branchStrategy": "direct-main",
+    "integrationBranch": null,
+    "worktreeRoot": "/Users/denniskang/work/.storyctl-worktrees/kb2",
+    "stateDirectory": ".story-pipeline/runtime",
+    "maxRepairRounds": 5,
+    "maxEnvironmentRetries": 2,
+    "continueIndependentAfterFailure": true
+  },
+  "codex": {
+    "command": "/Applications/ChatGPT.app/Contents/Resources/codex",
+    "sandbox": "workspace-write",
+    "model": null,
+    "reasoningEffort": "medium",
+    "stages": {
+      "readiness": {
+        "agent": null,
+        "skill": "harness-audit",
+        "schema": "readiness-result.json"
+      },
+      "design": {
+        "agent": "design-agent",
+        "skill": "story-design",
+        "schema": "design-result.json"
+      },
+      "develop": {
+        "agent": "dev-agent",
+        "skill": "story-development",
+        "schema": "development-result.json"
+      },
+      "test": {
+        "agent": "test-agent",
+        "skill": "test-and-regression",
+        "schema": "test-result.json"
+      },
+      "review": {
+        "agent": "review-agent",
+        "skill": "review",
+        "schema": "review-result.json"
+      },
+      "reconcile": {
+        "agent": "story-pipeline-agent",
+        "skill": "story-pipeline",
+        "schema": "reconcile-result.json"
+      }
+    }
+  },
+  "delivery": {
+    "commit": false,
+    "push": false,
+    "createPr": false,
+    "autoMerge": false,
+    "finalizeIntegrationToMain": false,
+    "mergeMethod": "squash",
+    "remote": "origin"
+  },
+  "policyPath": ".story-pipeline/policy.json"
+}

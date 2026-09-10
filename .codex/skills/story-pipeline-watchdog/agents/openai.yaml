@@ -1,0 +1,4 @@
+interface:
+  display_name: "Story Pipeline Watchdog"
+  short_description: "Resume safely paused Story pipelines with audit logs"
+  default_prompt: "Use $story-pipeline-watchdog to inspect the active Story pipeline and safely resume it when policy permits."

@@ -1,0 +1,24 @@
+{
+  "id": "kb-lite-local-policy",
+  "scope": {
+    "storyIds": [],
+    "allowedPaths": []
+  },
+  "delivery": {
+    "commit": false,
+    "push": false,
+    "createPr": false,
+    "autoMerge": false,
+    "finalizeIntegrationToMain": false,
+    "mergeMethod": "squash",
+    "remote": "origin"
+  },
+  "retry": {
+    "maxRepairRounds": 5,
+    "maxEnvironmentRetries": 2,
+    "continueIndependentAfterFailure": true
+  },
+  "approval": {
+    "autoApproveMaterialDesign": true
+  }
+}

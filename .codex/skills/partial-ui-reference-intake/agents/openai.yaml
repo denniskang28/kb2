@@ -1,0 +1,4 @@
+interface:
+  display_name: "Partial UI Reference Intake"
+  short_description: "Update one bounded UI reference and Story context"
+  default_prompt: "Use $partial-ui-reference-intake to analyze only the specified screen, state, or interaction."

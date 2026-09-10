@@ -1,0 +1,4 @@
+interface:
+  display_name: "Update PRD"
+  short_description: "Change concise product scope and identify stale Stories"
+  default_prompt: "Use $update-prd to reconcile this approved product change with the concise PRD."

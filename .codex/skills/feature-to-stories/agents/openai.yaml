@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature to Stories"
+  short_description: "Compile relevant global evidence into self-contained Stories"
+  default_prompt: "Use $feature-to-stories for FEAT-001 to create concise self-contained Story contracts."

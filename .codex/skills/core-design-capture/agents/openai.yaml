@@ -1,0 +1,4 @@
+interface:
+  display_name: "Core Design Capture"
+  short_description: "Capture only confirmed high-value technical design"
+  default_prompt: "Use $core-design-capture to checkpoint the confirmed core technical design from this discussion."

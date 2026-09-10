@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Reference Intake"
+  short_description: "Map an HTML prototype into stable Story-ready UI anchors"
+  default_prompt: "Use $ui-reference-intake to analyze this HTML prototype and prepare its adopted UI references."
