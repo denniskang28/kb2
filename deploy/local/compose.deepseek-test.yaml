@@ -1,0 +1,13 @@
+services:
+  deepseek-fixture:
+    image: ${KB2_APP_IMAGE:-kb2-runtime:0.1.0}
+    pull_policy: never
+    command: ["python", "/app/tests/fixtures/deepseek_provider.py"]
+    user: "10001:10001"
+    environment:
+      KB2_FIXTURE_MODELS: deepseek-v4-flash,deepseek-v4-pro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/test/requests', timeout=2)"]
+      interval: 1s
+      timeout: 2s
+      retries: 20

@@ -1,0 +1,32 @@
+version: capability-catalog/v1
+components:
+  - id: control.api
+    required: true
+    probe: self
+  - id: metadata.postgres
+    required: true
+    probe: postgres
+  - id: artifact.local
+    required: true
+    probe: artifact
+  - id: worker.default
+    required: true
+    probe: worker
+capabilities:
+  - id: embedding.default
+    required: false
+    probe: not-configured
+  - id: generation.default
+    provider: deepseek
+    required: false
+    probe: deepseek-model
+    model: deepseek-v4-flash
+  - id: generation.high_precision
+    provider: deepseek
+    required: false
+    probe: deepseek-model
+    model: deepseek-v4-pro
+  - id: runner.container
+    provider: container-runner
+    required: false
+    probe: not-configured

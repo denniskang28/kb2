@@ -27,7 +27,7 @@ accuracy reproducibly across representative complex documents.
 
 | ID | Requirement | Status | Source |
 |---|---|---|---|
-| REQ-001 | The complete service stack and representative models can run locally with persisted artifacts and no required Azure service. | Confirmed | User confirmation |
+| REQ-001 | The complete core service stack runs locally with persisted artifacts and no required Azure service. Model integrations remain provider-neutral and may use explicitly configured external providers; their credentials and readiness do not gate the core runtime unless a selected Profile requires that capability. | Confirmed | User confirmation |
 | REQ-002 | An Ingestion Profile declaratively composes reusable, allowlisted processing plugins; a Profile does not own or execute an arbitrary script. | Confirmed | User confirmation |
 | REQ-003 | The engine validates plugin configuration and typed stage inputs/outputs before or during execution and rejects incompatible plans safely. | Confirmed | User confirmation |
 | REQ-004 | A Profile may use explicit selection, deterministic document-class routing, and declared conditional branches while recording the resolved execution plan. | Confirmed | User confirmation |
@@ -66,16 +66,19 @@ accuracy reproducibly across representative complex documents.
 3. At least two Query Profiles can be compared over the same indexed artifacts.
 4. A failed evaluation case can be traced to ingestion, retrieval, context, or
    answer-generation evidence.
-5. The entire demonstration and evaluation loop runs locally from documented
-   commands and persists its non-sensitive artifacts.
+5. The demonstration and evaluation loop is orchestrated locally from
+   documented commands and persists its non-sensitive artifacts; configured
+   model calls may use an explicitly selected external provider.
 
 ## Open Product Questions
 
 None currently blocking Feature decomposition. Exact initial document fixtures,
-metric thresholds, and local model choices belong to Story design and benchmark
-calibration unless they change the scope above.
+metric thresholds, and provider/model choices belong to Story design and
+benchmark calibration unless they change the scope above.
 
 ## Change History
 
 - **2026-09-10:** Initialized and approved the Lite Core scope from the user's
   confirmed ingestion, query, and evaluation focus.
+- **2026-09-11:** User selected an external DeepSeek generation provider instead
+  of a locally hosted Ollama model; clarified the local-first provider boundary.

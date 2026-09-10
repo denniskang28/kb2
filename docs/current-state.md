@@ -1,6 +1,6 @@
 # Current State
 
-- **As Of:** 2026-09-10
+- **As Of:** 2026-09-11
 - **Harness State:** Lite Harness Initialized
 - **Product Requirements:** Approved - 2026-09-10 (17 confirmed REQs)
 - **Core Design:** Approved - 2026-09-10 (16 confirmed DES records)
@@ -9,9 +9,11 @@
 - **UI Prototype Brief:** Ready - 2026-09-10
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Not Yet Generated / Not Adopted
-- **Stories:** 3 Confirmed (S-001 through S-003)
-- **Active Story:** None
-- **Application/Test Baseline:** None
+- **Stories:** S-001 Implemented; S-002 and S-003 Confirmed
+- **Active Story:** None; S-002 is next eligible
+- **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
+  PostgreSQL/pgvector, optional external DeepSeek capability boundary, 65
+  focused tests, and an isolated lifecycle regression
 
 ## Current Boundary
 
@@ -31,15 +33,18 @@ revisions, lineage, and snapshots required to reproduce experiments do not
 reintroduce user-facing version-management scope.
 
 The project-level Codex agents, skills, Story Pipeline configuration, and lean
-workflow were copied from `../kb` and adapted to this engine-first boundary. No
-application code, technical implementation design, test suite, benchmark
-corpus, or adopted UI reference has been established. FEAT-005 owns the thin
-experiment workbench, and its Claude Design generation prompt is ready.
+workflow were copied from `../kb` and adapted to this engine-first boundary.
+S-001 establishes the local control API, worker heartbeat, PostgreSQL/pgvector,
+Artifact-volume probe, scoped lifecycle CLI, capability readiness contract, and
+optional external DeepSeek provider boundary. No ingestion/query/evaluation
+domain engine, benchmark corpus, or adopted UI reference has been established.
+FEAT-005 owns the thin experiment workbench, and its Claude Design generation
+prompt is ready.
 
 ## Recommended Next Action
 
-Run `story-pipeline-agent S-001`; after its delivery, S-002 and S-003 can
-establish the shared Artifact/Trace and Plugin/Runner contracts. Run
+Deliver S-002 next to establish the shared immutable Artifact and Run/Stage
+trace contracts, then deliver S-003 for Plugin/Runner contracts. Run
 `$feature-to-stories FEAT-002` after these boundaries are confirmed so the
 ingestion Stories can reference stable prerequisites without pre-planning the
 complete system. FEAT-003 and FEAT-004 can be decomposed after their required
@@ -59,3 +64,7 @@ then run `$ui-reference-intake <prototype-path>` before decomposing UI Stories.
   explicit Story boundary confirmation.
 - **2026-09-10:** User confirmed S-001 through S-003; S-001 is next for
   delivery.
+- **2026-09-10:** Started the S-001 Story Pipeline delivery run.
+- **2026-09-11:** Implemented S-001 with a credential-independent local core
+  runtime and optional external DeepSeek generation readiness; verification and
+  final review passed.

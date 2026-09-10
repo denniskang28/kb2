@@ -27,8 +27,9 @@ without introducing enterprise operational infrastructure.
 ## Dependencies And Risks
 
 - No Feature dependency.
-- Local model and complex-parser resource requirements must remain explicit so
-  a healthy control API cannot falsely imply every plugin is runnable.
+- External model credentials/network requirements and complex-parser resource
+  requirements must remain explicit so a healthy control API cannot falsely
+  imply every provider or plugin is runnable.
 - Artifact storage and trace identity must be stable before higher Features
   build incompatible ad hoc persistence.
 
@@ -36,7 +37,7 @@ without introducing enterprise operational infrastructure.
 
 | Story | Outcome | Status |
 |---|---|---|
-| S-001 | Start and inspect the complete local runtime and capability readiness | Confirmed |
+| S-001 | Start and inspect the complete local runtime and capability readiness | Implemented |
 | S-002 | Persist immutable Artifacts and common Run/Stage trace evidence | Confirmed |
 | S-003 | Register and invoke typed Plugins through equivalent local runners | Confirmed |
 
@@ -50,3 +51,6 @@ None.
 - **2026-09-10:** Compiled S-001 through S-003; awaiting Story boundary
   confirmation.
 - **2026-09-10:** User confirmed S-001 through S-003.
+- **2026-09-11:** User selected external DeepSeek for generation and removed
+  Ollama from the initial runtime boundary.
+- **2026-09-11:** S-001 implementation, verification, and final review passed.

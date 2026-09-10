@@ -255,15 +255,20 @@ invalid citations may be zero-tolerance gates even when averages pass.
 - **Strength:** Preferred Direction
 - **Applies To:** REQ-001, REQ-016, REQ-017
 
-The first runtime uses local Artifact Storage, metadata/search storage, model
-providers, and containerized processing plugins. Provider ports cover Artifact
-Storage, parsing/OCR, embedding, search, reranking, and generation. Future
-Azure adapters must satisfy the same contracts and evaluation suites; local
-results are not evidence of Azure-specific compatibility or conformance.
+The first runtime uses local Artifact Storage and metadata/search storage, with
+containerized processing plugins where applicable. Model integrations are
+provider-neutral: the initial generation provider is an explicitly configured
+external DeepSeek API, while embedding remains an independent provider
+decision. Provider ports cover Artifact Storage, parsing/OCR, embedding,
+search, reranking, and generation. Future Azure adapters must satisfy the same
+contracts and evaluation suites; local orchestration results are not evidence
+of Azure-specific compatibility or conformance.
 
-Exact local databases, model runtimes, and initial provider implementations
-remain Story design choices so they can be selected against development-machine
-constraints and representative benchmarks.
+Exact local databases and initial provider implementations remain Story design
+choices so they can be selected against development-machine constraints,
+credential boundaries, and representative benchmarks. Core runtime readiness
+must remain distinct from the readiness of an external capability required by
+a selected Profile.
 
 ## Open Design Questions
 
@@ -275,3 +280,5 @@ material Story-design decisions and must be recorded before implementation.
 
 - **2026-09-10:** Initialized DES-001 through DES-016 from the user-confirmed
   Lite architecture discussion.
+- **2026-09-11:** Updated DES-016 after the user selected an external DeepSeek
+  generation provider instead of a local Ollama runtime.

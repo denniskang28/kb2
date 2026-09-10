@@ -1,17 +1,17 @@
 # S-001: Local Runtime And Readiness
 
 - **Parent Feature:** FEAT-001
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** None
 
 ## Outcome
 
-Let an engineer start, inspect, restart, and stop the complete Lite service
-stack and representative local providers without requiring an Azure service,
-while distinguishing basic process health from the availability of capabilities
-needed by an experiment.
+Let an engineer start, inspect, restart, and stop the complete Lite core service
+stack without requiring an Azure service or model credential, while reporting
+the independent readiness of configured external providers required by an
+experiment.
 
 ## Context Manifest
 
@@ -24,14 +24,14 @@ needed by an experiment.
 
 ## Inherited Requirements And Constraints
 
-- The complete service stack and representative models run locally, preserve
-  their non-sensitive data across a normal restart, and require no Azure
-  service. `[REQ-001]`
+- The complete core service stack runs locally, preserves non-sensitive data
+  across a normal restart, and requires no Azure service. Explicitly configured
+  external model capabilities gate only Profiles that require them. `[REQ-001]`
 - The runtime supports a thin control surface and three separately owned
   engines without absorbing their domain logic. `[DES-001]`
-- Local Artifact, metadata/search, model, and processing-provider boundaries
-  remain replaceable by future provider adapters; local health is not Azure
-  conformance evidence. `[DES-016]`
+- Local Artifact and metadata/search boundaries plus external model and
+  processing-provider boundaries remain replaceable by future adapters; local
+  orchestration health is not Azure conformance evidence. `[DES-016]`
 - A healthy control process must not imply that every optional or resource-heavy
   Plugin/provider capability is currently runnable. `[FEAT-001]`
 
@@ -56,15 +56,16 @@ needed by an experiment.
 
 ## Acceptance Criteria
 
-1. One documented local command prepares and starts every required Lite service
-   and representative local provider from a clean development checkout without
-   requiring an Azure endpoint or credential.
+1. One documented local command prepares and starts every required core Lite
+   service from a clean development checkout without requiring an Azure
+   endpoint or external model credential; an unconfigured external generation
+   provider is reported separately and does not make core readiness fail.
 2. A documented health command reports each required component and capability
    separately, uses a nonzero result for a required unavailable dependency, and
    does not expose credentials, private content, or raw provider errors.
 3. Basic liveness remains distinguishable from readiness to execute a selected
-   experiment, including when an optional heavy model or Plugin runner is not
-   loaded.
+   experiment, including when an external model credential, optional high
+   precision model, or Plugin runner is unavailable.
 4. A normal stop and restart affects only this project and preserves configured
    non-sensitive runtime data; deliberate data removal is a separate explicit
    operation.
@@ -79,24 +80,32 @@ needed by an experiment.
 
 | AC | Evidence Needed | Test Level |
 |---|---|---|
-| 1, 4 | Clean startup, scoped stop, restart, and persistence scenarios | Integration |
+| 1, 4 | Credential-free core startup, scoped stop, restart, and persistence scenarios | Integration |
 | 2, 3 | Required/optional dependency and capability-health matrix | Integration and contract |
 | 5 | Secret/config/image/output scan | Security regression |
-| 6 | Ephemeral runtime lifecycle with success and induced failure | Integration |
+| 6 | Ephemeral runtime lifecycle with success and induced failure, plus deterministic external-provider substitution | Integration |
 
 ## Open Questions
 
-None. Exact local database, search, model runtime, container topology, and
-developer command names are material Story-design choices constrained by the
-acceptance criteria above.
+None. The user selected an external DeepSeek generation provider. Exact local
+database/search choices, external-provider configuration, container topology,
+and developer command names are material Story-design choices constrained by
+the acceptance criteria above.
 
 ## Relationships And Blocks
 
 - Enables S-002 and S-003.
 - Later FEAT-002 through FEAT-004 Stories add executable capabilities to this
-  runtime without changing its local-only product boundary.
+  runtime without changing its local-first orchestration boundary.
 
 ## Change History
 
 - **2026-09-10:** Compiled from confirmed FEAT-001 sources.
 - **2026-09-10:** Story boundary confirmed by the user.
+- **2026-09-10:** Story Pipeline delivery started on
+  `feature/s-001-local-runtime-and-readiness`.
+- **2026-09-11:** User replaced the local Ollama requirement with an external
+  DeepSeek generation provider and confirmed credential-independent core
+  readiness.
+- **2026-09-11:** Implementation, AC verification, security regression, Docker
+  lifecycle testing, and final review passed; ready for delivery close.

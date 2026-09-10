@@ -1,0 +1,15 @@
+services:
+  migrate:
+    environment:
+      KB2_ENVIRONMENT: test
+      KB2_DEEPSEEK_BASE_URL: http://deepseek-fixture:8080
+
+  worker:
+    environment:
+      KB2_ENVIRONMENT: test
+      KB2_DEEPSEEK_BASE_URL: http://deepseek-fixture:8080
+
+  api:
+    environment:
+      KB2_ENVIRONMENT: test
+      KB2_DEEPSEEK_BASE_URL: http://deepseek-fixture:8080

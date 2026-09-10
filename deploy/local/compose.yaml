@@ -1,0 +1,116 @@
+x-app-image: &app-image
+  image: ${KB2_APP_IMAGE:-kb2-runtime:0.1.0}
+  pull_policy: never
+
+x-runtime-environment: &runtime-environment
+  KB2_ENVIRONMENT: ${KB2_ENVIRONMENT:-local}
+  KB2_POSTGRES_PROVIDER: postgres-pgvector-local
+  KB2_ARTIFACT_PROVIDER: local-filesystem
+  KB2_DEEPSEEK_PROVIDER: deepseek
+  KB2_DATABASE_HOST: postgres
+  KB2_DATABASE_PORT: "5432"
+  KB2_DATABASE_NAME: kb2
+  KB2_DATABASE_USER: kb2
+  KB2_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+  KB2_ARTIFACT_ROOT: /var/lib/kb2/artifacts
+  KB2_DEEPSEEK_BASE_URL: ${KB2_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+  KB2_DEEPSEEK_API_KEY_FILE: /run/secrets/deepseek_api_key
+  KB2_CAPABILITIES_PATH: /app/deploy/local/capabilities.yaml
+  KB2_PROBE_TIMEOUT_SECONDS: "2"
+  KB2_HEARTBEAT_FRESHNESS_SECONDS: "10"
+  KB2_HEARTBEAT_INTERVAL_SECONDS: "2"
+
+services:
+  postgres:
+    image: pgvector/pgvector@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+    environment:
+      POSTGRES_DB: kb2
+      POSTGRES_USER: kb2
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kb2 -d kb2"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped
+
+  artifact-init:
+    <<: *app-image
+    user: "0:0"
+    command: ["sh", "-c", "mkdir -p /artifacts && chown 10001:10001 /artifacts"]
+    volumes:
+      - artifact_data:/artifacts
+    restart: "no"
+
+  migrate:
+    <<: *app-image
+    command: ["alembic", "-c", "/app/deploy/local/alembic.ini", "upgrade", "head"]
+    environment: *runtime-environment
+    secrets:
+      - postgres_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  worker:
+    <<: *app-image
+    command: ["python", "-m", "kb2_runtime.worker"]
+    environment: *runtime-environment
+    read_only: true
+    tmpfs:
+      - /tmp
+    secrets:
+      - postgres_password
+    volumes:
+      - artifact_data:/var/lib/kb2/artifacts
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      artifact-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  api:
+    <<: *app-image
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile
+    environment: *runtime-environment
+    read_only: true
+    tmpfs:
+      - /tmp
+    secrets:
+      - postgres_password
+      - deepseek_api_key
+    volumes:
+      - artifact_data:/var/lib/kb2/artifacts
+    ports:
+      - "127.0.0.1:${KB2_API_PORT:-8010}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      artifact-init:
+        condition: service_completed_successfully
+      worker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+secrets:
+  postgres_password:
+    file: ${KB2_POSTGRES_PASSWORD_FILE}
+  deepseek_api_key:
+    file: ${KB2_DEEPSEEK_API_KEY_FILE}
+
+volumes:
+  postgres_data:
+  artifact_data:
