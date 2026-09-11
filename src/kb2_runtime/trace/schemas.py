@@ -9,6 +9,7 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("provider.native-ooxml-result", "v1"),
     ("provider.scanned-ocr-result", "v1"),
     ("canonical.document", "v1"),
+    ("chunk.set", "v1"),
 })
 
 

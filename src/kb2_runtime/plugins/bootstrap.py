@@ -14,6 +14,7 @@ from kb2_runtime.ingestion_adapters import (
     ScannedOcrExchangeAdapter,
 )
 from kb2_runtime.structure import CanonicalStructurePlugin, StructureConfig
+from kb2_runtime.chunking import CanonicalChunkerPlugin, ChunkMetadataEnricherPlugin, ChunkerConfig, EnricherConfig
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -110,6 +111,26 @@ CANONICAL_STRUCTURE_DESCRIPTOR = PluginDescriptor(
 )
 
 
+CANONICAL_CHUNKER_DESCRIPTOR = PluginDescriptor(
+    plugin_id="chunker.canonical@1", kind="chunker", implementation_digest="1" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=ChunkerConfig.model_json_schema(),
+    input_schemas=(("canonical.document", "v1"),), output_schemas=(("chunk.set", "v1"),),
+    input_ports=({"name": "canonical_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
+    output_ports=({"name": "chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
+    quality_signal_names=("chunk_validation", "citation_validation"), timeout_seconds=10,
+)
+
+
+CHUNK_METADATA_ENRICHER_DESCRIPTOR = PluginDescriptor(
+    plugin_id="enricher.chunk-metadata@1", kind="enricher", implementation_digest="2" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=EnricherConfig.model_json_schema(),
+    input_schemas=(("chunk.set", "v1"),), output_schemas=(("chunk.set", "v1"),),
+    input_ports=({"name": "chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
+    output_ports=({"name": "enriched_chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
+    quality_signal_names=("chunk_validation", "citation_validation", "enrichment_validation"), timeout_seconds=10,
+)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -122,4 +143,6 @@ def bootstrap_registry(
     registry.register(NATIVE_OOXML_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
     registry.register(SCANNED_OCR_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
     registry.register(CANONICAL_STRUCTURE_DESCRIPTOR, CanonicalStructurePlugin, StructureConfig)
+    registry.register(CANONICAL_CHUNKER_DESCRIPTOR, CanonicalChunkerPlugin, ChunkerConfig)
+    registry.register(CHUNK_METADATA_ENRICHER_DESCRIPTOR, ChunkMetadataEnricherPlugin, EnricherConfig)
     return registry
