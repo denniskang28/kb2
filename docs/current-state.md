@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-005 Implemented; S-006 through S-027 Confirmed
-- **Active Story:** None; S-006 is next eligible
+- **Stories:** S-001 through S-006 Implemented; S-007 through S-027 Confirmed
+- **Active Story:** None; S-007 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -48,8 +48,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-006 next for representative parser and OCR Plugins. S-006 through
-S-027 are confirmed and may enter just-in-time technical design when their
+Deliver S-007 next for hierarchy, reading order, and table preservation. S-007
+through S-027 are confirmed and may enter just-in-time technical design when their
 declared dependencies are implemented. FEAT-005 implementation remains gated
 by the corresponding engine/control API contracts.
 
@@ -88,3 +88,6 @@ by the corresponding engine/control API contracts.
 - **2026-09-11:** S-005 CanonicalDocument/v1 and typed normalizer boundary
   implementation, acceptance/regression verification, and repaired final
   review passed; delivery commit `d895b26` was fast-forwarded into local main.
+- **2026-09-11:** S-006 representative parser and OCR Plugins implementation,
+  repaired acceptance/regression verification, and final review passed;
+  delivery commit `9afcd68` was fast-forwarded into local main.
