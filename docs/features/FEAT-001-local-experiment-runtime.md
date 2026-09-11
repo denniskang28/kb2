@@ -38,8 +38,8 @@ without introducing enterprise operational infrastructure.
 | Story | Outcome | Status |
 |---|---|---|
 | S-001 | Start and inspect the complete local runtime and capability readiness | Implemented |
-| S-002 | Persist immutable Artifacts and common Run/Stage trace evidence | Confirmed |
-| S-003 | Register and invoke typed Plugins through equivalent local runners | Confirmed |
+| S-002 | Persist immutable Artifacts and common Run/Stage trace evidence | Implemented |
+| S-003 | Register and invoke typed Plugins through equivalent local runners | Implemented |
 
 ## Open Boundary Questions
 
@@ -54,3 +54,4 @@ None.
 - **2026-09-11:** User selected external DeepSeek for generation and removed
   Ollama from the initial runtime boundary.
 - **2026-09-11:** S-001 implementation, verification, and final review passed.
+- **2026-09-11:** S-002 and S-003 delivered into local main.
