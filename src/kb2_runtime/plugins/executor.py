@@ -40,6 +40,8 @@ class PluginExecutor:
             validated = registration.configuration_model.model_validate(configuration).model_dump(mode="json")
         except ValidationError as exc:
             raise PluginError(PluginErrorCode.DESCRIPTOR_INVALID) from exc
+        if len(input_ids) != len(registration.descriptor.input_ports):
+            raise PluginError(PluginErrorCode.RESULT_INVALID)
         manifests = []
         for artifact_id in input_ids:
             manifest = await self.artifacts.get_artifact_manifest(artifact_id)

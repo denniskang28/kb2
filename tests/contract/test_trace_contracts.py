@@ -155,9 +155,11 @@ def test_repository_rejects_output_commit_after_run_is_terminal() -> None:
     assert "SELECT s.state, s.run_id, r.terminal_state" in connection.cursor_instance.executions[0][0]
 
 
-def test_schema_catalog_is_closed_until_a_later_story_extends_it() -> None:
+def test_schema_catalog_includes_only_the_supported_trace_and_canonical_pairs() -> None:
     assert schema_is_supported("opaque.bytes", "v1")
-    assert not schema_is_supported("canonical.document", "v1")
+    assert schema_is_supported("provider.parse-result-fixture", "v1")
+    assert schema_is_supported("canonical.document", "v1")
+    assert not schema_is_supported("provider.sdk-object", "v1")
 
 
 def test_artifact_store_is_content_addressed_immutable_and_revalidates(tmp_path: Path) -> None:

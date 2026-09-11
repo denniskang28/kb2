@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .contracts import PluginContext, PluginDescriptor, PluginInvocationResult, PluginOutput, RunnerType
 from .registry import PluginRegistry
+from kb2_runtime.canonical.normalizer import CanonicalNormalizer, CanonicalNormalizerConfig
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -39,10 +40,25 @@ SYNTHETIC_TRANSFORM_DESCRIPTOR = PluginDescriptor(
 )
 
 
+CANONICAL_NORMALIZER_DESCRIPTOR = PluginDescriptor(
+    plugin_id="normalizer.canonical@1",
+    kind="normalizer",
+    implementation_digest="c" * 64,
+    runner=RunnerType.IN_PROCESS,
+    configuration_schema=CanonicalNormalizerConfig.model_json_schema(),
+    input_schemas=(("provider.parse-result-fixture", "v1"),),
+    output_schemas=(("canonical.document", "v1"),),
+    input_ports=({"name": "provider_result", "artifact_type": "provider.parse-result-fixture", "schema_revision": "v1"},),
+    output_ports=({"name": "canonical_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
+    timeout_seconds=10,
+)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
 ) -> PluginRegistry:
     registry = PluginRegistry(capability_check, runner_ready)
     registry.register(SYNTHETIC_TRANSFORM_DESCRIPTOR, SyntheticTransform, SyntheticTransformConfig)
+    registry.register(CANONICAL_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
     return registry

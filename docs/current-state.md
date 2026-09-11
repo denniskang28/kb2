@@ -10,12 +10,13 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-004 Implemented; S-005 through S-027 Confirmed
-- **Active Story:** None; S-005 is next eligible
+- **Stories:** S-001 through S-005 Implemented; S-006 through S-027 Confirmed
+- **Active Story:** None; S-006 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
-  deterministic resolution, 105 selected focused/regression tests, a Docker-backed
+  deterministic resolution, CanonicalDocument/v1 normalization with typed
+  cross-format locators and table semantics, 122 contract tests, a Docker-backed
   artifact trace persistence/restart regression, and an isolated lifecycle
   regression
 
@@ -47,7 +48,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-005 next for the Canonical Document and normalization boundary. S-005 through
+Deliver S-006 next for representative parser and OCR Plugins. S-006 through
 S-027 are confirmed and may enter just-in-time technical design when their
 declared dependencies are implemented. FEAT-005 implementation remains gated
 by the corresponding engine/control API contracts.
@@ -84,3 +85,6 @@ by the corresponding engine/control API contracts.
 - **2026-09-11:** S-004 Ingestion Profile compilation and deterministic
   resolution implementation, verification, and final review passed; ready for
   delivery close.
+- **2026-09-11:** S-005 CanonicalDocument/v1 and typed normalizer boundary
+  implementation, acceptance/regression verification, and repaired final
+  review passed; ready for delivery close.

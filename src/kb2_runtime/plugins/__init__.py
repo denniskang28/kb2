@@ -3,7 +3,12 @@
 from .contracts import PluginDescriptor, PluginInvocationResult, PluginOutput, PluginPort, RunnerType, StageInvocation
 from .executor import PluginExecutor
 from .registry import PluginRegistry
-from .bootstrap import bootstrap_registry
+
+
+def bootstrap_registry(*args: object, **kwargs: object):
+    """Load repository bootstrap lazily to avoid plugin implementation import cycles."""
+    from .bootstrap import bootstrap_registry as _bootstrap_registry
+    return _bootstrap_registry(*args, **kwargs)
 
 __all__ = [
     "PluginDescriptor", "PluginExecutor", "PluginInvocationResult", "PluginOutput", "PluginPort",
