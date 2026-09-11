@@ -1,0 +1,24 @@
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class TraceErrorCode(StrEnum):
+    ARTIFACT_DIGEST_MISMATCH = "ARTIFACT_DIGEST_MISMATCH"
+    ARTIFACT_CONTENT_MISSING = "ARTIFACT_CONTENT_MISSING"
+    ARTIFACT_SCHEMA_UNSUPPORTED = "ARTIFACT_SCHEMA_UNSUPPORTED"
+    ARTIFACT_PRODUCER_UNBOUND = "ARTIFACT_PRODUCER_UNBOUND"
+    ARTIFACT_LINEAGE_INVALID = "ARTIFACT_LINEAGE_INVALID"
+    STAGE_OUTPUT_INVALID = "STAGE_OUTPUT_INVALID"
+    STAGE_TRANSITION_INVALID = "STAGE_TRANSITION_INVALID"
+    RUN_TRANSITION_INVALID = "RUN_TRANSITION_INVALID"
+    PLAN_SNAPSHOT_INVALID = "PLAN_SNAPSHOT_INVALID"
+    TRACE_STORAGE_FAILURE = "TRACE_STORAGE_FAILURE"
+
+
+class TraceError(RuntimeError):
+    """An actionable, public-safe domain failure."""
+
+    def __init__(self, code: TraceErrorCode) -> None:
+        super().__init__(code.value)
+        self.code = code
