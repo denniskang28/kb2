@@ -4,6 +4,10 @@ from __future__ import annotations
 SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("opaque.bytes", "v1"),
     ("provider.parse-result-fixture", "v1"),
+    ("source.native-ooxml", "v1"),
+    ("source.scanned-ocr-exchange", "v1"),
+    ("provider.native-ooxml-result", "v1"),
+    ("provider.scanned-ocr-result", "v1"),
     ("canonical.document", "v1"),
 })
 

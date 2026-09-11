@@ -1,0 +1,1 @@
+{"model_id":"fixture-ocr-v1","pages":[{"page_number":1,"items":[{"order":0,"text":"\u626b\u63cf\u6d4b\u8bd5","language":"zh","bbox":[0.1,0.1,0.7,0.2],"confidence":0.97,"layout":"heading"},{"order":1,"text":"English evidence survives OCR.","language":"en","bbox":[0.1,0.25,0.9,0.35],"confidence":0.94,"layout":"paragraph"}]}]}
