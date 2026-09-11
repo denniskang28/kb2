@@ -104,6 +104,7 @@ by the corresponding engine/control API contracts.
   main.
 - **2026-09-12:** S-009 deterministic provider-neutral embedding and local
   hybrid index Artifact implementation, repaired acceptance/regression
-  verification, and final review passed. Docker restart/readback verification
-  remains environment-blocked because Compose startup stalled before creating
+  verification, and final review passed; delivery commit `9c76031` was
+  fast-forwarded into local main. Docker restart/readback verification remains
+  environment-blocked because Compose startup stalled before creating
   containers.
