@@ -33,6 +33,8 @@ SYNTHETIC_TRANSFORM_DESCRIPTOR = PluginDescriptor(
     configuration_schema=SyntheticTransformConfig.model_json_schema(),
     input_schemas=(("opaque.bytes", "v1"),),
     output_schemas=(("opaque.bytes", "v1"),),
+    input_ports=({"name": "source", "artifact_type": "opaque.bytes", "schema_revision": "v1"},),
+    output_ports=({"name": "result", "artifact_type": "opaque.bytes", "schema_revision": "v1"},),
     timeout_seconds=10,
 )
 

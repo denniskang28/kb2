@@ -10,11 +10,12 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-003 Implemented; S-004 through S-027 Confirmed
-- **Active Story:** None; S-004 is next eligible
+- **Stories:** S-001 through S-004 Implemented; S-005 through S-027 Confirmed
+- **Active Story:** None; S-005 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
-  Registry/Runner contracts, 87 selected focused contract tests, a Docker-backed
+  Registry/Runner contracts, declarative Ingestion Profile compilation and
+  deterministic resolution, 105 selected focused/regression tests, a Docker-backed
   artifact trace persistence/restart regression, and an isolated lifecycle
   regression
 
@@ -46,7 +47,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-004 next for ingestion Profile compilation and resolution. S-005 through
+Deliver S-005 next for the Canonical Document and normalization boundary. S-005 through
 S-027 are confirmed and may enter just-in-time technical design when their
 declared dependencies are implemented. FEAT-005 implementation remains gated
 by the corresponding engine/control API contracts.
@@ -80,3 +81,6 @@ by the corresponding engine/control API contracts.
 - **2026-09-11:** S-003 Plugin Registry and Runner implementation, cross-runner
   and deployed-sidecar verification, and final review passed; its delivery was
   fast-forwarded into local main.
+- **2026-09-11:** S-004 Ingestion Profile compilation and deterministic
+  resolution implementation, verification, and final review passed; ready for
+  delivery close.

@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 from kb2_runtime.trace.contracts import ArtifactReference, Metric, QualitySignal, safe_metadata_text
 
@@ -34,6 +34,16 @@ class ResourceHints(PluginContract):
     max_output_bytes: int = Field(default=1024 * 1024, ge=1, le=16 * 1024 * 1024)
 
 
+class PluginPort(PluginContract):
+    name: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
+    artifact_type: str = Field(min_length=1, max_length=64)
+    schema_revision: str = Field(min_length=1, max_length=64)
+
+    @property
+    def schema(self) -> SchemaPair:
+        return (self.artifact_type, self.schema_revision)
+
+
 class PluginDescriptor(PluginContract):
     plugin_id: PluginId
     kind: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
@@ -42,16 +52,43 @@ class PluginDescriptor(PluginContract):
     configuration_schema: dict[str, Any] = Field(max_length=64)
     input_schemas: tuple[SchemaPair, ...] = Field(min_length=1, max_length=16)
     output_schemas: tuple[SchemaPair, ...] = Field(min_length=1, max_length=16)
+    input_ports: tuple[PluginPort, ...] = Field(default_factory=tuple, max_length=16)
+    output_ports: tuple[PluginPort, ...] = Field(default_factory=tuple, max_length=16)
+    quality_signal_names: tuple[str, ...] = Field(default_factory=tuple, max_length=16)
     resource_hints: ResourceHints = Field(default_factory=ResourceHints)
     timeout_seconds: float = Field(gt=0, le=300)
     capabilities: tuple[str, ...] = Field(default_factory=tuple, max_length=16)
 
     @field_validator("input_schemas", "output_schemas")
     @classmethod
-    def schemas_unique(cls, value: tuple[SchemaPair, ...]) -> tuple[SchemaPair, ...]:
-        if len(set(value)) != len(value) or any(not a or not b for a, b in value):
-            raise ValueError("schema declarations must be unique pairs")
+    def schemas_valid(cls, value: tuple[SchemaPair, ...]) -> tuple[SchemaPair, ...]:
+        # Named ports may intentionally carry the same artifact schema.
+        if any(not a or not b for a, b in value):
+            raise ValueError("schema declarations must be nonempty pairs")
         return value
+
+    @model_validator(mode="after")
+    def ports_match_schemas(self) -> "PluginDescriptor":
+        # Legacy descriptors are normalized to deterministic names. New Profiles
+        # always consume the resulting named contracts.
+        if not self.input_ports:
+            object.__setattr__(self, "input_ports", tuple(
+                PluginPort(name=f"input_{index}", artifact_type=schema[0], schema_revision=schema[1])
+                for index, schema in enumerate(self.input_schemas)
+            ))
+        if not self.output_ports:
+            object.__setattr__(self, "output_ports", tuple(
+                PluginPort(name=f"output_{index}", artifact_type=schema[0], schema_revision=schema[1])
+                for index, schema in enumerate(self.output_schemas)
+            ))
+        for ports, schemas in ((self.input_ports, self.input_schemas), (self.output_ports, self.output_schemas)):
+            if len({port.name for port in ports}) != len(ports) or tuple(port.schema for port in ports) != schemas:
+                raise ValueError("named ports must exactly match schema declarations")
+        if len(set(self.quality_signal_names)) != len(self.quality_signal_names) or any(
+            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", value) for value in self.quality_signal_names
+        ):
+            raise ValueError("quality signal names must be unique labels")
+        return self
 
     @field_validator("capabilities")
     @classmethod
