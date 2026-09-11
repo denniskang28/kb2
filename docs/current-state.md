@@ -10,15 +10,15 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-006 Implemented; S-007 through S-027 Confirmed
-- **Active Story:** None; S-007 is next eligible
+- **Stories:** S-001 through S-007 Implemented; S-008 through S-027 Confirmed
+- **Active Story:** None; S-008 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
   deterministic resolution, CanonicalDocument/v1 normalization with typed
-  cross-format locators and table semantics, 122 contract tests, a Docker-backed
-  artifact trace persistence/restart regression, and an isolated lifecycle
-  regression
+  cross-format locators and table semantics, reusable structure validation and
+  preservation Plugins, a Docker-backed Artifact trace persistence/restart
+  regression, and an isolated lifecycle regression
 
 ## Current Boundary
 
@@ -48,8 +48,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-007 next for hierarchy, reading order, and table preservation. S-007
-through S-027 are confirmed and may enter just-in-time technical design when their
+Deliver S-008 next for hierarchy/table-aware chunking and retrieval preparation.
+S-008 through S-027 are confirmed and may enter just-in-time technical design when their
 declared dependencies are implemented. FEAT-005 implementation remains gated
 by the corresponding engine/control API contracts.
 
@@ -91,3 +91,7 @@ by the corresponding engine/control API contracts.
 - **2026-09-11:** S-006 representative parser and OCR Plugins implementation,
   repaired acceptance/regression verification, and final review passed;
   delivery commit `9afcd68` was fast-forwarded into local main.
+- **2026-09-11:** S-007 reusable hierarchy, reading-order, and table
+  preservation Plugins implementation, Artifact restart verification, and
+  repaired final review passed; delivery commit `5bc3f7e` was fast-forwarded
+  into local main.
