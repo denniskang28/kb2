@@ -87,4 +87,4 @@ by the corresponding engine/control API contracts.
   delivery close.
 - **2026-09-11:** S-005 CanonicalDocument/v1 and typed normalizer boundary
   implementation, acceptance/regression verification, and repaired final
-  review passed; ready for delivery close.
+  review passed; delivery commit `d895b26` was fast-forwarded into local main.
