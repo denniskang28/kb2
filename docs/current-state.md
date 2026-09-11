@@ -10,11 +10,12 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 Implemented; S-002 through S-027 Confirmed
-- **Active Story:** None; S-002 is next eligible
+- **Stories:** S-001 and S-002 Implemented; S-003 through S-027 Confirmed
+- **Active Story:** None; S-003 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
-  PostgreSQL/pgvector, optional external DeepSeek capability boundary, 65
-  focused tests, and an isolated lifecycle regression
+  PostgreSQL/pgvector, optional external DeepSeek capability boundary, 76
+  focused tests, a Docker-backed artifact trace persistence/restart regression,
+  and an isolated lifecycle regression
 
 ## Current Boundary
 
@@ -44,8 +45,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-002 next to establish the shared immutable Artifact and Run/Stage
-trace contracts, then deliver S-003 for Plugin/Runner contracts. S-004 through
+Deliver S-003 next for Plugin/Runner contracts. S-004 through
 S-027 are confirmed and may enter just-in-time technical design when their
 declared dependencies are implemented. FEAT-005 implementation remains gated
 by the corresponding engine/control API contracts.
@@ -73,3 +73,6 @@ by the corresponding engine/control API contracts.
   all new Story boundaries remain `Needs Confirmation`.
 - **2026-09-11:** User confirmed S-004 through S-027 Story boundaries; all are
   eligible for just-in-time design when their dependencies are satisfied.
+- **2026-09-11:** S-002 implementation, Docker-backed persistence/restart
+  verification, and final review passed; its delivery was merged into local
+  main.
