@@ -8,6 +8,7 @@ from kb2_runtime.health.contracts import HealthEntry, HealthReport
 from kb2_runtime.health.probes import (
     artifact_probe,
     bounded_probe,
+    container_runner_probe,
     deepseek_models,
     postgres_probe,
     worker_probe,
@@ -92,6 +93,11 @@ class HealthService:
                     probe, self.settings.probe_timeout_seconds
                 )
                 models = discovered.get("models", set())
+        container_status, container_code, container_latency = "not_configured", "NOT_CONFIGURED", 0
+        if any(item.probe == "container-runner" and item.id in requested for item in self.catalog.capabilities):
+            container_status, container_code, container_latency = await bounded_probe(
+                lambda: container_runner_probe(self.settings), self.settings.probe_timeout_seconds
+            )
         return [
             self._capability(
                 item,
@@ -100,6 +106,9 @@ class HealthService:
                 provider_status,
                 provider_code,
                 provider_latency,
+                container_status,
+                container_code,
+                container_latency,
             )
             for item in self.catalog.capabilities
         ]
@@ -112,6 +121,9 @@ class HealthService:
         provider_status: str,
         provider_code: str,
         provider_latency: int,
+        container_status: str,
+        container_code: str,
+        container_latency: int,
     ) -> HealthEntry:
         required = item.required or item.id in requested
         if item.probe == "not-configured":
@@ -124,6 +136,9 @@ class HealthService:
                 provider=item.provider,
                 model=item.model,
             )
+        if item.probe == "container-runner":
+            return HealthEntry(id=item.id, required=required, status=container_status, code=container_code,
+                latencyMs=container_latency, provider=item.provider, model=item.model)
         if item.probe != "deepseek-model" or item.model is None:
             return HealthEntry(
                 id=item.id,

@@ -11,7 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .errors import TraceErrorCode
 
 Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
-Label = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")]
+# Plugin IDs are revisioned (for example ``transform.synthetic@1``) and are
+# persisted as producer identities alongside existing metric and artifact labels.
+Label = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,63}$")]
 JsonPrimitive = str | int | float | bool | None
 
 _SENSITIVE_TEXT = re.compile(

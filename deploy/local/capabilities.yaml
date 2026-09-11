@@ -29,4 +29,4 @@ capabilities:
   - id: runner.container
     provider: container-runner
     required: false
-    probe: not-configured
+    probe: container-runner

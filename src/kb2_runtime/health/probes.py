@@ -80,3 +80,12 @@ async def deepseek_models(settings: Settings, api_key: str) -> set[str]:
         payload = response.json()
     models = payload.get("data", [])
     return {str(item.get("id", "")) for item in models if isinstance(item, dict)}
+
+
+async def container_runner_probe(settings: Settings) -> tuple[str, str]:
+    async with httpx.AsyncClient(timeout=settings.probe_timeout_seconds, trust_env=False, follow_redirects=False) as client:
+        response = await client.get(f"{settings.container_runner_url.rstrip('/')}/health")
+        response.raise_for_status()
+        if response.json() != {"ready": True}:
+            raise ValueError("invalid runner probe")
+    return "ready", "OK"

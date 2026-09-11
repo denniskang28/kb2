@@ -57,6 +57,7 @@ class Settings:
     probe_timeout_seconds: float
     heartbeat_freshness_seconds: float
     heartbeat_interval_seconds: float
+    container_runner_url: str = "http://plugin-runner:8081"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -91,6 +92,7 @@ class Settings:
             probe_timeout_seconds=float(os.getenv("KB2_PROBE_TIMEOUT_SECONDS", "2")),
             heartbeat_freshness_seconds=float(os.getenv("KB2_HEARTBEAT_FRESHNESS_SECONDS", "10")),
             heartbeat_interval_seconds=float(os.getenv("KB2_HEARTBEAT_INTERVAL_SECONDS", "2")),
+            container_runner_url=os.getenv("KB2_CONTAINER_RUNNER_URL", "http://plugin-runner:8081"),
         )
 
     def database_password(self) -> str:
