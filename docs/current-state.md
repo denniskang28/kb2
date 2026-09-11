@@ -8,8 +8,9 @@
 - **Feature Designs:** 3 Approved (FD-001 through FD-011)
 - **UI Prototype Brief:** Ready - 2026-09-10
 - **Claude Design Prompt:** Ready - 2026-09-10
-- **UI Prototype / Reference:** Not Yet Generated / Not Adopted
-- **Stories:** S-001 Implemented; S-002 and S-003 Confirmed
+- **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
+  `UI-013`)
+- **Stories:** S-001 Implemented; S-002 through S-027 Confirmed
 - **Active Story:** None; S-002 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, 65
@@ -37,20 +38,17 @@ workflow were copied from `../kb` and adapted to this engine-first boundary.
 S-001 establishes the local control API, worker heartbeat, PostgreSQL/pgvector,
 Artifact-volume probe, scoped lifecycle CLI, capability readiness contract, and
 optional external DeepSeek provider boundary. No ingestion/query/evaluation
-domain engine, benchmark corpus, or adopted UI reference has been established.
-FEAT-005 owns the thin experiment workbench, and its Claude Design generation
-prompt is ready.
+domain engine or benchmark corpus has been established. FEAT-005 owns the thin
+experiment workbench, and `docs/ui/reference.md` governs its adopted workbench
+flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
 Deliver S-002 next to establish the shared immutable Artifact and Run/Stage
-trace contracts, then deliver S-003 for Plugin/Runner contracts. Run
-`$feature-to-stories FEAT-002` after these boundaries are confirmed so the
-ingestion Stories can reference stable prerequisites without pre-planning the
-complete system. FEAT-003 and FEAT-004 can be decomposed after their required
-Artifact and Canonical contracts are represented in confirmed Stories.
-Generate the external FEAT-005 prototype from `docs/ui/claude-design-prompt.md`,
-then run `$ui-reference-intake <prototype-path>` before decomposing UI Stories.
+trace contracts, then deliver S-003 for Plugin/Runner contracts. S-004 through
+S-027 are confirmed and may enter just-in-time technical design when their
+declared dependencies are implemented. FEAT-005 implementation remains gated
+by the corresponding engine/control API contracts.
 
 ## Change History
 
@@ -68,3 +66,10 @@ then run `$ui-reference-intake <prototype-path>` before decomposing UI Stories.
 - **2026-09-11:** Implemented S-001 with a credential-independent local core
   runtime and optional external DeepSeek generation readiness; verification and
   final review passed.
+- **2026-09-11:** Adopted the Claude Design workbench prototype as UI Reference
+  v1 (`UI-001` through `UI-013`), with prototype data, implementation, locale
+  switching, and stale fully offline claims excluded.
+- **2026-09-11:** Compiled FEAT-002 through FEAT-005 into S-004 through S-027;
+  all new Story boundaries remain `Needs Confirmation`.
+- **2026-09-11:** User confirmed S-004 through S-027 Story boundaries; all are
+  eligible for just-in-time design when their dependencies are satisfied.

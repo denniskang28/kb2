@@ -39,9 +39,16 @@ contract and a grounded, validated final response.
 
 ## Story Index
 
-Not yet decomposed. Suggested boundaries: Query Profile/compiler; retrieval
-adapters; candidate fusion/reranking; context assembly; grounded generation,
-verification, repair, and final-state API.
+| Story | Outcome | Primary Source Coverage | Status |
+|---|---|---|---|
+| S-011 | Query Profile compilation | REQ-009; FD-005, FD-007 | Confirmed |
+| S-012 | Composable retrieval strategies | REQ-009, REQ-010; FD-005, FD-007 | Confirmed |
+| S-013 | Candidate fusion and reranking | REQ-009, REQ-010; FD-005, FD-006 | Confirmed |
+| S-014 | Citation-ready Evidence and context assembly | REQ-010, REQ-011; FD-006 | Confirmed |
+| S-015 | DeepSeek-backed grounded generation and final states | REQ-009 through REQ-011; FD-005, FD-006 | Confirmed |
+
+All routed REQ-009 through REQ-011 are compiled into at least one Story. Shared
+Feature rules and non-goals apply to every Story above.
 
 ## Open Boundary Questions
 
@@ -51,3 +58,6 @@ None. Shared behavior is confirmed in
 ## Change History
 
 - **2026-09-10:** Created and confirmed the Feature boundary.
+- **2026-09-11:** Compiled S-011 through S-015; Story boundaries await user
+  confirmation.
+- **2026-09-11:** User confirmed S-011 through S-015 Story boundaries.

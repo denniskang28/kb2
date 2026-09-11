@@ -17,6 +17,7 @@ queries, maintaining reviewed evaluation cases, and comparing experiments.
 - Core Design: `DES-001` through `DES-016`
 - Feature Designs: `FD-001` through `FD-011`
 - UI Brief: `docs/ui/prototype-brief.md`
+- UI Reference: `docs/ui/reference.md` (`UI-001` through `UI-013`)
 
 ## Confirmed Shared Rules
 
@@ -28,8 +29,9 @@ queries, maintaining reviewed evaluation cases, and comparing experiments.
   cannot enter an arbitrary command or script path.
 - Stage, Artifact, Evidence, metric, and failure views preserve the identifiers
   needed to navigate across ingestion, query, and evaluation diagnosis.
-- Synthetic prototype data and reviewer controls do not become product
-  requirements without UI reference intake and explicit adoption.
+- Only the behaviors and visual scope explicitly adopted in
+  `docs/ui/reference.md` are authoritative; its demo-only and not-adopted items
+  remain non-requirements.
 
 ## Dependencies And Risks
 
@@ -41,16 +43,28 @@ queries, maintaining reviewed evaluation cases, and comparing experiments.
 
 ## Story Index
 
-Not yet decomposed. Suggested boundaries: application shell and navigation;
-Profile/Plugin Studio; Document and Ingestion Lab; Query Lab and Evidence
-inspection; Golden Dataset and Evaluation views; Profile comparison and
-cross-run diagnosis.
+| Story | Outcome | Source Coverage | Status |
+|---|---|---|---|
+| S-022 | Workbench shell and runtime overview | UI-001, UI-002, UI-013 | Confirmed |
+| S-023 | Profile and Plugin Studio | UI-006, UI-007, UI-013 | Confirmed |
+| S-024 | Document, Ingestion Run, and Artifact inspection | UI-003, UI-004, UI-005, UI-013 | Confirmed |
+| S-025 | Query Lab and Evidence inspection | UI-005, UI-008, UI-013 | Confirmed |
+| S-026 | Evaluation Dataset and Evaluation Run | UI-009, UI-010, UI-013 | Confirmed |
+| S-027 | Comparison and cross-Run diagnosis | UI-011, UI-012, UI-013 | Confirmed |
+
+All adopted UI-001 through UI-013 items are compiled into at least one Story.
+Demo-only and not-adopted prototype items remain excluded from every Story.
 
 ## Open Boundary Questions
 
-None. The external prototype is an exploration input and must pass UI reference
-intake before any generated behavior becomes authoritative.
+None. UI Reference v1 is confirmed. Story decomposition must preserve its
+adoption boundary and consume engine schemas instead of prototype data models.
 
 ## Change History
 
 - **2026-09-10:** Created and confirmed the dedicated workbench boundary.
+- **2026-09-11:** Adopted and routed UI Reference v1 (`UI-001` through
+  `UI-013`) after prototype intake.
+- **2026-09-11:** Compiled S-022 through S-027 with Visual Acceptance Matrices;
+  Story boundaries await user confirmation.
+- **2026-09-11:** User confirmed S-022 through S-027 Story boundaries.

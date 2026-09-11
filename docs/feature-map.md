@@ -7,7 +7,8 @@
 - **Boundary Confirmed On:** 2026-09-10
 - **Requirements:** `docs/prd.md` - Approved, REQ-001 through REQ-017
 - **Core Design:** `docs/core-design.md` - Approved, DES-001 through DES-016
-- **UI Reference:** None required for the engine-first scope
+- **UI Reference:** `docs/ui/reference.md` - Confirmed for FEAT-005 (`UI-001`
+  through `UI-013`); none required for FEAT-001 through FEAT-004
 - **Coverage:** All 17 requirements have one primary Feature owner.
 
 ## Feature Routes
@@ -59,3 +60,5 @@ exist, even though full end-to-end evaluation depends on FEAT-003.
 - **2026-09-10:** Approved shared designs for FEAT-002 through FEAT-004.
 - **2026-09-10:** Added and confirmed FEAT-005 as the dedicated experiment
   workbench boundary; moved REQ-017 from FEAT-001.
+- **2026-09-11:** Routed the confirmed Claude Design UI Reference v1 to
+  FEAT-005; engine Features remain UI-independent.

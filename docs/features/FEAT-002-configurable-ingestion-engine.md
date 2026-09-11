@@ -42,9 +42,18 @@ end-to-end script.
 
 ## Story Index
 
-Not yet decomposed. Suggested boundaries: Profile schema/compiler/resolver;
-Canonical Document; parser/OCR adapters; structure/table normalization;
-chunking/enrichment; embedding/index Artifact construction.
+| Story | Outcome | Primary Source Coverage | Status |
+|---|---|---|---|
+| S-004 | Ingestion Profile compilation and deterministic resolution | REQ-002 through REQ-005; FD-001, FD-004 | Confirmed |
+| S-005 | Canonical Document and normalization boundary | REQ-003, REQ-006, REQ-008; FD-003 | Confirmed |
+| S-006 | Representative parser and OCR Plugins | REQ-005, REQ-006, REQ-008; FD-002, FD-003 | Confirmed |
+| S-007 | Hierarchy, reading order, and table preservation | REQ-006, REQ-008; FD-003, FD-004 | Confirmed |
+| S-008 | Citation-preserving chunking and enrichment | REQ-005, REQ-006, REQ-008; FD-003, FD-004 | Confirmed |
+| S-009 | Provider-neutral embedding and local index Artifacts | REQ-003, REQ-005, REQ-008; FD-002, FD-003 | Confirmed |
+| S-010 | End-to-end Ingestion execution and validation | REQ-003 through REQ-008; FD-001 through FD-004 | Confirmed |
+
+All routed REQ-002 through REQ-006 and REQ-008 are compiled into at least one
+Story. Shared Feature rules and non-goals apply to every Story above.
 
 ## Open Boundary Questions
 
@@ -54,3 +63,6 @@ None. Shared behavior is confirmed in
 ## Change History
 
 - **2026-09-10:** Created and confirmed the Feature boundary.
+- **2026-09-11:** Compiled S-004 through S-010; Story boundaries await user
+  confirmation.
+- **2026-09-11:** User confirmed S-004 through S-010 Story boundaries.

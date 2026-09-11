@@ -40,9 +40,17 @@ Profile candidates reproducibly by quality, latency, and local resource usage.
 
 ## Story Index
 
-Not yet decomposed. Suggested boundaries: Golden Dataset contract/review;
-ingestion metrics; retrieval/context metrics; answer/citation/abstention
-metrics; judge calibration; reproducible comparison and report.
+| Story | Outcome | Primary Source Coverage | Status |
+|---|---|---|---|
+| S-016 | Golden Dataset and human review | REQ-012, REQ-015; FD-008 | Confirmed |
+| S-017 | Ingestion quality metrics | REQ-013, REQ-015; FD-009 | Confirmed |
+| S-018 | Retrieval and context metrics | REQ-013, REQ-015; FD-009 | Confirmed |
+| S-019 | Answer, citation, and decision metrics | REQ-013, REQ-015; FD-009 | Confirmed |
+| S-020 | Judge calibration and semantic metrics | REQ-015, REQ-016; FD-010 | Confirmed |
+| S-021 | Evaluation gates and reproducible comparison | REQ-013 through REQ-016; FD-010, FD-011 | Confirmed |
+
+All routed REQ-012 through REQ-016 are compiled into at least one Story. Shared
+Feature rules and non-goals apply to every Story above.
 
 ## Open Boundary Questions
 
@@ -52,3 +60,6 @@ None. Shared behavior is confirmed in
 ## Change History
 
 - **2026-09-10:** Created and confirmed the Feature boundary.
+- **2026-09-11:** Compiled S-016 through S-021; Story boundaries await user
+  confirmation.
+- **2026-09-11:** User confirmed S-016 through S-021 Story boundaries.
