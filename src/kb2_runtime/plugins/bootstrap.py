@@ -5,7 +5,7 @@ from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict
 
-from .contracts import PluginContext, PluginDescriptor, PluginInvocationResult, PluginOutput, RunnerType
+from .contracts import PluginContext, PluginDescriptor, PluginInvocationResult, PluginOutput, ResourceHints, RunnerType
 from .registry import PluginRegistry
 from kb2_runtime.canonical.normalizer import CanonicalNormalizer, CanonicalNormalizerConfig
 from kb2_runtime.ingestion_adapters import (
@@ -13,6 +13,7 @@ from kb2_runtime.ingestion_adapters import (
     OcrExchangeConfig,
     ScannedOcrExchangeAdapter,
 )
+from kb2_runtime.structure import CanonicalStructurePlugin, StructureConfig
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -97,6 +98,18 @@ SCANNED_OCR_NORMALIZER_DESCRIPTOR = PluginDescriptor(
 )
 
 
+CANONICAL_STRUCTURE_DESCRIPTOR = PluginDescriptor(
+    plugin_id="structure.canonical@1", kind="structure", implementation_digest="f" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=StructureConfig.model_json_schema(),
+    input_schemas=(("canonical.document", "v1"),), output_schemas=(("canonical.document", "v1"),),
+    input_ports=({"name": "canonical_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
+    output_ports=({"name": "structured_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
+    quality_signal_names=("structure_validation", "hierarchy_validation", "reading_order_validation", "table_validation"),
+    resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024),
+    timeout_seconds=10,
+)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -108,4 +121,5 @@ def bootstrap_registry(
     registry.register(SCANNED_OCR_EXCHANGE_DESCRIPTOR, ScannedOcrExchangeAdapter, OcrExchangeConfig)
     registry.register(NATIVE_OOXML_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
     registry.register(SCANNED_OCR_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
+    registry.register(CANONICAL_STRUCTURE_DESCRIPTOR, CanonicalStructurePlugin, StructureConfig)
     return registry
