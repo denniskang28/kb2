@@ -10,6 +10,9 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("provider.scanned-ocr-result", "v1"),
     ("canonical.document", "v1"),
     ("chunk.set", "v1"),
+    ("embedding.set", "v1"),
+    ("search.document.set", "v1"),
+    ("search.index.result", "v1"),
 })
 
 

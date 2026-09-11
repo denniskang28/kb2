@@ -1,6 +1,6 @@
 # Current State
 
-- **As Of:** 2026-09-11
+- **As Of:** 2026-09-12
 - **Harness State:** Lite Harness Initialized
 - **Product Requirements:** Approved - 2026-09-10 (17 confirmed REQs)
 - **Core Design:** Approved - 2026-09-10 (16 confirmed DES records)
@@ -10,16 +10,18 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-008 Implemented; S-009 through S-027 Confirmed
-- **Active Story:** None; S-009 is next eligible
+- **Stories:** S-001 through S-009 Implemented; S-010 through S-027 Confirmed
+- **Active Story:** None; S-010 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
   deterministic resolution, CanonicalDocument/v1 normalization with typed
   cross-format locators and table semantics, reusable structure validation and
   preservation Plugins, deterministic citation-preserving ChunkSet/v1
-  chunking and bounded enrichment Plugins, a Docker-backed Artifact trace
-  persistence/restart regression, and an isolated lifecycle regression
+  chunking and bounded enrichment Plugins, deterministic provider-neutral
+  embedding and local hybrid index Artifacts with failure recovery, a
+  Docker-backed Artifact trace persistence/restart regression, and an isolated
+  lifecycle regression
 
 ## Current Boundary
 
@@ -49,8 +51,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-009 next for embedding and indexing components. S-009 through S-027
-are confirmed and may enter just-in-time technical design when their
+Deliver S-010 next for end-to-end ingestion execution. S-010 through S-027 are
+confirmed and may enter just-in-time technical design when their
 declared dependencies are implemented. FEAT-005 implementation remains gated
 by the corresponding engine/control API contracts.
 
@@ -100,3 +102,8 @@ by the corresponding engine/control API contracts.
   enrichment implementation, repaired acceptance/regression verification, and
   final review passed; delivery commit `5dc55e7` was fast-forwarded into local
   main.
+- **2026-09-12:** S-009 deterministic provider-neutral embedding and local
+  hybrid index Artifact implementation, repaired acceptance/regression
+  verification, and final review passed. Docker restart/readback verification
+  remains environment-blocked because Compose startup stalled before creating
+  containers.

@@ -1,7 +1,7 @@
 # S-009: Embedding And Local Index Artifacts
 
 - **Parent Feature:** FEAT-002
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-003, S-008
@@ -77,3 +77,6 @@ None. Initial embedding and local search technologies are Story-design choices.
 
 - **2026-09-11:** Compiled from confirmed FEAT-002 sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-12:** Implemented and verified through the Story Pipeline; Docker
+  restart/readback verification remains environment-blocked because Compose
+  startup stalls before containers are created.

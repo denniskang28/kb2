@@ -63,6 +63,10 @@ class PluginExecutor:
             invocation = StageInvocation(run_id=run_id, stage_attempt_id=attempt_id, stage_key=stage_key, plugin_id=registration.descriptor.plugin_id, implementation_digest=registration.descriptor.implementation_digest, validated_configuration=validated, configuration_digest=configuration_digest(validated), inputs=tuple(item.reference for item in input_map.values()), deadline_at=datetime.now(timezone.utc) + timedelta(seconds=registration.descriptor.timeout_seconds))
             context = _Context(invocation, input_map, cancellation or asyncio.Event())
             result = await self.runners[registration.descriptor.runner].invoke(registration.factory(), invocation, context)
+            # A runner can finish immediately before cancellation is observed;
+            # recheck at the publication boundary so it cannot commit output.
+            if context.cancellation.is_set():
+                raise PluginError(PluginErrorCode.CANCELLED)
             return await self._commit(run_id, attempt_id, registration.descriptor.plugin_id, invocation.configuration_digest, registration.descriptor, tuple(input_map), result)
         except Exception as exc:
             code = self._trace_code(exc)

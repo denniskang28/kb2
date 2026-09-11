@@ -40,8 +40,6 @@ class PluginRegistry:
             raise PluginError(PluginErrorCode.DESCRIPTOR_INVALID)
         if any(not schema_is_supported(*schema) for schema in (*descriptor.input_schemas, *descriptor.output_schemas)):
             raise PluginError(PluginErrorCode.SCHEMA_INCOMPATIBLE)
-        if any(not self._capability_check(capability) for capability in descriptor.capabilities):
-            raise PluginError(PluginErrorCode.DESCRIPTOR_INVALID)
         self._items[descriptor.plugin_id] = PluginRegistration(descriptor, factory, configuration_model)
 
     def get(self, plugin_id: str) -> PluginRegistration:
@@ -52,7 +50,14 @@ class PluginRegistry:
 
     def inspect(self, plugin_id: str | None = None) -> tuple[PluginAvailability, ...]:
         items = (self.get(plugin_id),) if plugin_id else tuple(self._items.values())
-        return tuple(PluginAvailability(plugin_id=item.descriptor.plugin_id, runnable=self._runnable(item), reason=None if self._runnable(item) else "RUNNER_UNAVAILABLE") for item in items)
+        return tuple(PluginAvailability(plugin_id=item.descriptor.plugin_id, runnable=self._runnable(item), reason=self._unavailable_reason(item)) for item in items)
 
     def _runnable(self, item: PluginRegistration) -> bool:
         return self._runner_ready(item.descriptor.runner) and all(self._capability_check(value) for value in item.descriptor.capabilities)
+
+    def _unavailable_reason(self, item: PluginRegistration) -> str | None:
+        if not self._runner_ready(item.descriptor.runner):
+            return "RUNNER_UNAVAILABLE"
+        if not all(self._capability_check(value) for value in item.descriptor.capabilities):
+            return "CAPABILITY_UNAVAILABLE"
+        return None
