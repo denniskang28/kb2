@@ -115,4 +115,4 @@ corresponding engine/control API contracts.
 - **2026-09-12:** S-011 completed declarative Query Profile compilation,
   deterministic selection, pinned Search Artifact plan identity, baseline
   query-family fixtures, independent verification, and repaired final review;
-  ready for delivery close.
+  delivery commit `9fc5eab` was fast-forwarded into local main.
