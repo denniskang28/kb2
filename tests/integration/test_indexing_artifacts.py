@@ -126,7 +126,7 @@ def test_unavailable_optional_indexer_is_registered_but_cannot_publish_an_index(
     availability = registry.inspect("indexer.optional@1")[0]
     assert error.code is PluginErrorCode.UNAVAILABLE
     assert availability.registered and not availability.runnable and availability.reason == "CAPABILITY_UNAVAILABLE"
-    assert artifacts.commits == [] and not runs.failures
+    assert artifacts.commits == [] and [failure.code.value for failure in runs.failures] == ["PLUGIN_UNAVAILABLE"]
 
 
 def test_transient_artifact_publish_failure_exposes_no_index_and_a_retry_recovers() -> None:

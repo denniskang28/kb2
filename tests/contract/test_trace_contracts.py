@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, EngineKind, QualitySignal, SafeError, StageResult
+from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.schemas import schema_is_supported
@@ -109,6 +109,78 @@ def test_run_observations_use_the_same_bounded_metric_and_signal_contracts() -> 
     assert signal.name == "run-quality"
     with pytest.raises(ValidationError):
         QualitySignal(name="x" * 65, status="PASS")
+
+
+def test_repository_persists_validated_ingestion_evidence_with_its_plan_digest() -> None:
+    async def persist() -> CapturingConnection:
+        run_id = uuid4()
+        connection = CapturingConnection([{"id": run_id}])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        digest = plan_digest({"profile": "native", "stages": []})
+        await repository.record_ingestion_evidence(
+            run_id,
+            IngestionEvidence(
+                candidate_profile_ids=("native", "default"),
+                evaluated_rules=({"rule_id": "native", "tier": "document_class", "matched": True},),
+                observables={"document_class": "native", "is_scanned": False},
+                selected_profile_id="native",
+                selection_tier="document_class",
+                plan_digest=digest,
+            ),
+        )
+        return connection
+
+    connection = asyncio.run(persist())
+    statement, parameters = connection.cursor_instance.executions[-1]
+    assert "INSERT INTO ingestion_run_evidence" in statement
+    assert parameters is not None
+    assert parameters[1].obj["plan_digest"] == plan_digest({"profile": "native", "stages": []})
+
+
+def test_repository_rejects_sensitive_resolver_evidence_while_exempting_only_plan_digest() -> None:
+    async def persist() -> CapturingConnection:
+        run_id = uuid4()
+        connection = CapturingConnection([])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        with pytest.raises(TraceError) as raised:
+            await repository.record_ingestion_evidence(
+                run_id,
+                IngestionEvidence(
+                    candidate_profile_ids=("native",),
+                    evaluated_rules=(),
+                    observables={"document_class": CANARY_SECRET},
+                    selected_profile_id="native",
+                    selection_tier="default",
+                    plan_digest=plan_digest({"profile": "native", "stages": []}),
+                ),
+            )
+        assert raised.value.code is TraceErrorCode.PLAN_SNAPSHOT_INVALID
+        return connection
+
+    connection = asyncio.run(persist())
+    assert not connection.cursor_instance.executions
+
+
+def test_repository_persists_failed_invalidation_of_a_published_output_attempt() -> None:
+    async def invalidate() -> CapturingConnection:
+        connection = CapturingConnection([{"state": "SUCCEEDED", "terminal_state": None}])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        await repository.invalidate_attempt(
+            uuid4(),
+            SafeError(
+                code=TraceErrorCode.STAGE_OUTPUT_INVALID,
+                category="validation",
+                message="published output did not match the pinned contract",
+            ),
+        )
+        return connection
+
+    connection = asyncio.run(invalidate())
+    update, parameters = connection.cursor_instance.executions[-1]
+    assert "UPDATE stage_attempts SET state='FAILED', result='FAILED'" in update
+    assert parameters is not None
+    assert parameters[1].obj["code"] == TraceErrorCode.STAGE_OUTPUT_INVALID.value
+    assert connection.commits == 1
 
 
 def test_repository_normalizes_model_construct_values_before_persistence() -> None:

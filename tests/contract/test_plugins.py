@@ -251,15 +251,16 @@ def test_unavailable_and_oversized_plugin_fail_without_output_commit() -> None:
         executor = PluginExecutor(unavailable, {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)  # type: ignore[arg-type]
         with pytest.raises(PluginError, match="PLUGIN_UNAVAILABLE"):
             await executor.invoke(uuid4(), "x", "transform.synthetic@1", {}, (artifacts.id,))
-        assert not artifacts.commits and not runs.failures
+        assert not artifacts.commits and len(runs.failures) == 1
+        assert runs.failures[0].code.value == "PLUGIN_UNAVAILABLE" and runs.failures[0].retryable
 
         limited = registry()
         limited.register(descriptor(limit=1), Transform, TransformConfig)
         executor = PluginExecutor(limited, {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)  # type: ignore[arg-type]
         with pytest.raises(PluginError, match="PLUGIN_OUTPUT_LIMIT_EXCEEDED"):
             await executor.invoke(uuid4(), "x", "transform.synthetic@1", {}, (artifacts.id,))
-        assert not artifacts.commits and len(runs.failures) == 1
-        assert runs.failures[0].code.value == "PLUGIN_OUTPUT_LIMIT_EXCEEDED"
+        assert not artifacts.commits and len(runs.failures) == 2
+        assert runs.failures[-1].code.value == "PLUGIN_OUTPUT_LIMIT_EXCEEDED"
     asyncio.run(exercise())
 
 

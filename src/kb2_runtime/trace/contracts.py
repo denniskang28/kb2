@@ -162,6 +162,7 @@ class StageTrace(Contract):
     ended_at: datetime | None
     summary: str
     safe_error: SafeError | None
+    inputs: tuple[ArtifactReference, ...] = ()
     outputs: tuple[ArtifactReference, ...] = ()
     metrics: tuple[Metric, ...] = ()
     quality_signals: tuple[QualitySignal, ...] = ()
@@ -181,3 +182,15 @@ class RunTrace(Contract):
     stages: tuple[StageTrace, ...]
     metrics: tuple[Metric, ...] = ()
     quality_signals: tuple[QualitySignal, ...] = ()
+    ingestion_evidence: "IngestionEvidence | None" = None
+
+
+class IngestionEvidence(Contract):
+    """Frozen, bounded resolver facts sufficient to explain Profile selection."""
+
+    candidate_profile_ids: tuple[Label, ...] = Field(max_length=32)
+    evaluated_rules: tuple[dict[Label, JsonPrimitive], ...] = Field(max_length=64)
+    observables: dict[Label, JsonPrimitive] = Field(max_length=16)
+    selected_profile_id: Label
+    selection_tier: Label
+    plan_digest: Digest

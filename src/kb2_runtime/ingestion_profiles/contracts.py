@@ -44,15 +44,41 @@ class Candidate(ProfileContract):
         return value
 
 
-class Axis(ProfileContract):
+class SubStage(ProfileContract):
+    """One bounded, ordered implementation transition within a fixed axis."""
+
+    stage_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
     candidates: tuple[Candidate, ...] = Field(min_length=1, max_length=16)
     on_exhausted: str | None = None
 
     @model_validator(mode="after")
-    def terminal_policy(self) -> "Axis":
+    def terminal_policy(self) -> "SubStage":
         if set(self.candidates[-1].accept_quality) != set(QualityResult) and self.on_exhausted != "fail":
             raise ValueError("last candidate requires on_exhausted=fail")
         return self
+
+
+class Axis(ProfileContract):
+    candidates: tuple[Candidate, ...] | None = Field(default=None, min_length=1, max_length=16)
+    on_exhausted: str | None = None
+    sub_stages: tuple[SubStage, ...] | None = Field(default=None, min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def terminal_policy(self) -> "Axis":
+        if (self.candidates is None) == (self.sub_stages is None):
+            raise ValueError("exactly one of candidates or sub_stages is required")
+        if self.sub_stages is not None and len({item.stage_id for item in self.sub_stages}) != len(self.sub_stages):
+            raise ValueError("sub_stage IDs must be unique within an axis")
+        if self.candidates is not None and set(self.candidates[-1].accept_quality) != set(QualityResult) and self.on_exhausted != "fail":
+            raise ValueError("last candidate requires on_exhausted=fail")
+        return self
+
+    @property
+    def normalized_sub_stages(self) -> tuple[SubStage, ...]:
+        if self.sub_stages is not None:
+            return self.sub_stages
+        assert self.candidates is not None
+        return (SubStage(stage_id="main", candidates=self.candidates, on_exhausted=self.on_exhausted),)
 
 
 class Profile(ProfileContract):

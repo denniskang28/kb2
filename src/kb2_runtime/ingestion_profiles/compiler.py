@@ -47,7 +47,7 @@ class ProfileCompiler:
 
     def compile(self, profile_set: ProfileSet) -> CompiledProfileSet:
         for index, rule in enumerate(profile_set.preflight_rules):
-            self._validate_condition(rule.when, 0, {}, f"/preflight_rules/{index}/when")
+            self._validate_condition(rule.when, "", "", [], {}, f"/preflight_rules/{index}/when")
         self._reject_ambiguous_preflight_rules(profile_set)
         plans = {profile.profile_id: self._compile_profile(profile_set, profile) for profile in profile_set.profiles}
         return CompiledProfileSet(profile_set=profile_set, plans=MappingProxyType(plans))
@@ -56,55 +56,79 @@ class ProfileCompiler:
         available: dict[str, tuple[str, str]] = {
             f"document.{name}": schema.pair for name, schema in profile_set.document_inputs.items()
         }
-        quality_by_axis: dict[str, set[str]] = {}
+        quality_by_stage: dict[tuple[str, str], set[str]] = {}
+        completed_sub_stages: list[tuple[str, str]] = []
         stages: list[dict[str, Any]] = []
         for axis_index, axis_name in enumerate(AXES):
-            candidates = []
             axis = profile.axes[axis_name]
-            for candidate_index, candidate in enumerate(axis.candidates):
-                location = f"/profiles/{profile.profile_id}/axes/{axis_name}/candidates/{candidate_index}"
-                registration = self._registration(candidate.plugin_id, location)
-                descriptor = registration.descriptor
-                try:
-                    configuration = registration.configuration_model.model_validate(candidate.configuration).model_dump(mode="json")
-                except ValidationError:
-                    raise ProfileError(ProfileErrorCode.CONFIGURATION_INVALID, location + "/configuration") from None
-                inputs = self._inputs(candidate, descriptor.input_ports, available, location)
-                outputs = tuple(candidate.outputs) or tuple(port.name for port in descriptor.output_ports)
-                if len(set(outputs)) != len(outputs) or set(outputs) != {port.name for port in descriptor.output_ports}:
-                    raise ProfileError(ProfileErrorCode.PORT_UNBOUND, location + "/outputs")
-                self._validate_condition(candidate.when, axis_index, quality_by_axis, location + "/when")
-                candidates.append({
-                    "plugin_id": descriptor.plugin_id,
-                    "implementation_digest": descriptor.implementation_digest,
-                    "runner": descriptor.runner.value,
-                    "configuration": configuration,
-                    "inputs": inputs,
-                    "outputs": [{"name": port.name, "artifact_type": port.artifact_type, "schema_revision": port.schema_revision}
-                                for port in descriptor.output_ports if port.name in outputs],
-                    "when": candidate.when,
-                    "accept_quality": [item.value for item in candidate.accept_quality],
-                })
-            # An axis output name is stable across fallbacks only when its schema is stable.
-            first_outputs = {(output["name"], output["artifact_type"], output["schema_revision"]) for output in candidates[0]["outputs"]}
-            if any({(output["name"], output["artifact_type"], output["schema_revision"]) for output in item["outputs"]} != first_outputs for item in candidates[1:]):
-                raise ProfileError(ProfileErrorCode.SCHEMA_INCOMPATIBLE, f"/profiles/{profile.profile_id}/axes/{axis_name}")
-            for name, artifact_type, revision in first_outputs:
-                key = f"{axis_name}.{name}"
-                if key in available:
-                    raise ProfileError(ProfileErrorCode.GRAPH_CYCLE, f"/profiles/{profile.profile_id}/axes/{axis_name}")
-                available[key] = (artifact_type, revision)
-            quality_by_axis[axis_name] = {
-                signal for item in candidates for signal in self._registration(item["plugin_id"], "/").descriptor.quality_signal_names
-            }
-            stages.append({"axis": axis_name, "candidates": candidates, "on_exhausted": axis.on_exhausted})
-        payload = {"schema_version": "v1", "profile_id": profile.profile_id, "stages": stages}
+            resolved_sub_stages: list[dict[str, Any]] = []
+            for sub_index, sub_stage in enumerate(axis.normalized_sub_stages):
+                base = "sub_stages" if axis.sub_stages is not None else "candidates"
+                location = f"/profiles/{profile.profile_id}/axes/{axis_name}/{base}/{sub_index}"
+                candidates = self._compile_candidates(
+                    sub_stage.candidates, available, axis_name, sub_stage.stage_id,
+                    completed_sub_stages, quality_by_stage, location,
+                )
+                first_outputs = {(output["name"], output["artifact_type"], output["schema_revision"]) for output in candidates[0]["outputs"]}
+                if any({(output["name"], output["artifact_type"], output["schema_revision"]) for output in item["outputs"]} != first_outputs for item in candidates[1:]):
+                    raise ProfileError(ProfileErrorCode.SCHEMA_INCOMPATIBLE, location)
+                for name, artifact_type, revision in first_outputs:
+                    key = f"{axis_name}.{sub_stage.stage_id}.{name}"
+                    if key in available:
+                        raise ProfileError(ProfileErrorCode.GRAPH_CYCLE, location)
+                    available[key] = (artifact_type, revision)
+                    if axis.sub_stages is None:
+                        available[f"{axis_name}.{name}"] = (artifact_type, revision)
+                quality_by_stage[(axis_name, sub_stage.stage_id)] = {
+                    signal for item in candidates for signal in self._registration(item["plugin_id"], "/").descriptor.quality_signal_names
+                }
+                completed_sub_stages.append((axis_name, sub_stage.stage_id))
+                resolved_sub_stages.append({"stage_id": sub_stage.stage_id, "candidates": candidates, "on_exhausted": sub_stage.on_exhausted})
+            resolved_axis = {"axis": axis_name, "sub_stages": resolved_sub_stages}
+            # Keep the prior read-only lookup shape for legacy source Profiles;
+            # execution and all new plans use the explicit sub_stages payload.
+            if axis.sub_stages is None:
+                resolved_axis["legacy_alias"] = True
+                resolved_axis["candidates"] = resolved_sub_stages[0]["candidates"]
+                resolved_axis["on_exhausted"] = resolved_sub_stages[0]["on_exhausted"]
+            stages.append(resolved_axis)
+        payload = {
+            "schema_version": "v1",
+            "profile_id": profile.profile_id,
+            "document_inputs": {
+                name: {"artifact_type": schema.artifact_type, "schema_revision": schema.schema_revision}
+                for name, schema in profile_set.document_inputs.items()
+            },
+            "stages": stages,
+        }
         try:
             digest = plan_digest(payload)
         except Exception:
             raise ProfileError(ProfileErrorCode.PARSE_INVALID, f"/profiles/{profile.profile_id}") from None
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
         return ResolvedPlan(profile.profile_id, canonical, digest)
+
+    def _compile_candidates(self, source_candidates: tuple[Candidate, ...], available: dict[str, tuple[str, str]], axis_name: str, stage_id: str, completed_sub_stages: list[tuple[str, str]], quality_by_stage: dict[tuple[str, str], set[str]], location: str) -> list[dict[str, Any]]:
+        candidates = []
+        for candidate_index, candidate in enumerate(source_candidates):
+            candidate_location = f"{location}/candidates/{candidate_index}"
+            registration = self._registration(candidate.plugin_id, candidate_location)
+            descriptor = registration.descriptor
+            try:
+                configuration = registration.configuration_model.model_validate(candidate.configuration).model_dump(mode="json")
+            except ValidationError:
+                raise ProfileError(ProfileErrorCode.CONFIGURATION_INVALID, candidate_location + "/configuration") from None
+            inputs = self._inputs(candidate, descriptor.input_ports, available, candidate_location)
+            outputs = tuple(candidate.outputs) or tuple(port.name for port in descriptor.output_ports)
+            if len(set(outputs)) != len(outputs) or set(outputs) != {port.name for port in descriptor.output_ports}:
+                raise ProfileError(ProfileErrorCode.PORT_UNBOUND, candidate_location + "/outputs")
+            self._validate_condition(candidate.when, axis_name, stage_id, completed_sub_stages, quality_by_stage, candidate_location + "/when")
+            candidates.append({"plugin_id": descriptor.plugin_id, "implementation_digest": descriptor.implementation_digest,
+                "runner": descriptor.runner.value, "configuration": configuration, "inputs": inputs,
+                "outputs": [{"name": port.name, "artifact_type": port.artifact_type, "schema_revision": port.schema_revision}
+                            for port in descriptor.output_ports if port.name in outputs], "when": candidate.when,
+                "accept_quality": [item.value for item in candidate.accept_quality]})
+        return candidates
 
     def _registration(self, plugin_id: str, location: str) -> Any:
         try:
@@ -123,25 +147,25 @@ class ProfileCompiler:
         if set(candidate.inputs) != set(expected):
             raise ProfileError(ProfileErrorCode.PORT_UNBOUND, location + "/inputs")
         resolved = []
-        for name, source in candidate.inputs.items():
+        for port in ports:
+            name, source = port.name, candidate.inputs[port.name]
             if source not in available:
                 code = ProfileErrorCode.GRAPH_CYCLE if source.split(".", 1)[0] in AXES else ProfileErrorCode.PORT_UNBOUND
                 raise ProfileError(code, location + f"/inputs/{name}")
-            port = expected[name]
             if available[source] != (port.artifact_type, port.schema_revision):
                 raise ProfileError(ProfileErrorCode.SCHEMA_INCOMPATIBLE, location + f"/inputs/{name}")
             resolved.append({"name": name, "source": source, "artifact_type": port.artifact_type, "schema_revision": port.schema_revision})
         return resolved
 
-    def _validate_condition(self, condition: dict[str, Any] | None, axis_index: int, quality_by_axis: dict[str, set[str]], location: str) -> None:
+    def _validate_condition(self, condition: dict[str, Any] | None, axis_name: str, stage_id: str, completed_sub_stages: list[tuple[str, str]], quality_by_stage: dict[tuple[str, str], set[str]], location: str) -> None:
         if condition is None:
             return
         try:
-            self._condition(condition, axis_index, quality_by_axis, 0)
+            self._condition(condition, axis_name, stage_id, completed_sub_stages, quality_by_stage, 0)
         except ProfileError as exc:
             raise ProfileError(exc.code, location) from None
 
-    def _condition(self, node: Any, axis_index: int, quality_by_axis: dict[str, set[str]], depth: int) -> None:
+    def _condition(self, node: Any, axis_name: str, stage_id: str, completed_sub_stages: list[tuple[str, str]], quality_by_stage: dict[tuple[str, str], set[str]], depth: int) -> None:
         if depth > 6 or not isinstance(node, dict) or len(node) != 1:
             raise ProfileError(ProfileErrorCode.CONDITION_UNSUPPORTED)
         op, value = next(iter(node.items()))
@@ -149,14 +173,14 @@ class ProfileCompiler:
             if not isinstance(value, list) or not value or len(value) > 32:
                 raise ProfileError(ProfileErrorCode.CONDITION_UNSUPPORTED)
             for item in value:
-                self._condition(item, axis_index, quality_by_axis, depth + 1)
+                self._condition(item, axis_name, stage_id, completed_sub_stages, quality_by_stage, depth + 1)
         elif op == "not":
-            self._condition(value, axis_index, quality_by_axis, depth + 1)
+            self._condition(value, axis_name, stage_id, completed_sub_stages, quality_by_stage, depth + 1)
         elif op in {"eq", "in", "gte", "lte"}:
             if not isinstance(value, list) or len(value) != 2:
                 raise ProfileError(ProfileErrorCode.CONDITION_UNSUPPORTED)
             reference = _reference(value[0])
-            if reference is None or not _valid_reference(reference, axis_index, quality_by_axis):
+            if reference is None or not _valid_reference(reference, completed_sub_stages, quality_by_stage):
                 raise ProfileError(ProfileErrorCode.CONDITION_UNSUPPORTED)
             if not _safe_operand(value[1], op):
                 raise ProfileError(ProfileErrorCode.CONDITION_UNSUPPORTED) from None
@@ -181,12 +205,15 @@ def _reference(value: Any) -> str | None:
     return None
 
 
-def _valid_reference(reference: str, axis_index: int, quality_by_axis: dict[str, set[str]]) -> bool:
+def _valid_reference(reference: str, completed_sub_stages: list[tuple[str, str]], quality_by_stage: dict[tuple[str, str], set[str]]) -> bool:
     document = {"document.media_type", "document.extension", "document.byte_size", "document.page_count", "document.language_hint", "document.has_embedded_text", "document.is_scanned", "document.document_class"}
     if reference in document:
         return True
     parts = reference.split(".")
-    return len(parts) == 3 and parts[0] == "quality" and parts[1] in AXES[:axis_index] and parts[2] in quality_by_axis.get(parts[1], set())
+    if len(parts) == 3 and parts[0] == "quality":
+        matches = [key for key in completed_sub_stages if key[0] == parts[1]]
+        return len(matches) == 1 and parts[2] in quality_by_stage.get(matches[0], set())
+    return len(parts) == 4 and parts[0] == "quality" and (parts[1], parts[2]) in completed_sub_stages and parts[3] in quality_by_stage.get((parts[1], parts[2]), set())
 
 
 _DOCUMENT_DEFAULTS: dict[str, Any] = {

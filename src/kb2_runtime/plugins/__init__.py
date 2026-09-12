@@ -1,6 +1,6 @@
 """Allowlisted plugin registration and execution contracts."""
 
-from .contracts import PluginDescriptor, PluginInvocationResult, PluginOutput, PluginPort, RunnerType, StageInvocation
+from .contracts import PluginDescriptor, PluginInvocationReceipt, PluginInvocationResult, PluginOutput, PluginPort, RunnerType, StageInvocation
 from .executor import PluginExecutor
 from .registry import PluginRegistry
 
@@ -11,6 +11,6 @@ def bootstrap_registry(*args: object, **kwargs: object):
     return _bootstrap_registry(*args, **kwargs)
 
 __all__ = [
-    "PluginDescriptor", "PluginExecutor", "PluginInvocationResult", "PluginOutput", "PluginPort",
+    "PluginDescriptor", "PluginExecutor", "PluginInvocationReceipt", "PluginInvocationResult", "PluginOutput", "PluginPort",
     "PluginRegistry", "RunnerType", "StageInvocation", "bootstrap_registry",
 ]

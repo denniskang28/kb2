@@ -1,7 +1,7 @@
 # S-010: Ingestion Engine Execution And Validation
 
 - **Parent Feature:** FEAT-002
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-004, S-005, S-006, S-007, S-008, S-009
@@ -17,7 +17,7 @@ documents with typed Artifacts, explicit recovery, and inspectable Run evidence.
 |---|---|---|
 | REQ | `docs/prd.md#REQ-003` through `REQ-008` | Approved 2026-09-10 |
 | DES | `docs/core-design.md#DES-002`, `DES-004`, `DES-007`, `DES-008` | Confirmed 2026-09-10 |
-| FD | `docs/designs/features/FEAT-002-configurable-ingestion-engine.md#FD-001` through `FD-004` | Approved 2026-09-10 |
+| FD | `docs/designs/features/FEAT-002-configurable-ingestion-engine.md#FD-001` through `FD-004`, `FD-012` | Approved 2026-09-10; FD-012 confirmed 2026-09-12 |
 | Feature | `docs/features/FEAT-002-configurable-ingestion-engine.md` | Mapped 2026-09-10 |
 
 ## Inherited Requirements And Constraints
@@ -27,6 +27,8 @@ documents with typed Artifacts, explicit recovery, and inspectable Run evidence.
   Artifacts, metrics, quality, timing, and safe failures. `[REQ-007][DES-008]`
 - Retry preserves the plan; fallback is declared and measurable; runtime failure
   never switches implementations silently. `[DES-007][FD-004]`
+- The six component axes remain fixed, while each axis can declare bounded
+  ordered fully typed sub-stages in the pinned plan. `[FD-012]`
 - At least three materially different document classes must prove component
   reuse and Profile variation. `[REQ-008]`
 
@@ -80,3 +82,7 @@ None. Fixture choices and resource bounds belong to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-002 sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-12:** User confirmed the FD-012 Profile-plan correction required
+  for explicit parser/normalizer and projector/indexer execution.
+- **2026-09-12:** Implementation, independent verification, and repaired final
+  review passed; ready for delivery close.

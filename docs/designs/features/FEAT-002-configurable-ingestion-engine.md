@@ -128,6 +128,31 @@ order, acceptance metric, cost/resource bound, and failure behavior is in the
 resolved plan. Automatic retry preserves the chosen candidate. Trying a new
 implementation is a new run, not an invisible retry.
 
+### FD-012: Bounded Ordered Sub-Stages Within Component Axes
+
+- **Status:** Confirmed - 2026-09-12
+- **Applies To:** Profile compiler, ingestion execution, and trace diagnosis
+
+The six user-facing component axes remain fixed: extraction, structure,
+chunking, enrichment, embedding, and indexing. An axis may declare a bounded,
+ordered sequence of fully typed sub-stages. Each sub-stage declares its stable
+ID, registered Plugin candidates, named inputs and outputs, configuration,
+condition, quality acceptance, and terminal fallback policy. Candidate
+selection and fallback happen at the individual sub-stage, not for an entire
+axis.
+
+All sub-stages appear in the compiled immutable plan. Inputs may bind only to
+declared document inputs or outputs of an earlier sub-stage in fixed global
+axis/sub-stage order. This preserves the constrained linear ingestion model;
+it does not introduce arbitrary DAG authoring, implicit Plugin calls, or
+runtime-generated stages. A run therefore pins Parser/OCR-to-normalizer and
+embedder-to-projector-to-indexer transitions exactly as it pins every other
+Plugin invocation.
+
+The existing single-stage axis form remains the one-item form of this model
+where compatibility is required. The plan representation must distinguish an
+axis from its sub-stages in trace identifiers and input/output bindings.
+
 ## Verification Direction
 
 - Schema fixtures prove valid and invalid Profile compilation.
@@ -146,3 +171,6 @@ technical design, constrained by these records.
 ## Change History
 
 - **2026-09-10:** Created and approved FD-001 through FD-004.
+- **2026-09-12:** User confirmed FD-012 to correct the Profile-plan
+  representation: six stable component axes may contain bounded ordered
+  declared sub-stages. No product-scope or Core Design change was made.

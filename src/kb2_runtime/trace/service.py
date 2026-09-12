@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID, uuid4
 
-from .contracts import ArtifactInput, ArtifactManifest, EngineKind, Metric, QualitySignal, RunTrace, SafeError, StageResult
+from .contracts import ArtifactInput, ArtifactManifest, EngineKind, IngestionEvidence, Metric, QualitySignal, RunTrace, SafeError, StageResult
 from .errors import TraceError, TraceErrorCode
 from .repositories import TraceRepository
 from .schemas import schema_is_supported
@@ -33,13 +33,17 @@ class RunService:
         snapshot_id = await self.repository.create_plan(digest, resolved_plan)
         return await self.repository.create_run(engine_kind, snapshot_id)
 
-    async def start_attempt(self, run_id: UUID, stage_key: str) -> tuple[UUID, int]:
+    async def start_attempt(self, run_id: UUID, stage_key: str, input_ids: Sequence[UUID] = ()) -> tuple[UUID, int]:
         if not stage_key or len(stage_key) > 64:
             raise TraceError(TraceErrorCode.STAGE_TRANSITION_INVALID)
-        return await self.repository.start_attempt(run_id, stage_key)
+        return await self.repository.start_attempt(run_id, stage_key, input_ids)
 
     async def fail_attempt(self, attempt_id: UUID, error: SafeError, summary: str = "") -> None:
         await self.repository.finish_attempt(attempt_id, StageResult.FAILED, summary, error)
+
+    async def invalidate_attempt(self, attempt_id: UUID, error: SafeError, summary: str = "") -> None:
+        """Invalidate a published attempt whose post-publication contract check failed."""
+        await self.repository.invalidate_attempt(attempt_id, error, summary)
 
     async def skip_attempt(self, attempt_id: UUID, summary: str = "") -> None:
         await self.repository.finish_attempt(attempt_id, StageResult.SKIPPED, summary)
@@ -57,6 +61,14 @@ class RunService:
         self, run_id: UUID, metrics: Sequence[Metric] = (), quality_signals: Sequence[QualitySignal] = ()
     ) -> None:
         await self.repository.record_run_observations(run_id, metrics, quality_signals)
+
+    async def record_attempt_observations(
+        self, attempt_id: UUID, metrics: Sequence[Metric] = (), quality_signals: Sequence[QualitySignal] = ()
+    ) -> None:
+        await self.repository.record_attempt_observations(attempt_id, metrics, quality_signals)
+
+    async def record_ingestion_evidence(self, run_id: UUID, evidence: IngestionEvidence) -> None:
+        await self.repository.record_ingestion_evidence(run_id, evidence)
 
     async def get_run_trace(self, run_id: UUID) -> RunTrace | None:
         return await self.repository.get_run_trace(run_id)

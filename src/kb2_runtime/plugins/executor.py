@@ -11,7 +11,7 @@ from kb2_runtime.trace.contracts import ArtifactInput as StoredArtifactInput, Ar
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.service import ArtifactService, RunService
 
-from .contracts import ArtifactInput, PluginContext, PluginInvocationResult, RunnerType, StageInvocation, configuration_digest
+from .contracts import ArtifactInput, PluginContext, PluginInvocationReceipt, PluginInvocationResult, RunnerType, StageInvocation, configuration_digest
 from .errors import PluginError, PluginErrorCode
 from .registry import PluginRegistry
 from .runner import PluginRunner
@@ -33,8 +33,27 @@ class PluginExecutor:
         self.registry, self.runners, self.runs, self.artifacts = registry, runners, runs, artifacts
 
     async def invoke(self, run_id: UUID, stage_key: str, plugin_id: str, configuration: dict[str, object], input_ids: tuple[UUID, ...], cancellation: asyncio.Event | None = None) -> tuple[UUID, ...]:
+        return (await self.invoke_with_receipt(run_id, stage_key, plugin_id, configuration, input_ids, cancellation)).output_ids
+
+    async def invoke_with_receipt(self, run_id: UUID, stage_key: str, plugin_id: str, configuration: dict[str, object], input_ids: tuple[UUID, ...], cancellation: asyncio.Event | None = None) -> PluginInvocationReceipt:
         registration = self.registry.get(plugin_id)
         if not self.registry.inspect(plugin_id)[0].runnable or registration.descriptor.runner not in self.runners:
+            try:
+                attempt_id, _ = await self.runs.start_attempt(run_id, stage_key, input_ids)
+            except TypeError:
+                attempt_id, _ = await self.runs.start_attempt(run_id, stage_key)
+            try:
+                await self.runs.fail_attempt(
+                    attempt_id,
+                    SafeError(
+                        code=TraceErrorCode.PLUGIN_UNAVAILABLE,
+                        category="dependency",
+                        message="plugin invocation failed",
+                        retryable=True,
+                    ),
+                )
+            except TraceError:
+                pass
             raise PluginError(PluginErrorCode.UNAVAILABLE)
         try:
             validated = registration.configuration_model.model_validate(configuration).model_dump(mode="json")
@@ -48,7 +67,10 @@ class PluginExecutor:
             if not manifest or (manifest.artifact_type, manifest.schema_revision) not in registration.descriptor.input_schemas:
                 raise PluginError(PluginErrorCode.RESULT_INVALID)
             manifests.append(manifest)
-        attempt_id, _ = await self.runs.start_attempt(run_id, stage_key)
+        try:
+            attempt_id, _ = await self.runs.start_attempt(run_id, stage_key, input_ids)
+        except TypeError:
+            attempt_id, _ = await self.runs.start_attempt(run_id, stage_key)
         try:
             input_map = {
                 item.id: ArtifactInput(
@@ -60,14 +82,15 @@ class PluginExecutor:
                 )
                 for item in manifests
             }
-            invocation = StageInvocation(run_id=run_id, stage_attempt_id=attempt_id, stage_key=stage_key, plugin_id=registration.descriptor.plugin_id, implementation_digest=registration.descriptor.implementation_digest, validated_configuration=validated, configuration_digest=configuration_digest(validated), inputs=tuple(item.reference for item in input_map.values()), deadline_at=datetime.now(timezone.utc) + timedelta(seconds=registration.descriptor.timeout_seconds))
+            invocation = StageInvocation(run_id=run_id, stage_attempt_id=attempt_id, stage_key=stage_key, plugin_id=registration.descriptor.plugin_id, implementation_digest=registration.descriptor.implementation_digest, validated_configuration=validated, configuration_digest=configuration_digest(validated), inputs=tuple(ArtifactReference(id=item.id, artifact_type=item.artifact_type, schema_revision=item.schema_revision, content_digest=item.content_digest, byte_size=item.byte_size, summary=item.summary) for item in manifests), deadline_at=datetime.now(timezone.utc) + timedelta(seconds=registration.descriptor.timeout_seconds))
             context = _Context(invocation, input_map, cancellation or asyncio.Event())
             result = await self.runners[registration.descriptor.runner].invoke(registration.factory(), invocation, context)
             # A runner can finish immediately before cancellation is observed;
             # recheck at the publication boundary so it cannot commit output.
             if context.cancellation.is_set():
                 raise PluginError(PluginErrorCode.CANCELLED)
-            return await self._commit(run_id, attempt_id, registration.descriptor.plugin_id, invocation.configuration_digest, registration.descriptor, tuple(input_map), result)
+            output_ids = await self._commit(run_id, attempt_id, registration.descriptor.plugin_id, invocation.configuration_digest, registration.descriptor, tuple(dict.fromkeys(input_ids)), result)
+            return PluginInvocationReceipt(attempt_id=attempt_id, output_ids=output_ids, metrics=result.metrics, quality_signals=result.quality_signals)
         except Exception as exc:
             code = self._trace_code(exc)
             try:
@@ -80,6 +103,10 @@ class PluginExecutor:
 
     async def _commit(self, run_id: UUID, attempt_id: UUID, plugin_id: str, config_digest: str, descriptor: object, parent_artifact_ids: tuple[UUID, ...], result: PluginInvocationResult) -> tuple[UUID, ...]:
         try:
+            if len(result.outputs) != len(descriptor.output_ports) or tuple(
+                (output.artifact_type, output.schema_revision) for output in result.outputs
+            ) != tuple(port.schema for port in descriptor.output_ports):
+                raise PluginError(PluginErrorCode.RESULT_INVALID)
             outputs = []
             for output in result.outputs:
                 if len(output.content) > descriptor.resource_hints.max_output_bytes:

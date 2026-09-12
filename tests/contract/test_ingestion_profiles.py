@@ -113,3 +113,42 @@ def test_registered_extension_compiles_without_dispatch_changes() -> None:
     registry.register(descriptor, SyntheticTransform, ExtensionConfig)
     source = ProfileParser.parse(json.dumps(profile("transform.extension@1")), "application/json")
     assert ProfileCompiler(registry).compile(source).get("default").canonical_payload["stages"][0]["candidates"][0]["plugin_id"] == "transform.extension@1"
+
+
+def test_explicit_sub_stages_compile_parser_normalizer_and_projector_indexer_transitions() -> None:
+    def candidate(plugin_id: str, inputs: dict[str, str], outputs: list[str], configuration: dict | None = None) -> dict:
+        return {"plugin_id": plugin_id, "configuration": configuration or {}, "inputs": inputs, "outputs": outputs, "accept_quality": ["PASS", "WARN", "FAIL"]}
+
+    axes = {
+        "extraction": {"sub_stages": [
+            {"stage_id": "parse", "candidates": [candidate("parser.native-ooxml@1", {"source": "document.source"}, ["provider_result"])], "on_exhausted": "fail"},
+            {"stage_id": "normalize", "candidates": [candidate("normalizer.native-ooxml@1", {"provider_result": "extraction.parse.provider_result"}, ["canonical_document"])], "on_exhausted": "fail"},
+        ]},
+        "structure": {"sub_stages": [{"stage_id": "main", "candidates": [candidate("structure.canonical@1", {"canonical_document": "extraction.normalize.canonical_document"}, ["structured_document"], {"strategy": "hierarchy"})], "on_exhausted": "fail"}]},
+        "chunking": {"sub_stages": [{"stage_id": "main", "candidates": [candidate("chunker.canonical@1", {"canonical_document": "structure.main.structured_document"}, ["chunk_set"], {"strategy": "fixed_window", "max_tokens": 64})], "on_exhausted": "fail"}]},
+        "enrichment": {"sub_stages": [{"stage_id": "main", "candidates": [candidate("enricher.chunk-metadata@1", {"chunk_set": "chunking.main.chunk_set"}, ["enriched_chunk_set"], {"fields": {"corpus": "fixture"}})], "on_exhausted": "fail"}]},
+        "embedding": {"sub_stages": [{"stage_id": "main", "candidates": [candidate("embedder.hashing@1", {"chunk_set": "enrichment.main.enriched_chunk_set"}, ["embedding_set"])], "on_exhausted": "fail"}]},
+        "indexing": {"sub_stages": [
+            {"stage_id": "project", "candidates": [candidate("search-document.projector@1", {"chunk_set": "enrichment.main.enriched_chunk_set", "embedding_set": "embedding.main.embedding_set"}, ["search_document_set"])], "on_exhausted": "fail"},
+            {"stage_id": "index", "candidates": [candidate("indexer.local-hybrid@1", {"search_document_set": "indexing.project.search_document_set"}, ["search_index_result"])], "on_exhausted": "fail"},
+        ]},
+    }
+    payload = {"schema_version": "v1", "default_profile_id": "native", "document_inputs": {"source": {"artifact_type": "source.native-ooxml", "schema_revision": "v1"}}, "profiles": [{"profile_id": "native", "axes": axes}]}
+    plan = ProfileCompiler(bootstrap_registry()).compile(ProfileParser.parse(json.dumps(payload), "application/json")).get("native").canonical_payload
+    assert [item["stage_id"] for item in plan["stages"][0]["sub_stages"]] == ["parse", "normalize"]
+    assert plan["stages"][5]["sub_stages"][0]["candidates"][0]["inputs"][1]["source"] == "embedding.main.embedding_set"
+    assert plan["stages"][5]["sub_stages"][1]["candidates"][0]["inputs"][0]["source"] == "indexing.project.search_document_set"
+
+
+def test_profile_rejects_duplicate_sub_stage_ids_within_one_axis() -> None:
+    value = profile()
+    axis = value["profiles"][0]["axes"]["extraction"]
+    candidates = axis.pop("candidates")
+    axis.pop("on_exhausted", None)
+    axis["sub_stages"] = [
+        {"stage_id": "duplicate", "candidates": candidates, "on_exhausted": "fail"},
+        {"stage_id": "duplicate", "candidates": candidates, "on_exhausted": "fail"},
+    ]
+    with pytest.raises(ProfileError) as raised:
+        ProfileParser.parse(json.dumps(value), "application/json")
+    assert raised.value.code is ProfileErrorCode.PARSE_INVALID

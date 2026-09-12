@@ -88,6 +88,8 @@ class PluginDescriptor(PluginContract):
             not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", value) for value in self.quality_signal_names
         ):
             raise ValueError("quality signal names must be unique labels")
+        if any(value.startswith("engine.") for value in self.quality_signal_names):
+            raise ValueError("engine quality signal names are reserved")
         return self
 
     @field_validator("capabilities")
@@ -148,6 +150,15 @@ class PluginInvocationResult(PluginContract):
     quality_signals: tuple[QualitySignal, ...] = Field(default_factory=tuple, max_length=64)
 
     _safe_summary = field_validator("summary", mode="before")(safe_metadata_text)
+
+
+class PluginInvocationReceipt(PluginContract):
+    """Terminal invocation facts used by generic orchestrators."""
+
+    attempt_id: UUID
+    output_ids: tuple[UUID, ...] = Field(min_length=1, max_length=16)
+    metrics: tuple[Metric, ...] = Field(default_factory=tuple, max_length=64)
+    quality_signals: tuple[QualitySignal, ...] = Field(default_factory=tuple, max_length=64)
 
 
 class PluginContext(Protocol):

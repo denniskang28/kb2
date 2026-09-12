@@ -83,7 +83,7 @@ def compose(project: str, state: Path, *arguments: str) -> subprocess.CompletedP
 CREATE_FIXTURE = r'''
 import asyncio, hashlib, json
 from kb2_runtime.config import Settings
-from kb2_runtime.trace.contracts import ArtifactInput, EngineKind, Metric, QualitySignal, SafeError, StageResult
+from kb2_runtime.trace.contracts import ArtifactInput, EngineKind, IngestionEvidence, Metric, QualitySignal, SafeError, StageResult
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.service import ArtifactService, RunService, plan_digest
@@ -117,6 +117,17 @@ async def main():
         assert synthetic_trace.stages[0].outputs == ()
         synthetic_runs.append(str(synthetic_run))
     run_id = await runs.create_run(EngineKind.INGESTION, plan)
+    await runs.record_ingestion_evidence(
+        run_id,
+        IngestionEvidence(
+            candidate_profile_ids=("native", "default"),
+            evaluated_rules=({"rule_id": "native", "tier": "document_class", "matched": True},),
+            observables={"document_class": "native", "is_scanned": False},
+            selected_profile_id="native",
+            selection_tier="document_class",
+            plan_digest=plan_digest(plan),
+        ),
+    )
     parent_attempt, _ = await runs.start_attempt(run_id, "parent")
     parent_content = b"parent-content"
     parent = ArtifactInput(
@@ -127,7 +138,7 @@ async def main():
         quality_signals=(QualitySignal(name="z_signal", status="PASS"), QualitySignal(name="a_signal", status="WARN")),
     )
     parent_id = (await artifacts.complete_with_outputs(run_id, parent_attempt, [(parent, parent_content)]))[0]
-    child_attempt, _ = await runs.start_attempt(run_id, "child")
+    child_attempt, _ = await runs.start_attempt(run_id, "child", (parent_id,))
     child_content = b"child-content"
     child = ArtifactInput(
         artifact_type="opaque.bytes", schema_revision="v1",
@@ -136,6 +147,8 @@ async def main():
         parent_artifact_ids=(parent_id,),
     )
     child_id = (await artifacts.complete_with_outputs(run_id, child_attempt, [(child, child_content)]))[0]
+    duplicate_input_attempt, _ = await runs.start_attempt(run_id, "duplicate-input", (parent_id, parent_id))
+    await runs.complete_attempt(duplicate_input_attempt, "same artifact bound to two ports")
     manifest = await artifacts.get_artifact_manifest(parent_id)
     assert manifest and manifest.parent_artifact_ids == ()
     assert [metric.name for metric in manifest.metrics] == ["a_metric", "z_metric"]
@@ -214,7 +227,7 @@ async def main():
     run_id, parent_id, child_id, query_run_id, evaluation_run_id = map(UUID, sys.argv[1:6])
     trace = await RunService(repository).get_run_trace(run_id)
     manifest = await ArtifactService(repository, ArtifactStore(settings.artifact_root)).get_artifact_manifest(parent_id)
-    assert trace and trace.terminal_state.value == "SUCCEEDED" and len(trace.stages) == 5
+    assert trace and trace.terminal_state.value == "SUCCEEDED" and len(trace.stages) == 6
     assert any(stage.stage_key == "blocked-output" and stage.result is None for stage in trace.stages)
     assert [metric.name for metric in trace.metrics] == ["a_run_metric", "z_run_metric"]
     assert [signal.name for signal in trace.quality_signals] == ["a_run_signal", "z_run_signal"]
@@ -225,6 +238,13 @@ async def main():
     assert manifest and [metric.name for metric in manifest.metrics] == ["a_metric", "z_metric"]
     assert [signal.name for signal in manifest.quality_signals] == ["a_signal", "z_signal"]
     assert child_id in {output.id for stage in trace.stages for output in stage.outputs}
+    child_stage = next(stage for stage in trace.stages if stage.stage_key == "child")
+    assert [item.id for item in child_stage.inputs] == [parent_id]
+    duplicate_input_stage = next(stage for stage in trace.stages if stage.stage_key == "duplicate-input")
+    assert [item.id for item in duplicate_input_stage.inputs] == [parent_id, parent_id]
+    assert trace.ingestion_evidence
+    assert trace.ingestion_evidence.selected_profile_id == "native"
+    assert trace.ingestion_evidence.evaluated_rules[0]["matched"] is True
     synthetic_traces = [await RunService(repository).get_run_trace(run_id) for run_id in (query_run_id, evaluation_run_id)]
     assert all(trace and len(trace.stages) == 1 and trace.stages[0].outputs == () for trace in synthetic_traces)
     assert {trace.engine_kind.value for trace in synthetic_traces if trace} == {"query", "evaluation"}

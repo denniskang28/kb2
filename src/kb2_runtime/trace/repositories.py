@@ -10,7 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .contracts import ArtifactInput, ArtifactManifest, ArtifactReference, EngineKind, Metric, QualitySignal, RunState, RunTrace, SafeError, StageResult, StageState, StageTrace, metadata_contains_sensitive_text, safe_metadata_text
+from .contracts import ArtifactInput, ArtifactManifest, ArtifactReference, EngineKind, IngestionEvidence, Metric, QualitySignal, RunState, RunTrace, SafeError, StageResult, StageState, StageTrace, metadata_contains_sensitive_text, safe_metadata_text
 from .errors import TraceError, TraceErrorCode
 
 
@@ -56,7 +56,7 @@ class TraceRepository:
         await self.connection.commit()
         return identifier
 
-    async def start_attempt(self, run_id: UUID, stage_key: str) -> tuple[UUID, int]:
+    async def start_attempt(self, run_id: UUID, stage_key: str, input_ids: Sequence[UUID] = ()) -> tuple[UUID, int]:
         async with self.connection.cursor() as cursor:
             await cursor.execute("SELECT terminal_state FROM runs WHERE id = %s FOR UPDATE", (run_id,))
             run = await cursor.fetchone()
@@ -66,6 +66,11 @@ class TraceRepository:
             number = (await cursor.fetchone())["number"]
             identifier = uuid4()
             await cursor.execute("INSERT INTO stage_attempts (id, run_id, stage_key, attempt_number, state, started_at) VALUES (%s, %s, %s, %s, 'RUNNING', CURRENT_TIMESTAMP)", (identifier, run_id, stage_key, number))
+            for ordinal, artifact_id in enumerate(input_ids):
+                await cursor.execute("SELECT a.id FROM artifacts a JOIN stage_attempts s ON s.id=a.producing_stage_attempt_id WHERE a.id=%s AND s.state='SUCCEEDED'", (artifact_id,))
+                if not await cursor.fetchone():
+                    raise TraceError(TraceErrorCode.ARTIFACT_LINEAGE_INVALID)
+                await cursor.execute("INSERT INTO stage_attempt_inputs (stage_attempt_id, ordinal, artifact_id) VALUES (%s,%s,%s)", (identifier, ordinal, artifact_id))
             await cursor.execute("UPDATE runs SET state = 'RUNNING', started_at = COALESCE(started_at, CURRENT_TIMESTAMP) WHERE id = %s", (run_id,))
         await self.connection.commit()
         return identifier, number
@@ -92,6 +97,39 @@ class TraceRepository:
             await self._signals(cursor, "run_quality_signals", "run_id", run_id, signals)
         await self.connection.commit()
 
+    async def record_attempt_observations(
+        self, attempt_id: UUID, metrics: Sequence[Metric] = (), signals: Sequence[QualitySignal] = ()
+    ) -> None:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute("SELECT id FROM stage_attempts WHERE id=%s FOR UPDATE", (attempt_id,))
+            if not await cursor.fetchone():
+                raise TraceError(TraceErrorCode.STAGE_TRANSITION_INVALID)
+            await self._metrics(cursor, "stage_attempt_metrics", "stage_attempt_id", attempt_id, metrics)
+            await self._signals(cursor, "stage_attempt_quality_signals", "stage_attempt_id", attempt_id, signals)
+        await self.connection.commit()
+
+    async def record_ingestion_evidence(self, run_id: UUID, evidence: IngestionEvidence) -> None:
+        evidence = IngestionEvidence.model_validate(evidence.model_dump(mode="python"))
+        serialized = evidence.model_dump(mode="json")
+        # Keep the verified digest first in the stored JSON too. This has no
+        # semantic effect for JSONB and makes the immutable plan binding
+        # immediately inspectable in bounded diagnostics.
+        payload = {"plan_digest": serialized["plan_digest"], **{
+            key: value for key, value in serialized.items() if key != "plan_digest"
+        }}
+        # plan_digest is validated by IngestionEvidence as a fixed SHA-256
+        # digest. Scan every resolver-provided value, but do not classify that
+        # opaque digest as a provider-body-shaped string.
+        resolver_evidence = {key: value for key, value in payload.items() if key != "plan_digest"}
+        if metadata_contains_sensitive_text(resolver_evidence):
+            raise TraceError(TraceErrorCode.PLAN_SNAPSHOT_INVALID)
+        async with self.connection.cursor() as cursor:
+            await cursor.execute("SELECT id FROM runs WHERE id=%s AND engine_kind='ingestion' FOR UPDATE", (run_id,))
+            if not await cursor.fetchone():
+                raise TraceError(TraceErrorCode.RUN_TRANSITION_INVALID)
+            await cursor.execute("INSERT INTO ingestion_run_evidence (run_id, resolution_json) VALUES (%s,%s)", (run_id, Jsonb(payload)))
+        await self.connection.commit()
+
     async def finish_attempt(self, attempt_id: UUID, result: StageResult, summary: str, safe_error: SafeError | None = None, metrics: Sequence[Metric] = (), signals: Sequence[QualitySignal] = ()) -> None:
         state = result.value
         summary = safe_metadata_text(summary)
@@ -104,6 +142,24 @@ class TraceRepository:
             await cursor.execute("UPDATE stage_attempts SET state=%s, result=%s, summary=%s, safe_error=%s, ended_at=CURRENT_TIMESTAMP WHERE id=%s", (state, result.value, summary, Jsonb(safe_error.model_dump(mode="json")) if safe_error else None, attempt_id))
             await self._metrics(cursor, "stage_attempt_metrics", "stage_attempt_id", attempt_id, metrics)
             await self._signals(cursor, "stage_attempt_quality_signals", "stage_attempt_id", attempt_id, signals)
+        await self.connection.commit()
+
+    async def invalidate_attempt(self, attempt_id: UUID, safe_error: SafeError, summary: str = "") -> None:
+        """Make a completed publication ineligible after a bounded contract recheck."""
+        summary = safe_metadata_text(summary)
+        safe_error = self._safe_error(safe_error)
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT s.state, r.terminal_state FROM stage_attempts s JOIN runs r ON r.id=s.run_id WHERE s.id=%s FOR UPDATE",
+                (attempt_id,),
+            )
+            row = await cursor.fetchone()
+            if not row or row["state"] != StageState.SUCCEEDED.value or row["terminal_state"] is not None:
+                raise TraceError(TraceErrorCode.STAGE_TRANSITION_INVALID)
+            await cursor.execute(
+                "UPDATE stage_attempts SET state='FAILED', result='FAILED', summary=%s, safe_error=%s, ended_at=CURRENT_TIMESTAMP WHERE id=%s",
+                (summary, Jsonb(safe_error.model_dump(mode="json")), attempt_id),
+            )
         await self.connection.commit()
 
     async def complete_outputs(self, attempt_id: UUID, run_id: UUID, items: Sequence[tuple[UUID, ArtifactInput, str]], summary: str, metrics: Sequence[Metric] = (), signals: Sequence[QualitySignal] = ()) -> None:
@@ -198,6 +254,13 @@ class TraceRepository:
             for attempt in attempts:
                 await cursor.execute(
                     """SELECT a.id, a.artifact_type, a.schema_revision, a.content_digest, a.byte_size, a.summary
+                    FROM stage_attempt_inputs i JOIN artifacts a ON a.id=i.artifact_id
+                    WHERE i.stage_attempt_id=%s ORDER BY i.ordinal""",
+                    (attempt["id"],),
+                )
+                inputs = tuple(ArtifactReference(**item) for item in await cursor.fetchall())
+                await cursor.execute(
+                    """SELECT a.id, a.artifact_type, a.schema_revision, a.content_digest, a.byte_size, a.summary
                     FROM stage_attempt_outputs o JOIN artifacts a ON a.id=o.artifact_id
                     WHERE o.stage_attempt_id=%s ORDER BY o.ordinal""",
                     (attempt["id"],),
@@ -211,13 +274,16 @@ class TraceRepository:
                     id=attempt["id"], stage_key=attempt["stage_key"], attempt_number=attempt["attempt_number"],
                     state=attempt["state"], result=attempt["result"], started_at=attempt["started_at"], ended_at=attempt["ended_at"],
                     summary=attempt["summary"], safe_error=SafeError(**attempt["safe_error"]) if attempt["safe_error"] else None,
-                    outputs=outputs, metrics=metrics, quality_signals=signals,
+                    inputs=inputs, outputs=outputs, metrics=metrics, quality_signals=signals,
                 ))
+            await cursor.execute("SELECT resolution_json FROM ingestion_run_evidence WHERE run_id=%s", (run_id,))
+            evidence = await cursor.fetchone()
         return RunTrace(
             id=run["id"], engine_kind=run["engine_kind"], plan_digest=run["plan_digest"], state=RunState(run["state"]),
             terminal_state=RunState(run["terminal_state"]) if run["terminal_state"] else None,
             created_at=run["created_at"], started_at=run["started_at"], ended_at=run["ended_at"], stages=tuple(stages),
             metrics=run_metrics, quality_signals=run_signals,
+            ingestion_evidence=IngestionEvidence(**evidence["resolution_json"]) if evidence else None,
         )
 
     async def _metrics(self, cursor: Any, table: str, owner: str, identifier: UUID, metrics: Sequence[Metric]) -> None:

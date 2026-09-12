@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-009 Implemented; S-010 through S-027 Confirmed
-- **Active Story:** None; S-010 is next eligible
+- **Stories:** S-001 through S-010 Implemented; S-011 through S-027 Confirmed
+- **Active Story:** None; S-011 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -51,10 +51,10 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-010 next for end-to-end ingestion execution. S-010 through S-027 are
-confirmed and may enter just-in-time technical design when their
-declared dependencies are implemented. FEAT-005 implementation remains gated
-by the corresponding engine/control API contracts.
+Deliver S-011 next for query Profile compilation. S-011 through S-027 are
+confirmed and may enter just-in-time technical design when their declared
+dependencies are implemented. FEAT-005 implementation remains gated by the
+corresponding engine/control API contracts.
 
 ## Change History
 
@@ -108,3 +108,7 @@ by the corresponding engine/control API contracts.
   fast-forwarded into local main. Docker restart/readback verification remains
   environment-blocked because Compose startup stalled before creating
   containers.
+- **2026-09-12:** S-010 completed bounded ordered Profile sub-stages under
+  FD-012, pinned end-to-end ingestion execution, trace input/resolution
+  persistence, restart evidence, and repaired final review; ready for delivery
+  close.
