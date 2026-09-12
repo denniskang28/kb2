@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-010 Implemented; S-011 through S-027 Confirmed
-- **Active Story:** None; S-011 is next eligible
+- **Stories:** S-001 through S-011 Implemented; S-012 through S-027 Confirmed
+- **Active Story:** None; S-012 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -112,3 +112,7 @@ corresponding engine/control API contracts.
   FD-012, pinned end-to-end ingestion execution, trace input/resolution
   persistence, restart evidence, and repaired final review; delivery commit
   `4ed5c6b` was fast-forwarded into local main.
+- **2026-09-12:** S-011 completed declarative Query Profile compilation,
+  deterministic selection, pinned Search Artifact plan identity, baseline
+  query-family fixtures, independent verification, and repaired final review;
+  ready for delivery close.
