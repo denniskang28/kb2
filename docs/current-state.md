@@ -125,4 +125,5 @@ corresponding engine/control API contracts.
 - **2026-09-12:** S-013 completed deterministic reciprocal-rank candidate
   fusion, optional lexical-overlap reranking, repeated typed candidate ports,
   preserved contributor attribution, safe failure behavior, independent
-  verification, and repaired final review; ready for delivery close.
+  verification, and repaired final review; delivery commit `49ceee3` was
+  fast-forwarded into local main.
