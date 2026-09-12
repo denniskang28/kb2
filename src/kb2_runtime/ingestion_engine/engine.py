@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import hashlib
 import json
 from typing import Any
@@ -40,11 +41,14 @@ class IngestionEngine:
         source: SourceSubmission,
         resolution: Any,
         cancellation: asyncio.Event | None = None,
+        on_run_created: Callable[[UUID], None] | None = None,
     ) -> IngestionReceipt:
         record = self.resolver.resolve(compiled, resolution)
         self._validate_source(record, source)
         plan = record.plan.canonical_payload
         run_id = await self.runs.create_run(EngineKind.INGESTION, plan)
+        if on_run_created is not None:
+            on_run_created(run_id)
         try:
             await self.runs.record_ingestion_evidence(run_id, self._evidence(record))
             logical = {"document.source": await self._materialize_source(run_id, source)}

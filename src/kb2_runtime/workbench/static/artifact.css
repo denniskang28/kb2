@@ -1,0 +1,18 @@
+.artifact-inspector {
+  position: fixed;
+  z-index: 20;
+  inset: 20px 20px 20px auto;
+  width: min(620px, calc(100vw - 40px));
+  padding: 16px;
+  overflow: auto;
+  background: #fff;
+  border-left: 2px solid var(--ink);
+}
+.inspector-tabs { display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
+.inspector-body { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; }
+.inspector-list, .source-view { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.source-view { border-top: 1px solid var(--rule); padding-top: 10px; }
+.source-selected { background: #d9f3ef; outline: 2px solid var(--teal); }
+@media (max-width: 899px) {
+  .artifact-inspector.inspector-drawer.open { inset: 0 0 0 auto; width: min(92vw, 520px); }
+}

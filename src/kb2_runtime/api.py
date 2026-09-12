@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Header, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 
 from kb2_runtime.config import CapabilityCatalog, Settings
@@ -19,6 +20,9 @@ from kb2_runtime.plugins.executor import PluginExecutor
 from kb2_runtime.plugins.runner import InProcessRunner
 from kb2_runtime.plugins.contracts import RunnerType
 from kb2_runtime.query_engine import QueryEngine
+from kb2_runtime.ingestion_engine import IngestionEngine
+from kb2_runtime.workbench.documents import DocumentWorkbenchService
+from uuid import UUID
 
 
 def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | None = None) -> FastAPI:
@@ -35,6 +39,7 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     app.state.workbench_overview = None
     app.state.workbench_studio = None
     app.state.workbench_query_runner = None
+    app.state.workbench_documents = None
 
     async def studio() -> StudioService:
         # The workspace value itself is durable in PostgreSQL; this cached
@@ -54,6 +59,19 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
                 return capabilities, runners
             app.state.workbench_studio = StudioService(repository=repository, query_runner=runner, readiness=registry_readiness)
         return app.state.workbench_studio
+
+    async def documents() -> DocumentWorkbenchService:
+        if app.state.workbench_documents is None:
+            repository = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+            artifacts = ArtifactService(repository, ArtifactStore(runtime_settings.artifact_root))
+            runs = RunService(repository)
+            registry = bootstrap_registry()
+            executor = PluginExecutor(registry, {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)
+            app.state.workbench_documents = DocumentWorkbenchService(
+                await studio(), registry, IngestionEngine(registry, executor, runs, artifacts), runs, artifacts,
+                external_capabilities=frozenset(item.id for item in runtime_catalog.capabilities if item.provider is not None),
+            )
+        return app.state.workbench_documents
 
     def problem(code: str, status: int = 400) -> JSONResponse:
         return JSONResponse({"contractVersion": "workbench-problem/v1", "code": code}, status_code=status)
@@ -163,9 +181,65 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         item = await (await studio()).plugin_detail(plugin_id)
         return JSONResponse(item.model_dump(mode="json", exclude_none=True) if item else {"contractVersion": "workbench-problem/v1", "code": "PLUGIN_NOT_FOUND"}, status_code=200 if item else 404)
 
+    @app.put("/api/workbench/documents/preflight")
+    async def document_preflight(request: Request, profile_id: str = Header(alias="X-Profile-Id"), filename: str = Header(alias="X-Filename"), media_type: str = Header(default="application/octet-stream", alias="Content-Type")) -> JSONResponse:
+        try:
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > 16 * 1024 * 1024:
+                    raise ValueError("PREFLIGHT_INVALID")
+                chunks.append(chunk)
+            return JSONResponse(await (await documents()).preflight(b"".join(chunks), filename, media_type, profile_id))
+        except LookupError as exc:
+            return problem(str(exc), 404)
+        except (ValueError, ProfileError):
+            return problem("PREFLIGHT_INVALID", 422)
+
+    @app.post("/api/workbench/documents/preflights/{token}/runs")
+    async def document_submit(token: str, payload: dict[str, object]) -> JSONResponse:
+        try:
+            result = await (await documents()).submit(token, payload.get("profileId") if isinstance(payload.get("profileId"), str) else None, payload.get("acknowledgeExternal") is True)
+            return JSONResponse(result, status_code=202)
+        except LookupError as exc:
+            return problem(str(exc), 404)
+        except PermissionError as exc:
+            return problem(str(exc), 409)
+        except RuntimeError:
+            return problem("INGESTION_SUBMISSION_UNAVAILABLE", 503)
+        except (ValueError, ProfileError):
+            return problem("INGESTION_SUBMISSION_INVALID", 422)
+
+    @app.get("/api/workbench/ingestion-runs/{run_id}")
+    async def ingestion_run(run_id: UUID) -> JSONResponse:
+        result = await (await documents()).run(run_id)
+        return JSONResponse(jsonable_encoder(result), status_code=200) if result else problem("INGESTION_RUN_NOT_FOUND", 404)
+
+    @app.post("/api/workbench/ingestion-runs/{run_id}/stop")
+    async def stop_ingestion_run(run_id: UUID) -> JSONResponse:
+        return JSONResponse({"stopped": True}) if await (await documents()).stop(run_id) else problem("RUN_STOP_UNAVAILABLE", 409)
+
+    @app.post("/api/workbench/ingestion-runs/{run_id}/rerun-preflight")
+    async def rerun_ingestion_preflight(run_id: UUID, payload: dict[str, object]) -> JSONResponse:
+        workspace_profile_id = payload.get("workspaceProfileId")
+        if not isinstance(workspace_profile_id, str):
+            return problem("WORKSPACE_PROFILE_REQUIRED", 422)
+        try:
+            return JSONResponse(await (await documents()).rerun_preflight(run_id, workspace_profile_id), status_code=201)
+        except LookupError as exc:
+            return problem(str(exc), 404)
+        except (ValueError, ProfileError):
+            return problem("RERUN_PREFLIGHT_INVALID", 422)
+
+    @app.get("/api/workbench/artifacts/{artifact_id}")
+    async def artifact_inspector(artifact_id: UUID) -> JSONResponse:
+        result = await (await documents()).artifact(artifact_id)
+        return JSONResponse(result) if result else problem("ARTIFACT_NOT_FOUND", 404)
+
     @app.get("/workbench/assets/{asset_name}")
     async def workbench_asset(asset_name: str) -> FileResponse:
-        if asset_name not in {"workbench.css", "workbench.js"}:
+        if asset_name not in {"workbench.css", "workbench.js", "artifact.css"}:
             return FileResponse(static_root / "index.html", status_code=404)
         return FileResponse(static_root / asset_name)
 

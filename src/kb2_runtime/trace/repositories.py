@@ -286,6 +286,16 @@ class TraceRepository:
             ingestion_evidence=IngestionEvidence(**evidence["resolution_json"]) if evidence else None,
         )
 
+    async def get_run_plan(self, run_id: UUID) -> dict[str, Any] | None:
+        """Return the immutable plan snapshot only for server-side projections."""
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT p.plan_json FROM runs r JOIN execution_plan_snapshots p ON p.id=r.plan_snapshot_id WHERE r.id=%s",
+                (run_id,),
+            )
+            row = await cursor.fetchone()
+        return row["plan_json"] if row else None
+
     async def list_workbench_runs(self, limit: int = 8) -> tuple[dict[str, Any], ...]:
         """Bounded chronological lifecycle projection for the operator console."""
         async with self.connection.cursor() as cursor:

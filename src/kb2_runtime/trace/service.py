@@ -73,6 +73,9 @@ class RunService:
     async def get_run_trace(self, run_id: UUID) -> RunTrace | None:
         return await self.repository.get_run_trace(run_id)
 
+    async def get_run_plan(self, run_id: UUID) -> dict[str, Any] | None:
+        return await self.repository.get_run_plan(run_id)
+
 
 class ArtifactService:
     def __init__(self, repository: TraceRepository, store: ArtifactStore) -> None:
