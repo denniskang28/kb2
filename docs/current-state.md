@@ -133,4 +133,5 @@ corresponding engine/control API contracts.
   context assembly with bounded source excerpts, exact locator and Artifact
   lineage validation, explicit shortage outcomes, typed retrieval/fusion/rerank
   adapters, and safe no-publication failures; independent verification and
-  final review passed; ready for delivery close.
+  final review passed; delivery commit `3c2bd16` was fast-forwarded into local
+  main.
