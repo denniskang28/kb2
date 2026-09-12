@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-013 Implemented; S-014 through S-027 Confirmed
-- **Active Story:** None; S-014 is next eligible
+- **Stories:** S-001 through S-014 Implemented; S-015 through S-027 Confirmed
+- **Active Story:** None; S-015 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -21,7 +21,9 @@
   chunking and bounded enrichment Plugins, deterministic provider-neutral
   embedding and local hybrid index Artifacts with failure recovery,
   deterministic candidate fusion and optional reranking with preserved
-  attribution and safe failures, a
+  attribution and safe failures, deterministic citation-ready EvidenceSet/v1
+  context assembly with bounded excerpts, traceable source locators, and safe
+  no-publication failures, a
   Docker-backed Artifact trace persistence/restart regression, and an isolated
   lifecycle regression
 
@@ -53,7 +55,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-014 next for evidence and context assembly. S-014 through S-027 are
+Deliver S-015 next for grounded generation and final states. S-015 through S-027 are
 confirmed and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
@@ -127,3 +129,8 @@ corresponding engine/control API contracts.
   preserved contributor attribution, safe failure behavior, independent
   verification, and repaired final review; delivery commit `49ceee3` was
   fast-forwarded into local main.
+- **2026-09-12:** S-014 completed deterministic citation-ready EvidenceSet/v1
+  context assembly with bounded source excerpts, exact locator and Artifact
+  lineage validation, explicit shortage outcomes, typed retrieval/fusion/rerank
+  adapters, and safe no-publication failures; independent verification and
+  final review passed; ready for delivery close.

@@ -25,6 +25,8 @@ from kb2_runtime.fusion.contracts import FusionConfig
 from kb2_runtime.fusion.plugin import FusionPlugin
 from kb2_runtime.reranking.contracts import RerankerConfig
 from kb2_runtime.reranking.plugin import RerankingPlugin
+from kb2_runtime.evidence.contracts import ContextAssemblerConfig
+from kb2_runtime.evidence.plugin import ContextAssemblerPlugin
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -208,6 +210,22 @@ RERANKER_LEXICAL_DESCRIPTOR = PluginDescriptor(
 )
 
 
+def _context_descriptor(plugin_id: str, candidate_type: str, digest: str) -> PluginDescriptor:
+    return PluginDescriptor(
+        plugin_id=plugin_id, kind="context", implementation_digest=digest, runner=RunnerType.IN_PROCESS,
+        configuration_schema=ContextAssemblerConfig.model_json_schema(),
+        input_schemas=((candidate_type, "v1"), ("search.index.result", "v1")), output_schemas=(("evidence.set", "v1"),),
+        input_ports=({"name": "candidates", "artifact_type": candidate_type, "schema_revision": "v1"}, {"name": "index", "artifact_type": "search.index.result", "schema_revision": "v1"}),
+        output_ports=({"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"},),
+        quality_signal_names=("context_validation", "context_shortage"), timeout_seconds=10,
+    )
+
+
+CONTEXT_FROM_RETRIEVAL_DESCRIPTOR = _context_descriptor("context.from-retrieval@1", "retrieval.candidate.set", "d" * 64)
+CONTEXT_FROM_FUSION_DESCRIPTOR = _context_descriptor("context.from-fusion@1", "fusion.candidate.set", "e" * 64)
+CONTEXT_FROM_RERANK_DESCRIPTOR = _context_descriptor("context.from-rerank@1", "rerank.candidate.set", "f" * 64)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -232,4 +250,7 @@ def bootstrap_registry(
     registry.register(RETRIEVER_METADATA_DESCRIPTOR, metadata_plugin, RetrieverConfig)
     registry.register(FUSION_RRF_DESCRIPTOR, FusionPlugin, FusionConfig)
     registry.register(RERANKER_LEXICAL_DESCRIPTOR, RerankingPlugin, RerankerConfig)
+    registry.register(CONTEXT_FROM_RETRIEVAL_DESCRIPTOR, lambda: ContextAssemblerPlugin("retrieval.candidate.set"), ContextAssemblerConfig)
+    registry.register(CONTEXT_FROM_FUSION_DESCRIPTOR, lambda: ContextAssemblerPlugin("fusion.candidate.set"), ContextAssemblerConfig)
+    registry.register(CONTEXT_FROM_RERANK_DESCRIPTOR, lambda: ContextAssemblerPlugin("rerank.candidate.set"), ContextAssemblerConfig)
     return registry

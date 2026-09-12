@@ -12,6 +12,7 @@ from kb2_runtime.plugins.contracts import PluginDescriptor, RunnerType
 from kb2_runtime.plugins.registry import PluginRegistry
 from kb2_runtime.retrieval.contracts import HierarchyRetrieverConfig, RetrieverConfig
 from kb2_runtime.fusion.contracts import FusionConfig
+from kb2_runtime.evidence.contracts import ContextAssemblerConfig
 from kb2_runtime.query_profiles import QueryArtifactBinding, QueryProfileCompiler, QueryProfileError, QueryProfileErrorCode, QueryProfileParser
 from kb2_runtime.trace.contracts import ArtifactReference
 
@@ -37,13 +38,15 @@ def registry() -> PluginRegistry:
         ("query.context@1", ContextConfig, (("retrieval.candidate.set", "v1"),), (("opaque.bytes", "v1"),)),
         ("query.verify@1", EmptyConfig, (("opaque.bytes", "v1"),), (("opaque.bytes", "v1"),)),
         ("query.repair@1", EmptyConfig, (("opaque.bytes", "v1"),), (("opaque.bytes", "v1"),)),
-        ("query.final@1", EmptyConfig, (("opaque.bytes", "v1"),), (("opaque.bytes", "v1"),)),
+        ("query.final@1", EmptyConfig, (("evidence.set", "v1"),), (("opaque.bytes", "v1"),)),
     ):
-        names = {"query.retrieve@1": (("question", "opaque.bytes", "v1"), ("index", "search.index.result", "v1"), ("candidates", "retrieval.candidate.set", "v1")), "query.context@1": (("candidates", "retrieval.candidate.set", "v1"), ("evidence", "opaque.bytes", "v1")), "query.verify@1": (("evidence", "opaque.bytes", "v1"), ("verdict", "opaque.bytes", "v1")), "query.repair@1": (("question", "opaque.bytes", "v1"), ("repaired", "opaque.bytes", "v1")), "query.final@1": (("evidence", "opaque.bytes", "v1"), ("final", "opaque.bytes", "v1"))}[plugin_id]
+        names = {"query.retrieve@1": (("question", "opaque.bytes", "v1"), ("index", "search.index.result", "v1"), ("candidates", "retrieval.candidate.set", "v1")), "query.context@1": (("candidates", "retrieval.candidate.set", "v1"), ("evidence", "opaque.bytes", "v1")), "query.verify@1": (("evidence", "opaque.bytes", "v1"), ("verdict", "opaque.bytes", "v1")), "query.repair@1": (("question", "opaque.bytes", "v1"), ("repaired", "opaque.bytes", "v1")), "query.final@1": (("evidence", "evidence.set", "v1"), ("final", "opaque.bytes", "v1"))}[plugin_id]
         value.register(PluginDescriptor(plugin_id=plugin_id, kind="query", implementation_digest=("a" if plugin_id == "query.retrieve@1" else "b") * 64, runner=RunnerType.IN_PROCESS, configuration_schema=config.model_json_schema(), input_schemas=inputs, output_schemas=outputs, input_ports=tuple({"name": name, "artifact_type": typ, "schema_revision": rev} for name, typ, rev in names[:len(inputs)]), output_ports=tuple({"name": name, "artifact_type": typ, "schema_revision": rev} for name, typ, rev in names[len(inputs):]), timeout_seconds=1), lambda: None, config)
     for plugin_id, config in (("retriever.keyword@1", RetrieverConfig), ("retriever.vector@1", RetrieverConfig), ("retriever.table@1", RetrieverConfig), ("retriever.metadata@1", RetrieverConfig), ("retriever.hierarchy@1", HierarchyRetrieverConfig)):
         value.register(PluginDescriptor(plugin_id=plugin_id, kind="retriever", implementation_digest="c" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=config.model_json_schema(), input_schemas=(("opaque.bytes", "v1"), ("search.index.result", "v1")), output_schemas=(("retrieval.candidate.set", "v1"),), input_ports=({"name": "question", "artifact_type": "opaque.bytes", "schema_revision": "v1"}, {"name": "index", "artifact_type": "search.index.result", "schema_revision": "v1"}), output_ports=({"name": "candidates", "artifact_type": "retrieval.candidate.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, config)
     value.register(PluginDescriptor(plugin_id="fusion.reciprocal-rank@1", kind="fusion", implementation_digest="d" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=FusionConfig.model_json_schema(), input_schemas=(("retrieval.candidate.set", "v1"),), output_schemas=(("fusion.candidate.set", "v1"),), input_ports=({"name": "candidate_sets", "artifact_type": "retrieval.candidate.set", "schema_revision": "v1", "min_items": 1, "max_items": 8},), output_ports=({"name": "fused_candidates", "artifact_type": "fusion.candidate.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, FusionConfig)
+    for plugin_id, candidate_type in (("context.from-retrieval@1", "retrieval.candidate.set"), ("context.from-fusion@1", "fusion.candidate.set"), ("context.from-rerank@1", "rerank.candidate.set")):
+        value.register(PluginDescriptor(plugin_id=plugin_id, kind="context", implementation_digest="e" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=ContextAssemblerConfig.model_json_schema(), input_schemas=((candidate_type, "v1"), ("search.index.result", "v1")), output_schemas=(("evidence.set", "v1"),), input_ports=({"name": "candidates", "artifact_type": candidate_type, "schema_revision": "v1"}, {"name": "index", "artifact_type": "search.index.result", "schema_revision": "v1"}), output_ports=({"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, ContextAssemblerConfig)
     return value
 
 
@@ -121,7 +124,7 @@ def test_repeated_fusion_port_preserves_source_order_and_rejects_invalid_binding
     (lambda value: value["profiles"][0]["stages"][0].update(plugin_id="missing@1"), QueryProfileErrorCode.PLUGIN_UNKNOWN),
     (lambda value: value["profiles"][0]["stages"][0]["inputs"].update(question="final.final"), QueryProfileErrorCode.GRAPH_CYCLE),
     (lambda value: value["profiles"][0]["stages"][1].update(when={"eq": ["unknown", True]}), QueryProfileErrorCode.CONDITION_UNSUPPORTED),
-    (lambda value: value["profiles"][0]["stages"][4]["inputs"].update(evidence="query.question"), QueryProfileErrorCode.FINAL_VALIDATION_MISSING),
+    (lambda value: value["profiles"][0]["stages"][4]["inputs"].update(evidence="query.question"), QueryProfileErrorCode.SCHEMA_INCOMPATIBLE),
 ])
 def test_compiler_errors_are_safe_and_addressable(change, code) -> None:
     value = json.loads(Path("tests/fixtures/query_profiles/text-hybrid.json").read_text())
