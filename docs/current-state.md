@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-023 Implemented; S-024 through S-027 Confirmed
-- **Active Story:** None; S-024 is next eligible
+- **Stories:** S-001 through S-024 Implemented; S-025 through S-027 Confirmed
+- **Active Story:** None; S-025 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,8 +58,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-024 next for document, Ingestion Run, and Artifact inspection.
-S-024 through S-027 are confirmed and may enter just-in-time technical design
+Deliver S-025 next for query execution and evidence inspection.
+S-025 through S-027 are confirmed and may enter just-in-time technical design
 when their declared dependencies are implemented.
 
 ## Change History
@@ -191,3 +191,9 @@ when their declared dependencies are implemented.
   Studio/Registry workflows, and browser verification. Delivery commit
   `b8af610` was fast-forwarded into local main; Docker lifecycle coverage
   remains environment-blocked by the known Compose startup stall.
+- **2026-09-13:** S-024 completed API-backed document preflight, explicit and
+  automatic Profile selection, immutable ingestion Run inspection and recovery,
+  schema-conditional Artifact/source synchronization, and responsive Chrome
+  visual coverage. Independent acceptance and final review passed; delivery
+  commit `2fec1e7` was fast-forwarded into local main and reconciliation commit
+  `30e48c0` recorded the delivery close.
