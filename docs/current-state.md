@@ -175,4 +175,4 @@ corresponding engine/control API contracts.
   snapshots, bounded human-review provenance, provider-neutral Judge execution,
   pinned per-slice calibration and drift eligibility, and scoped unavailable
   provider failures. Independent non-Docker verification and final review
-  passed; delivery close is pending.
+  passed; delivery commit `aa42a69` was fast-forwarded into local main.
