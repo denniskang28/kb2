@@ -14,20 +14,38 @@ class MetricAggregator:
             raise ValueError("report does not match aggregate selector")
         selected = reports
         keys = {
-            (report.document_id,) if report.owner == "ingestion" else (report.case_id, report.metric_id, report.stage_kind, report.measured_artifact_id)
+            (report.document_id,) if report.owner == "ingestion" else (
+                report.case_id, report.metric_id, report.stage_kind, report.measured_artifact_id,
+                report.answer_artifact_id, report.verification_artifact_id, report.final_response_artifact_id, report.cohort_digest,
+            )
             for _, report in selected
         }
         if len(keys) != len(selected): raise ValueError("duplicate metric reports")
-        if len({(report.owner, report.stage_kind, report.metric_family_id) for _, report in selected}) > 1:
+        if len({(report.owner, report.stage_kind, report.metric_family_id, report.cohort_digest, report.cohort_case_ids) for _, report in selected}) > 1:
             raise ValueError("mixed metric identities")
         values = [report.value for _, report in selected if report.status is MetricStatus.VALUE]
+        scored_count = len(values)
         first = selected[0][1] if selected else None
-        return MetricAggregate(metric_id=metric_id, selector=dict(sorted(selector.items())), document_count=len(selected), scored_count=len(values),
+        if first and first.owner == "decision":
+            if first.cohort_digest and {report.case_id for _, report in selected} != set(first.cohort_case_ids):
+                raise ValueError("decision aggregate does not contain its configured cohort")
+            outcomes = [match.decision_id for _, report in selected for match in report.matches if match.decision_id in {"TP", "FP", "FN", "TN"}]
+            true_positive = outcomes.count("TP")
+            false_positive = outcomes.count("FP")
+            false_negative = outcomes.count("FN")
+            measure = metric_id.removesuffix("@1").rsplit("-", 1)[-1]
+            denominator = true_positive + (false_positive if measure == "precision" else false_negative)
+            aggregate_value = true_positive / denominator if denominator else None
+            sample_count = denominator
+        else:
+            aggregate_value = sum(values) / len(values) if values else None
+            sample_count = sum(report.sample_count or 0 for _, report in selected) if first and first.owner != "ingestion" else None
+        return MetricAggregate(metric_id=metric_id, selector=dict(sorted(selector.items())), document_count=len(selected), scored_count=scored_count,
             not_applicable_count=sum(report.status is MetricStatus.NOT_APPLICABLE for _, report in selected), insufficient_labels_count=sum(report.status is MetricStatus.INSUFFICIENT_LABELS for _, report in selected),
-            value=sum(values) / len(values) if values else None, report_artifact_ids=tuple(identifier for identifier, _ in sorted(selected, key=lambda item: str(item[0]))),
+            value=aggregate_value, report_artifact_ids=tuple(identifier for identifier, _ in sorted(selected, key=lambda item: str(item[0]))),
             owner=first.owner if first else "ingestion", metric_family_id=first.metric_family_id if first else None, stage_kind=first.stage_kind if first else None,
             case_count=len({report.case_id for _, report in selected}) if first and first.owner != "ingestion" else None,
-            sample_count=sum(report.sample_count or 0 for _, report in selected) if first and first.owner != "ingestion" else None)
+            sample_count=sample_count, cohort_digest=first.cohort_digest if first else None, cohort_case_ids=first.cohort_case_ids if first else ())
 
     async def publish(self, run_id: UUID, stage_key: str, reports: tuple[tuple[UUID, MetricReport], ...], metric_id: str, selector: dict[str, str], runs: object, artifacts: object) -> tuple[UUID, MetricAggregate]:
         """Publish a bounded aggregate with exact report Artifact lineage."""

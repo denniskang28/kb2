@@ -31,6 +31,7 @@ from kb2_runtime.generation import DeepSeekGenerator, DefaultGenerationConfig, F
 from kb2_runtime.generation.contracts import FinalStateConfig
 from kb2_runtime.evaluation.ingestion import IngestionMetricPlugin, METRICS
 from kb2_runtime.evaluation.retrieval import RetrievalMetricConfig, RetrievalMetricPlugin
+from kb2_runtime.evaluation.answer import AnswerMetricConfig, AnswerMetricPlugin, CITATION_METRICS, DECISION_METRICS, FACT_METRICS
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -309,6 +310,25 @@ RETRIEVAL_METRIC_DESCRIPTORS = tuple(
 )
 
 
+def _answer_metric_descriptor(metric_id: str, decision: bool = False) -> PluginDescriptor:
+    inputs = (("golden.dataset.snapshot", "v1"), ("evidence.set", "v1"), ("final.response", "v1")) if decision else (
+        ("golden.dataset.snapshot", "v1"), ("evidence.set", "v1"), ("generated.answer", "v1"), ("verification.result", "v1"), ("final.response", "v1"),
+    )
+    names = ("snapshot", "label_evidence", "final_response") if decision else ("snapshot", "label_evidence", "generated_answer", "verification", "final_response")
+    return PluginDescriptor(
+        plugin_id=metric_id, kind="metric", implementation_digest="8" * 64, runner=RunnerType.IN_PROCESS,
+        configuration_schema=AnswerMetricConfig.model_json_schema(), input_schemas=inputs,
+        output_schemas=(("metric.report", "v1"),),
+        input_ports=tuple({"name": name, "artifact_type": schema[0], "schema_revision": schema[1]} for name, schema in zip(names, inputs)),
+        output_ports=({"name": "report", "artifact_type": "metric.report", "schema_revision": "v1"},), timeout_seconds=10,
+    )
+
+
+ANSWER_METRIC_DESCRIPTORS = tuple(_answer_metric_descriptor(metric_id) for metric_id in sorted(FACT_METRICS | CITATION_METRICS)) + tuple(
+    _answer_metric_descriptor(metric_id, decision=True) for metric_id in sorted(DECISION_METRICS)
+)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -345,4 +365,6 @@ def bootstrap_registry(
         registry.register(descriptor, lambda descriptor=descriptor: IngestionMetricPlugin(descriptor.plugin_id), EmptyConfig)
     for descriptor in RETRIEVAL_METRIC_DESCRIPTORS:
         registry.register(descriptor, lambda descriptor=descriptor: RetrievalMetricPlugin(descriptor.plugin_id), RetrievalMetricConfig)
+    for descriptor in ANSWER_METRIC_DESCRIPTORS:
+        registry.register(descriptor, lambda descriptor=descriptor: AnswerMetricPlugin(descriptor.plugin_id), AnswerMetricConfig)
     return registry

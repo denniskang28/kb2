@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-018 Implemented; S-019 through S-027 Confirmed
-- **Active Story:** None; S-019 is next eligible
+- **Stories:** S-001 through S-019 Implemented; S-020 through S-027 Confirmed
+- **Active Story:** None; S-020 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -23,8 +23,10 @@
   deterministic candidate fusion and optional reranking with preserved
   attribution and safe failures, deterministic citation-ready EvidenceSet/v1
   context assembly with bounded excerpts, traceable source locators, grounded
-  external generation with validated final states and bounded repair, and safe
-  no-publication failures, a
+  external generation with validated final states and bounded repair, safe
+  no-publication failures, deterministic answer, citation, and decision metrics
+  with exact fact spans, strict Evidence identity, explicit applicability
+  states, frozen decision cohorts, and bounded failure lineage, a
   Docker-backed Artifact trace persistence/restart regression, and an isolated
   lifecycle regression
 
@@ -56,7 +58,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-019 next for answer/citation/decision evaluation. S-019 through S-027 are confirmed
+Deliver S-020 next for calibrated semantic judging. S-020 through S-027 are confirmed
 and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
@@ -163,3 +165,9 @@ corresponding engine/control API contracts.
   reporting. Independent verification and final review passed; the Docker
   lifecycle scenario remains environment-blocked by the known Compose startup
   stall.
+- **2026-09-12:** S-019 completed deterministic answer fact/forbidden-fact,
+  citation, and final-state decision metrics with explicit missing-data states,
+  frozen cohort membership, and bounded failed-case navigation. Independent
+  verification and final review passed; Docker lifecycle coverage remains
+  environment-blocked by the known Compose build/start stall before containers
+  are created.
