@@ -110,5 +110,5 @@ corresponding engine/control API contracts.
   containers.
 - **2026-09-12:** S-010 completed bounded ordered Profile sub-stages under
   FD-012, pinned end-to-end ingestion execution, trace input/resolution
-  persistence, restart evidence, and repaired final review; ready for delivery
-  close.
+  persistence, restart evidence, and repaired final review; delivery commit
+  `4ed5c6b` was fast-forwarded into local main.
