@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-022 Implemented; S-023 through S-027 Confirmed
-- **Active Story:** None; S-023 is next eligible
+- **Stories:** S-001 through S-023 Implemented; S-024 through S-027 Confirmed
+- **Active Story:** None; S-024 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,9 +58,9 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-023 next for the Profile and Plugin Studio. S-023 through S-027 are
-confirmed and may enter just-in-time technical design when their declared
-dependencies are implemented.
+Deliver S-024 next for document, Ingestion Run, and Artifact inspection.
+S-024 through S-027 are confirmed and may enter just-in-time technical design
+when their declared dependencies are implemented.
 
 ## Change History
 
@@ -186,3 +186,8 @@ dependencies are implemented.
   navigation, and fixture-backed desktop/narrow visual verification. Delivery
   commit `3bdfd41` was fast-forwarded into local main. Full Docker lifecycle
   coverage remains environment-blocked by the known Compose startup stall.
+- **2026-09-12:** S-023 completed Profile and Plugin Studio API-backed working
+  configurations, server-owned compatibility, Registry inspection, responsive
+  Studio/Registry workflows, and browser verification. Delivery commit
+  `b8af610` was fast-forwarded into local main; Docker lifecycle coverage
+  remains environment-blocked by the known Compose startup stall.
