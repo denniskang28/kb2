@@ -17,11 +17,12 @@ class MetricAggregator:
             (report.document_id,) if report.owner == "ingestion" else (
                 report.case_id, report.metric_id, report.stage_kind, report.measured_artifact_id,
                 report.answer_artifact_id, report.verification_artifact_id, report.final_response_artifact_id, report.cohort_digest,
+                report.judge_definition_digest, report.calibration_report_artifact_id, report.calibration_policy_digest,
             )
             for _, report in selected
         }
         if len(keys) != len(selected): raise ValueError("duplicate metric reports")
-        if len({(report.owner, report.stage_kind, report.metric_family_id, report.cohort_digest, report.cohort_case_ids) for _, report in selected}) > 1:
+        if len({(report.owner, report.stage_kind, report.metric_family_id, report.cohort_digest, report.cohort_case_ids, report.judge_definition_digest, report.calibration_report_artifact_id, report.calibration_policy_digest) for _, report in selected}) > 1:
             raise ValueError("mixed metric identities")
         values = [report.value for _, report in selected if report.status is MetricStatus.VALUE]
         scored_count = len(values)
@@ -45,7 +46,10 @@ class MetricAggregator:
             value=aggregate_value, report_artifact_ids=tuple(identifier for identifier, _ in sorted(selected, key=lambda item: str(item[0]))),
             owner=first.owner if first else "ingestion", metric_family_id=first.metric_family_id if first else None, stage_kind=first.stage_kind if first else None,
             case_count=len({report.case_id for _, report in selected}) if first and first.owner != "ingestion" else None,
-            sample_count=sample_count, cohort_digest=first.cohort_digest if first else None, cohort_case_ids=first.cohort_case_ids if first else ())
+            sample_count=sample_count, cohort_digest=first.cohort_digest if first else None, cohort_case_ids=first.cohort_case_ids if first else (),
+            advisory_count=sum(report.eligibility == "ADVISORY" for _, report in selected),
+            ineligible_count=sum(report.eligibility == "INELIGIBLE" for _, report in selected),
+            drifted_count=sum(report.eligibility == "DRIFTED" for _, report in selected))
 
     async def publish(self, run_id: UUID, stage_key: str, reports: tuple[tuple[UUID, MetricReport], ...], metric_id: str, selector: dict[str, str], runs: object, artifacts: object) -> tuple[UUID, MetricAggregate]:
         """Publish a bounded aggregate with exact report Artifact lineage."""

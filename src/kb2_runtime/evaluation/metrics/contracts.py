@@ -45,7 +45,7 @@ class MetricMatch(IngestionMetricContract):
 class MetricReport(IngestionMetricContract):
     schema_version: str = "MetricReport/v1"
     metric_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}@[1-9][0-9]*$")]
-    owner: Literal["ingestion", "retrieval", "context", "answer", "citation", "decision"] = "ingestion"
+    owner: Literal["ingestion", "retrieval", "context", "answer", "citation", "decision", "judge"] = "ingestion"
     method: str = "deterministic"
     direction: Literal["higher_is_better", "lower_is_better"] = "higher_is_better"
     required_annotation_kinds: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
@@ -76,12 +76,17 @@ class MetricReport(IngestionMetricContract):
     final_response_artifact_id: UUID | None = None
     cohort_digest: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     cohort_case_ids: tuple[Annotated[str, Field(pattern=r"^qcase_[a-f0-9]{16,64}$")], ...] = Field(default_factory=tuple, max_length=1000)
+    judge_result_artifact_id: UUID | None = None
+    calibration_report_artifact_id: UUID | None = None
+    judge_definition_digest: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
+    calibration_policy_digest: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
+    eligibility: Literal["ELIGIBLE", "ADVISORY", "INELIGIBLE", "DRIFTED"] | None = None
 
     @model_validator(mode="after")
     def result_shape(self) -> "MetricReport":
         if self.schema_version != "MetricReport/v1":
             raise ValueError("metric report schema is invalid")
-        if self.method != "deterministic" or (self.direction == "lower_is_better" and self.owner != "answer"):
+        if self.method not in {"deterministic", "llm_judge"} or (self.method == "deterministic" and self.owner == "judge") or (self.method == "llm_judge" and self.owner != "judge") or (self.direction == "lower_is_better" and self.owner != "answer"):
             raise ValueError("metric definition is invalid")
         if (self.status is MetricStatus.VALUE) != (self.value is not None):
             raise ValueError("metric value and status disagree")
@@ -103,14 +108,20 @@ class MetricReport(IngestionMetricContract):
                 raise ValueError("answer metric binding is invalid")
             if self.owner == "decision" and not all((self.case_id, self.label_evidence_artifact_id, self.metric_family_id, self.final_response_artifact_id)):
                 raise ValueError("decision metric binding is invalid")
+            if self.owner == "judge" and not all((self.case_id, self.question_source_artifact_id, self.label_evidence_artifact_id, self.metric_family_id, self.final_response_artifact_id, self.judge_result_artifact_id, self.judge_definition_digest, self.calibration_policy_digest, self.eligibility)):
+                raise ValueError("judge metric binding is invalid")
+            if self.owner == "judge" and self.eligibility == "ELIGIBLE" and self.calibration_report_artifact_id is None:
+                raise ValueError("eligible judge metric requires calibration report")
             if self.owner != "decision" and self.cohort_digest is not None:
                 raise ValueError("non-decision metric has cohort identity")
             if self.owner != "decision" and self.cohort_case_ids:
                 raise ValueError("non-decision metric has cohort membership")
             if self.cohort_digest is not None and (not self.cohort_case_ids or self.case_id not in self.cohort_case_ids):
                 raise ValueError("decision cohort membership is invalid")
-            if self.owner in {"answer", "citation", "decision"} and self.stage_kind not in {"generation", "verification", "final_state"}:
+            if self.owner in {"answer", "citation", "decision", "judge"} and self.stage_kind not in {"generation", "verification", "final_state"}:
                 raise ValueError("answer metric stage is invalid")
+            if self.owner != "judge" and any(value is not None for value in (self.judge_result_artifact_id, self.calibration_report_artifact_id, self.judge_definition_digest, self.calibration_policy_digest, self.eligibility)):
+                raise ValueError("non-judge metric has judge fields")
             if (self.owner == "context") != (self.stage_kind == "context"):
                 raise ValueError("query metric owner and stage disagree")
             if self.owner == "retrieval" and self.stage_kind == "context":
@@ -128,13 +139,16 @@ class MetricAggregate(IngestionMetricContract):
     insufficient_labels_count: int = Field(ge=0)
     value: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     report_artifact_ids: tuple[UUID, ...] = Field(max_length=1000)
-    owner: Literal["ingestion", "retrieval", "context", "answer", "citation", "decision"] = "ingestion"
+    owner: Literal["ingestion", "retrieval", "context", "answer", "citation", "decision", "judge"] = "ingestion"
     metric_family_id: str | None = None
     stage_kind: Literal["retrieval", "fusion", "rerank", "context", "generation", "verification", "final_state"] | None = None
     case_count: int | None = Field(default=None, ge=0)
     sample_count: int | None = Field(default=None, ge=0)
     cohort_digest: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     cohort_case_ids: tuple[Annotated[str, Field(pattern=r"^qcase_[a-f0-9]{16,64}$")], ...] = Field(default_factory=tuple, max_length=1000)
+    advisory_count: int = Field(default=0, ge=0)
+    ineligible_count: int = Field(default=0, ge=0)
+    drifted_count: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def counts_shape(self) -> "MetricAggregate":
@@ -153,7 +167,7 @@ def metric_report_bytes(value: MetricReport) -> bytes:
     payload = value.model_dump(mode="json", exclude_none=True)
     # Existing ingestion report bytes are part of persisted Artifact identity.
     if value.owner == "ingestion":
-        for key in ("metric_family_id", "case_id", "question_source_artifact_id", "label_evidence_artifact_id", "stage_kind", "measured_artifact_id", "k", "matches", "sample_count", "answer_artifact_id", "verification_artifact_id", "final_response_artifact_id", "cohort_digest", "cohort_case_ids"):
+        for key in ("metric_family_id", "case_id", "question_source_artifact_id", "label_evidence_artifact_id", "stage_kind", "measured_artifact_id", "k", "matches", "sample_count", "answer_artifact_id", "verification_artifact_id", "final_response_artifact_id", "cohort_digest", "cohort_case_ids", "judge_result_artifact_id", "calibration_report_artifact_id", "judge_definition_digest", "calibration_policy_digest", "eligibility"):
             payload.pop(key, None)
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
 

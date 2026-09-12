@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-019 Implemented; S-020 through S-027 Confirmed
-- **Active Story:** None; S-020 is next eligible
+- **Stories:** S-001 through S-020 Implemented; S-021 through S-027 Confirmed
+- **Active Story:** None; S-021 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,7 +58,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-020 next for calibrated semantic judging. S-020 through S-027 are confirmed
+Deliver S-021 next for evaluation gates and comparison. S-021 through S-027 are confirmed
 and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
@@ -171,3 +171,8 @@ corresponding engine/control API contracts.
   verification and final review passed; Docker lifecycle coverage remains
   environment-blocked by the known Compose build/start stall before containers
   are created.
+- **2026-09-12:** S-020 completed trusted Golden Dataset-derived calibration
+  snapshots, bounded human-review provenance, provider-neutral Judge execution,
+  pinned per-slice calibration and drift eligibility, and scoped unavailable
+  provider failures. Independent non-Docker verification and final review
+  passed; delivery close is pending.

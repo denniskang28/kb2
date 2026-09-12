@@ -1,7 +1,7 @@
 # S-020: Judge Calibration And Semantic Metrics
 
 - **Parent Feature:** FEAT-004
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-001, S-016, S-019

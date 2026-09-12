@@ -32,6 +32,7 @@ from kb2_runtime.generation.contracts import FinalStateConfig
 from kb2_runtime.evaluation.ingestion import IngestionMetricPlugin, METRICS
 from kb2_runtime.evaluation.retrieval import RetrievalMetricConfig, RetrievalMetricPlugin
 from kb2_runtime.evaluation.answer import AnswerMetricConfig, AnswerMetricPlugin, CITATION_METRICS, DECISION_METRICS, FACT_METRICS
+from kb2_runtime.evaluation.judges import DeepSeekJudge, JudgeConfig
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -241,6 +242,18 @@ GENERATOR_DEEPSEEK_DESCRIPTOR = PluginDescriptor(
 GENERATOR_DEEPSEEK_HIGH_PRECISION_DESCRIPTOR = GENERATOR_DEEPSEEK_DESCRIPTOR.model_copy(update={
     "plugin_id": "generator.deepseek-high-precision@1", "implementation_digest": "2" * 64, "capabilities": ("generation.high_precision",), "configuration_schema": HighPrecisionGenerationConfig.model_json_schema(),
 })
+JUDGE_DEEPSEEK_DESCRIPTOR = PluginDescriptor(
+    plugin_id="judge.deepseek@1", kind="judge", implementation_digest="9" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=JudgeConfig.model_json_schema(),
+    input_schemas=(("judge.calibration.snapshot", "v1"), ("evidence.set", "v1"), ("final.response", "v1")),
+    output_schemas=(("judge.result", "v1"),),
+    input_ports=(
+        {"name": "calibration_snapshot", "artifact_type": "judge.calibration.snapshot", "schema_revision": "v1"},
+        {"name": "reviewed_evidence", "artifact_type": "evidence.set", "schema_revision": "v1"},
+        {"name": "final_response", "artifact_type": "final.response", "schema_revision": "v1"},
+    ), output_ports=({"name": "result", "artifact_type": "judge.result", "schema_revision": "v1"},),
+    capabilities=("judge.semantic",), timeout_seconds=30,
+)
 VERIFIER_GROUNDED_DESCRIPTOR = PluginDescriptor(
     plugin_id="verifier.grounded@1", kind="verify", implementation_digest="3" * 64,
     runner=RunnerType.IN_PROCESS, configuration_schema=VerificationConfig.model_json_schema(),
@@ -358,6 +371,7 @@ def bootstrap_registry(
     registry.register(CONTEXT_FROM_RERANK_DESCRIPTOR, lambda: ContextAssemblerPlugin("rerank.candidate.set"), ContextAssemblerConfig)
     registry.register(GENERATOR_DEEPSEEK_DESCRIPTOR, DeepSeekGenerator, DefaultGenerationConfig)
     registry.register(GENERATOR_DEEPSEEK_HIGH_PRECISION_DESCRIPTOR, DeepSeekGenerator, HighPrecisionGenerationConfig)
+    registry.register(JUDGE_DEEPSEEK_DESCRIPTOR, DeepSeekJudge, JudgeConfig)
     registry.register(VERIFIER_GROUNDED_DESCRIPTOR, LocalVerifier, VerificationConfig)
     registry.register(FINAL_STATE_DESCRIPTOR, FinalStatePlugin, FinalStateConfig)
     registry.register(REPAIR_CONTROL_DESCRIPTOR, FinalStatePlugin, RepairConfig)
