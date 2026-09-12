@@ -30,6 +30,7 @@ from kb2_runtime.evidence.plugin import ContextAssemblerPlugin
 from kb2_runtime.generation import DeepSeekGenerator, DefaultGenerationConfig, FinalStatePlugin, GenerationConfig, HighPrecisionGenerationConfig, LocalVerifier, RepairConfig, VerificationConfig
 from kb2_runtime.generation.contracts import FinalStateConfig
 from kb2_runtime.evaluation.ingestion import IngestionMetricPlugin, METRICS
+from kb2_runtime.evaluation.retrieval import RetrievalMetricConfig, RetrievalMetricPlugin
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -283,6 +284,31 @@ def _metric_descriptor(plugin_id: str, evidence: bool) -> PluginDescriptor:
 INGESTION_METRIC_DESCRIPTORS = tuple(_metric_descriptor(metric_id, metric_id.endswith("evidence-preservation@1")) for metric_id in METRICS)
 
 
+def _retrieval_metric_descriptor(metric_id: str, source: str) -> PluginDescriptor:
+    return PluginDescriptor(
+        plugin_id=metric_id, kind="metric", implementation_digest="7" * 64,
+        runner=RunnerType.IN_PROCESS, configuration_schema=RetrievalMetricConfig.model_json_schema(),
+        input_schemas=(("golden.dataset.snapshot", "v1"), ("evidence.set", "v1"), (source, "v1")),
+        output_schemas=(("metric.report", "v1"),),
+        input_ports=(
+            {"name": "snapshot", "artifact_type": "golden.dataset.snapshot", "schema_revision": "v1"},
+            {"name": "label_evidence", "artifact_type": "evidence.set", "schema_revision": "v1"},
+            {"name": "measured_stage", "artifact_type": source, "schema_revision": "v1"},
+        ), output_ports=({"name": "report", "artifact_type": "metric.report", "schema_revision": "v1"},),
+        resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
+    )
+
+
+RETRIEVAL_METRIC_DESCRIPTORS = tuple(
+    _retrieval_metric_descriptor(f"metric.retrieval.{('hit' if family == 'evidence-hit-rate' else family)}.from-{source.split('.')[0]}@1", source)
+    for family in ("recall", "mrr", "ndcg", "evidence-hit-rate")
+    for source in ("retrieval.candidate.set", "fusion.candidate.set", "rerank.candidate.set")
+) + tuple(
+    _retrieval_metric_descriptor(f"metric.context.{family}.from-evidence@1", "evidence.set")
+    for family in ("precision", "recall")
+)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -317,4 +343,6 @@ def bootstrap_registry(
     registry.register(REPAIR_CONTROL_DESCRIPTOR, FinalStatePlugin, RepairConfig)
     for descriptor in INGESTION_METRIC_DESCRIPTORS:
         registry.register(descriptor, lambda descriptor=descriptor: IngestionMetricPlugin(descriptor.plugin_id), EmptyConfig)
+    for descriptor in RETRIEVAL_METRIC_DESCRIPTORS:
+        registry.register(descriptor, lambda descriptor=descriptor: RetrievalMetricPlugin(descriptor.plugin_id), RetrievalMetricConfig)
     return registry
