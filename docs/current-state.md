@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-012 Implemented; S-013 through S-027 Confirmed
-- **Active Story:** None; S-013 is next eligible
+- **Stories:** S-001 through S-013 Implemented; S-014 through S-027 Confirmed
+- **Active Story:** None; S-014 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -19,7 +19,9 @@
   cross-format locators and table semantics, reusable structure validation and
   preservation Plugins, deterministic citation-preserving ChunkSet/v1
   chunking and bounded enrichment Plugins, deterministic provider-neutral
-  embedding and local hybrid index Artifacts with failure recovery, a
+  embedding and local hybrid index Artifacts with failure recovery,
+  deterministic candidate fusion and optional reranking with preserved
+  attribution and safe failures, a
   Docker-backed Artifact trace persistence/restart regression, and an isolated
   lifecycle regression
 
@@ -51,7 +53,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-013 next for candidate fusion and reranking. S-013 through S-027 are
+Deliver S-014 next for evidence and context assembly. S-014 through S-027 are
 confirmed and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
@@ -120,3 +122,7 @@ corresponding engine/control API contracts.
   hierarchy, table, and metadata retrieval candidate sets, request-bound
   identity validation, safe retrieval failures, and replacement-provider
   conformance; independent verification and repaired final review passed.
+- **2026-09-12:** S-013 completed deterministic reciprocal-rank candidate
+  fusion, optional lexical-overlap reranking, repeated typed candidate ports,
+  preserved contributor attribution, safe failure behavior, independent
+  verification, and repaired final review; ready for delivery close.

@@ -19,7 +19,7 @@ class QueryStage(QueryProfileContract):
     kind: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
     plugin_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}@[1-9][0-9]*$")
     configuration: dict[str, Any] = Field(default_factory=dict, max_length=64)
-    inputs: dict[str, str] = Field(default_factory=dict, max_length=16)
+    inputs: dict[str, str | tuple[str, ...]] = Field(default_factory=dict, max_length=16)
     outputs: tuple[str, ...] = Field(default_factory=tuple, max_length=16)
     when: dict[str, Any] | None = None
     max_attempts: int | None = None

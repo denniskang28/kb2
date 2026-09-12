@@ -14,6 +14,8 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("search.document.set", "v1"),
     ("search.index.result", "v1"),
     ("retrieval.candidate.set", "v1"),
+    ("fusion.candidate.set", "v1"),
+    ("rerank.candidate.set", "v1"),
 })
 
 

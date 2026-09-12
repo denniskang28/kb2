@@ -38,6 +38,14 @@ class PluginPort(PluginContract):
     name: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
     artifact_type: str = Field(min_length=1, max_length=64)
     schema_revision: str = Field(min_length=1, max_length=64)
+    min_items: int = Field(default=1, ge=1, le=64)
+    max_items: int = Field(default=1, ge=1, le=64)
+
+    @model_validator(mode="after")
+    def cardinality_is_valid(self) -> "PluginPort":
+        if self.min_items > self.max_items:
+            raise ValueError("port minimum cannot exceed maximum")
+        return self
 
     @property
     def schema(self) -> SchemaPair:

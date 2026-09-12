@@ -121,19 +121,22 @@ class QueryProfileCompiler:
         return registration
 
     @staticmethod
-    def _inputs(stage: QueryStage, ports: Any, available: dict[str, tuple[str, str]], location: str) -> list[dict[str, str]]:
+    def _inputs(stage: QueryStage, ports: Any, available: dict[str, tuple[str, str]], location: str) -> list[dict[str, Any]]:
         if set(stage.inputs) != {port.name for port in ports}:
             raise QueryProfileError(QueryProfileErrorCode.PORT_UNBOUND, location + "/inputs")
         result = []
         for port in ports:
-            source = stage.inputs[port.name]
-            if source not in available:
-                # Any syntactically stage-like unavailable source is a forward/self edge.
-                code = QueryProfileErrorCode.GRAPH_CYCLE if "." in source and source not in {"query.question", "search.index"} else QueryProfileErrorCode.PORT_UNBOUND
-                raise QueryProfileError(code, location + f"/inputs/{port.name}")
-            if available[source] != (port.artifact_type, port.schema_revision):
-                raise QueryProfileError(QueryProfileErrorCode.SCHEMA_INCOMPATIBLE, location + f"/inputs/{port.name}")
-            result.append({"name": port.name, "source": source, "artifact_type": port.artifact_type, "schema_revision": port.schema_revision})
+            raw_source = stage.inputs[port.name]
+            sources = raw_source if isinstance(raw_source, tuple) else (raw_source,)
+            if not port.min_items <= len(sources) <= port.max_items or len(set(sources)) != len(sources):
+                raise QueryProfileError(QueryProfileErrorCode.PORT_UNBOUND, location + f"/inputs/{port.name}")
+            for source in sources:
+                if source not in available:
+                    code = QueryProfileErrorCode.GRAPH_CYCLE if "." in source and source not in {"query.question", "search.index"} else QueryProfileErrorCode.PORT_UNBOUND
+                    raise QueryProfileError(code, location + f"/inputs/{port.name}")
+                if available[source] != (port.artifact_type, port.schema_revision):
+                    raise QueryProfileError(QueryProfileErrorCode.SCHEMA_INCOMPATIBLE, location + f"/inputs/{port.name}")
+            result.append({"name": port.name, "source": sources[0] if len(sources) == 1 else list(sources), "artifact_type": port.artifact_type, "schema_revision": port.schema_revision})
         return result
 
     @staticmethod
@@ -143,7 +146,7 @@ class QueryProfileCompiler:
             raise QueryProfileError(QueryProfileErrorCode.FINAL_VALIDATION_MISSING, "/stages")
         final = next(item for item in stages if item["kind"] == "final_state")
         upstream = {
-            f"{stage['stage_id']}.{output['name']}": {item["source"] for item in stage["inputs"]}
+            f"{stage['stage_id']}.{output['name']}": {source for item in stage["inputs"] for source in (item["source"] if isinstance(item["source"], list) else [item["source"]])}
             for stage in stages for output in stage["outputs"]
         }
         evidence = f"{context['stage_id']}.evidence"

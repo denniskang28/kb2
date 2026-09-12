@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from kb2_runtime.plugins.contracts import PluginDescriptor, RunnerType
 from kb2_runtime.plugins.registry import PluginRegistry
 from kb2_runtime.retrieval.contracts import HierarchyRetrieverConfig, RetrieverConfig
+from kb2_runtime.fusion.contracts import FusionConfig
 from kb2_runtime.query_profiles import QueryArtifactBinding, QueryProfileCompiler, QueryProfileError, QueryProfileErrorCode, QueryProfileParser
 from kb2_runtime.trace.contracts import ArtifactReference
 
@@ -42,6 +43,7 @@ def registry() -> PluginRegistry:
         value.register(PluginDescriptor(plugin_id=plugin_id, kind="query", implementation_digest=("a" if plugin_id == "query.retrieve@1" else "b") * 64, runner=RunnerType.IN_PROCESS, configuration_schema=config.model_json_schema(), input_schemas=inputs, output_schemas=outputs, input_ports=tuple({"name": name, "artifact_type": typ, "schema_revision": rev} for name, typ, rev in names[:len(inputs)]), output_ports=tuple({"name": name, "artifact_type": typ, "schema_revision": rev} for name, typ, rev in names[len(inputs):]), timeout_seconds=1), lambda: None, config)
     for plugin_id, config in (("retriever.keyword@1", RetrieverConfig), ("retriever.vector@1", RetrieverConfig), ("retriever.table@1", RetrieverConfig), ("retriever.metadata@1", RetrieverConfig), ("retriever.hierarchy@1", HierarchyRetrieverConfig)):
         value.register(PluginDescriptor(plugin_id=plugin_id, kind="retriever", implementation_digest="c" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=config.model_json_schema(), input_schemas=(("opaque.bytes", "v1"), ("search.index.result", "v1")), output_schemas=(("retrieval.candidate.set", "v1"),), input_ports=({"name": "question", "artifact_type": "opaque.bytes", "schema_revision": "v1"}, {"name": "index", "artifact_type": "search.index.result", "schema_revision": "v1"}), output_ports=({"name": "candidates", "artifact_type": "retrieval.candidate.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, config)
+    value.register(PluginDescriptor(plugin_id="fusion.reciprocal-rank@1", kind="fusion", implementation_digest="d" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=FusionConfig.model_json_schema(), input_schemas=(("retrieval.candidate.set", "v1"),), output_schemas=(("fusion.candidate.set", "v1"),), input_ports=({"name": "candidate_sets", "artifact_type": "retrieval.candidate.set", "schema_revision": "v1", "min_items": 1, "max_items": 8},), output_ports=({"name": "fused_candidates", "artifact_type": "fusion.candidate.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, FusionConfig)
     return value
 
 
@@ -88,11 +90,38 @@ def test_all_baseline_families_are_configuration_over_common_stages() -> None:
     assert {plan.canonical_payload["stages"][0]["plugin_id"] for plan in plans} == {"retriever.keyword@1", "retriever.hierarchy@1", "retriever.table@1", "retriever.metadata@1"}
 
 
+def test_repeated_fusion_port_preserves_source_order_and_rejects_invalid_bindings() -> None:
+    source = json.loads(Path("tests/fixtures/query_profiles/text-hybrid.json").read_text())
+
+    compiled = compile_source(json.dumps(source)).get("text-hybrid")
+    resolved_fusion = next(stage for stage in compiled.canonical_payload["stages"] if stage["stage_id"] == "fuse")
+    assert resolved_fusion["inputs"] == [{
+        "name": "candidate_sets",
+        "source": ["keyword.candidates", "vector.candidates"],
+        "artifact_type": "retrieval.candidate.set",
+        "schema_revision": "v1",
+    }]
+
+    cases = [
+        ([], QueryProfileErrorCode.PORT_UNBOUND),
+        (["keyword.candidates", "keyword.candidates"], QueryProfileErrorCode.PORT_UNBOUND),
+        (["keyword.candidates"] * 9, QueryProfileErrorCode.PORT_UNBOUND),
+        (["query.question"], QueryProfileErrorCode.SCHEMA_INCOMPATIBLE),
+        (["final.final"], QueryProfileErrorCode.GRAPH_CYCLE),
+    ]
+    for candidate_sets, code in cases:
+        invalid = json.loads(json.dumps(source))
+        invalid["profiles"][0]["stages"][2]["inputs"] = {"candidate_sets": candidate_sets}
+        with pytest.raises(QueryProfileError) as raised:
+            compile_source(json.dumps(invalid))
+        assert raised.value.code is code
+
+
 @pytest.mark.parametrize(("change", "code"), [
     (lambda value: value["profiles"][0]["stages"][0].update(plugin_id="missing@1"), QueryProfileErrorCode.PLUGIN_UNKNOWN),
     (lambda value: value["profiles"][0]["stages"][0]["inputs"].update(question="final.final"), QueryProfileErrorCode.GRAPH_CYCLE),
     (lambda value: value["profiles"][0]["stages"][1].update(when={"eq": ["unknown", True]}), QueryProfileErrorCode.CONDITION_UNSUPPORTED),
-    (lambda value: value["profiles"][0]["stages"][3]["inputs"].update(evidence="query.question"), QueryProfileErrorCode.FINAL_VALIDATION_MISSING),
+    (lambda value: value["profiles"][0]["stages"][4]["inputs"].update(evidence="query.question"), QueryProfileErrorCode.FINAL_VALIDATION_MISSING),
 ])
 def test_compiler_errors_are_safe_and_addressable(change, code) -> None:
     value = json.loads(Path("tests/fixtures/query_profiles/text-hybrid.json").read_text())

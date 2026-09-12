@@ -73,3 +73,4 @@ None. Fusion/rerank implementations and score exposure belong to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-003 sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-12:** Implemented, independently verified, and final-reviewed.

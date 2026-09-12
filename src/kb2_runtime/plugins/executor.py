@@ -59,14 +59,24 @@ class PluginExecutor:
             validated = registration.configuration_model.model_validate(configuration).model_dump(mode="json")
         except ValidationError as exc:
             raise PluginError(PluginErrorCode.DESCRIPTOR_INVALID) from exc
-        if len(input_ids) != len(registration.descriptor.input_ports):
+        ports = registration.descriptor.input_ports
+        if not sum(port.min_items for port in ports) <= len(input_ids) <= sum(port.max_items for port in ports):
             raise PluginError(PluginErrorCode.RESULT_INVALID)
         manifests = []
-        for artifact_id in input_ids:
-            manifest = await self.artifacts.get_artifact_manifest(artifact_id)
-            if not manifest or (manifest.artifact_type, manifest.schema_revision) not in registration.descriptor.input_schemas:
+        position = 0
+        for port_index, port in enumerate(ports):
+            remaining_minimum = sum(item.min_items for item in ports[port_index + 1:])
+            count = min(port.max_items, len(input_ids) - position - remaining_minimum)
+            if count < port.min_items:
                 raise PluginError(PluginErrorCode.RESULT_INVALID)
-            manifests.append(manifest)
+            for artifact_id in input_ids[position:position + count]:
+                manifest = await self.artifacts.get_artifact_manifest(artifact_id)
+                if not manifest or (manifest.artifact_type, manifest.schema_revision) != port.schema:
+                    raise PluginError(PluginErrorCode.RESULT_INVALID)
+                manifests.append(manifest)
+            position += count
+        if position != len(input_ids):
+            raise PluginError(PluginErrorCode.RESULT_INVALID)
         try:
             attempt_id, _ = await self.runs.start_attempt(run_id, stage_key, input_ids)
         except TypeError:
