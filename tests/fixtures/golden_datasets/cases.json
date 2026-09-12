@@ -1,0 +1,6 @@
+{
+  "schema_revision": "GoldenDataset/v1",
+  "review_states": ["reviewed", "draft", "generated", "invalid"],
+  "answerability": ["answerable", "ambiguous", "unanswerable"],
+  "annotation_targets": ["text_span", "element", "reading_order", "table", "cell", "locator", "evidence_coverage"]
+}

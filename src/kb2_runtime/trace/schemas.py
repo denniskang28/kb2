@@ -20,6 +20,7 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("generated.answer", "v1"),
     ("verification.result", "v1"),
     ("final.response", "v1"),
+    ("golden.dataset.snapshot", "v1"),
 })
 
 
