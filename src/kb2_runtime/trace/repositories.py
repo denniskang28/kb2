@@ -322,6 +322,46 @@ class TraceRepository:
             )
             return tuple(await cursor.fetchall())
 
+    async def list_plugin_workbench_runs(self, plugin_id: str, limit: int = 8) -> tuple[dict[str, Any], ...]:
+        """Safe, bounded lifecycle facts only; no attempt error/configuration/artifact content."""
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT DISTINCT r.id,r.engine_kind,r.state,r.terminal_state,r.created_at "
+                "FROM stage_attempts s JOIN runs r ON r.id=s.run_id "
+                "WHERE s.plugin_id=%s ORDER BY r.created_at DESC,r.id DESC LIMIT %s",
+                (plugin_id, min(max(limit, 1), 8)),
+            )
+            return tuple(await cursor.fetchall())
+
+    async def list_profile_workspaces(self, kind: str | None = None, query: str = "") -> tuple[dict[str, Any], ...]:
+        """Mutable local workbench values; deliberately no revision/history table."""
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT profile_id, profile_kind, updated_at FROM profile_workspaces "
+                "WHERE (%s IS NULL OR profile_kind=%s) AND profile_id ILIKE %s "
+                "ORDER BY profile_kind, profile_id LIMIT 64",
+                (kind, kind, f"%{query}%"),
+            )
+            return tuple(await cursor.fetchall())
+
+    async def get_profile_workspace(self, profile_id: str) -> dict[str, Any] | None:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute("SELECT profile_id, profile_kind, source_document, updated_at FROM profile_workspaces WHERE profile_id=%s", (profile_id,))
+            return await cursor.fetchone()
+
+    async def save_profile_workspace(self, profile_id: str, kind: str, document: dict[str, Any]) -> dict[str, Any]:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "INSERT INTO profile_workspaces (profile_id, profile_kind, source_document) VALUES (%s,%s,%s) "
+                "ON CONFLICT (profile_id) DO UPDATE SET profile_kind=EXCLUDED.profile_kind, source_document=EXCLUDED.source_document, updated_at=CURRENT_TIMESTAMP "
+                "RETURNING profile_id, profile_kind, source_document, updated_at",
+                (profile_id, kind, Jsonb(document)),
+            )
+            row = await cursor.fetchone()
+        await self.connection.commit()
+        assert row is not None
+        return row
+
     async def _metrics(self, cursor: Any, table: str, owner: str, identifier: UUID, metrics: Sequence[Metric]) -> None:
         for metric in metrics:
             await cursor.execute(f"INSERT INTO {table} ({owner}, name, value) VALUES (%s, %s, %s)", (identifier, metric.name, metric.value))

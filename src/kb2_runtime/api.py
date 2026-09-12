@@ -9,8 +9,16 @@ from kb2_runtime.config import CapabilityCatalog, Settings
 from kb2_runtime.health.contracts import LivenessReport
 from kb2_runtime.health.service import HealthService, UnknownCapabilityError
 from kb2_runtime.workbench.service import WorkbenchOverviewService
+from kb2_runtime.workbench.contracts import CompatibilityRequest, DryRunRequest, ProfileRequest
+from kb2_runtime.workbench.studio import StudioService
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.storage import ArtifactStore
+from kb2_runtime.trace.service import ArtifactService, RunService
+from kb2_runtime.plugins.bootstrap import bootstrap_registry
+from kb2_runtime.plugins.executor import PluginExecutor
+from kb2_runtime.plugins.runner import InProcessRunner
+from kb2_runtime.plugins.contracts import RunnerType
+from kb2_runtime.query_engine import QueryEngine
 
 
 def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | None = None) -> FastAPI:
@@ -25,6 +33,30 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         return await health.report(("runner.container",), probe_external=False)
 
     app.state.workbench_overview = None
+    app.state.workbench_studio = None
+    app.state.workbench_query_runner = None
+
+    async def studio() -> StudioService:
+        # The workspace value itself is durable in PostgreSQL; this cached
+        # connection only avoids rebuilding the projection per browser action.
+        if app.state.workbench_studio is None:
+            repository = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+            runner = app.state.workbench_query_runner
+            if runner is None:
+                artifacts = ArtifactService(repository, ArtifactStore(runtime_settings.artifact_root))
+                runs = RunService(repository)
+                executor = PluginExecutor(bootstrap_registry(), {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)
+                runner = QueryEngine(executor, runs, artifacts)
+            async def registry_readiness():
+                report = await overview_health()
+                capabilities = {item.id: item.status == "ready" for item in report.capabilities}
+                runners = {RunnerType.CONTAINER: capabilities.get("runner.container", False)}
+                return capabilities, runners
+            app.state.workbench_studio = StudioService(repository=repository, query_runner=runner, readiness=registry_readiness)
+        return app.state.workbench_studio
+
+    def problem(code: str, status: int = 400) -> JSONResponse:
+        return JSONResponse({"contractVersion": "workbench-problem/v1", "code": code}, status_code=status)
 
     @app.get("/health/live", response_model=LivenessReport)
     async def live() -> LivenessReport:
@@ -67,6 +99,69 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
             if repository is not None:
                 await repository.close()
         return JSONResponse(result.model_dump(mode="json", exclude_none=True))
+
+    @app.get("/api/workbench/profiles")
+    async def workbench_profiles(kind: str | None = Query(default=None, pattern="^(ingestion|query)$"), q: str = Query(default="", max_length=64)) -> JSONResponse:
+        return JSONResponse([x.model_dump(mode="json") for x in await (await studio()).list_profiles(kind, q)])
+
+    @app.get("/api/workbench/profiles/{profile_id}")
+    async def workbench_profile(profile_id: str) -> JSONResponse:
+        item = await (await studio()).get_profile(profile_id)
+        return JSONResponse(item.model_dump(mode="json") if item else {"contractVersion": "workbench-problem/v1", "code": "PROFILE_NOT_FOUND"}, status_code=200 if item else 404)
+
+    @app.put("/api/workbench/profiles/{profile_id}")
+    async def save_workbench_profile(profile_id: str, request: ProfileRequest) -> JSONResponse:
+        if not __import__("re").fullmatch(r"[a-z][a-z0-9_.-]{0,47}", profile_id):
+            return problem("PROFILE_ID_INVALID")
+        checked = await (await studio()).validate(request.kind, request.document, source=request.source, media_type=request.mediaType)
+        result = checked if not checked.valid or checked.normalizedDocument is None else await (await studio()).save(profile_id, request.kind, checked.normalizedDocument)
+        if hasattr(result, "valid"):
+            return JSONResponse(result.model_dump(mode="json"), status_code=422)
+        return JSONResponse(result.model_dump(mode="json"))
+
+    @app.post("/api/workbench/profiles/{profile_id}/copy")
+    async def copy_workbench_profile(profile_id: str, copy_id: str = Query(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")) -> JSONResponse:
+        result = await (await studio()).copy(profile_id, copy_id)
+        if result is None:
+            return problem("PROFILE_COPY_UNAVAILABLE", 404)
+        return JSONResponse(result.model_dump(mode="json"), status_code=201)
+
+    @app.post("/api/workbench/profiles/validate")
+    async def validate_workbench_profile(request: ProfileRequest) -> JSONResponse:
+        result = await (await studio()).validate(request.kind, request.document, False, request.searchArtifact, request.source, request.mediaType)
+        return JSONResponse(result.model_dump(mode="json"))
+
+    @app.post("/api/workbench/profiles/compile")
+    async def compile_workbench_profile(request: ProfileRequest) -> JSONResponse:
+        result = await (await studio()).validate(request.kind, request.document, True, request.searchArtifact, request.source, request.mediaType)
+        return JSONResponse(result.model_dump(mode="json"))
+
+    @app.post("/api/workbench/profiles/{profile_id}/dry-run")
+    async def dry_run_workbench_profile(profile_id: str, request: DryRunRequest) -> JSONResponse:
+        result = await (await studio()).dry_run(profile_id, request.kind, request.questionArtifactId, request.searchArtifact)
+        if hasattr(result, "valid"):
+            return JSONResponse(result.model_dump(mode="json"), status_code=409)
+        return JSONResponse(result.model_dump(mode="json"))
+
+    @app.get("/api/workbench/plugins")
+    async def workbench_plugins(kind: str | None = Query(default=None, max_length=48), runner: str | None = Query(default=None, pattern="^(in_process|container)$"), readiness: str | None = Query(default=None, pattern="^(available|unavailable)$"), q: str = Query(default="", max_length=64)) -> JSONResponse:
+        return JSONResponse([x.model_dump(mode="json", exclude_none=True) for x in await (await studio()).list_plugins(kind, runner, readiness, q)])
+
+    @app.get("/api/workbench/plugins/compatible")
+    async def compatible_workbench_plugins(stageKind: str = Query(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")) -> JSONResponse:
+        return JSONResponse([item.model_dump(mode="json") for item in await (await studio()).compatible_plugins(stageKind)])
+
+    @app.post("/api/workbench/plugins/compatible")
+    async def document_compatible_workbench_plugins(request: CompatibilityRequest) -> JSONResponse:
+        result = await (await studio()).compatible_for_document(request.kind, request.document, request.stageId, request.source, request.mediaType)
+        if isinstance(result, tuple):
+            return JSONResponse([item.model_dump(mode="json") for item in result])
+        return JSONResponse(result.model_dump(mode="json"), status_code=422)
+
+    @app.get("/api/workbench/plugins/{plugin_id}")
+    async def workbench_plugin(plugin_id: str) -> JSONResponse:
+        item = await (await studio()).plugin_detail(plugin_id)
+        return JSONResponse(item.model_dump(mode="json", exclude_none=True) if item else {"contractVersion": "workbench-problem/v1", "code": "PLUGIN_NOT_FOUND"}, status_code=200 if item else 404)
 
     @app.get("/workbench/assets/{asset_name}")
     async def workbench_asset(asset_name: str) -> FileResponse:

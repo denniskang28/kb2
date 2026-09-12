@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -65,3 +65,84 @@ class WorkbenchOverview(OverviewContract):
     activeRunCount: int = Field(ge=0)
     recentRuns: tuple[OverviewRun, ...] = Field(max_length=8)
     recentComparisons: tuple[OverviewComparison, ...] = Field(max_length=4)
+
+
+# The studio deliberately transports only declarative profile values.  Keeping
+# this envelope small prevents it becoming a second execution/request API.
+class WorkspaceProfile(OverviewContract):
+    profileId: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
+    kind: Literal["ingestion", "query"]
+    document: dict[str, Any] = Field(max_length=64)
+    updatedAt: datetime
+
+
+class WorkspaceProfileSummary(OverviewContract):
+    profileId: str
+    kind: Literal["ingestion", "query"]
+    updatedAt: datetime
+
+
+class ProfileRequest(OverviewContract):
+    kind: Literal["ingestion", "query"]
+    document: dict[str, Any] | None = Field(default=None, max_length=64)
+    source: str | None = Field(default=None, max_length=64 * 1024)
+    mediaType: Literal["application/json", "application/yaml"] = "application/json"
+    searchArtifact: dict[str, Any] | None = Field(default=None, max_length=8)
+
+
+class StudioDiagnostic(OverviewContract):
+    code: str = Field(pattern=r"^[A-Z_]{3,64}$")
+    location: str = Field(pattern=r"^/")
+
+
+class ProfileValidation(OverviewContract):
+    valid: bool
+    normalizedDocument: dict[str, Any] | None = None
+    diagnostics: tuple[StudioDiagnostic, ...] = Field(default_factory=tuple, max_length=16)
+    resolvedPlan: dict[str, Any] | None = None
+    planDigest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class DryRunRequest(OverviewContract):
+    kind: Literal["ingestion", "query"]
+    questionArtifactId: str | None = Field(default=None, pattern=r"^[0-9a-fA-F-]{36}$")
+    searchArtifact: dict[str, Any] | None = Field(default=None, max_length=8)
+
+
+class CompatibilityRequest(ProfileRequest):
+    stageId: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,95}$")
+
+
+class DryRunReceipt(OverviewContract):
+    runId: str
+    profileId: str
+    planDigest: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class RegistryPort(OverviewContract):
+    name: str
+    artifactType: str
+    schemaRevision: str
+    minItems: int
+    maxItems: int
+
+
+class RegistryPlugin(OverviewContract):
+    pluginId: str
+    kind: str
+    runner: str
+    runnable: bool
+    reason: str | None = None
+
+
+class RegistryPluginDetail(RegistryPlugin):
+    implementationDigest: str
+    inputPorts: tuple[RegistryPort, ...]
+    outputPorts: tuple[RegistryPort, ...]
+    configurationSchema: dict[str, Any]
+    capabilities: tuple[str, ...]
+    resourceHints: dict[str, Any]
+    timeoutSeconds: float
+    safeExample: dict[str, Any]
+    contractTests: tuple[dict[str, Any], ...] = ()
+    recentRuns: tuple[dict[str, Any], ...] = ()
