@@ -63,10 +63,14 @@ class SearchDocument(IndexingContract):
     enrichments: dict[str, EnrichmentField] = Field(default_factory=dict, max_length=32)
     citations: tuple[ChunkCitation, ...] = Field(min_length=1, max_length=128)
     embedding: EmbeddingRecord
+    parent_chunk_id: Annotated[str, Field(pattern=r"^chk_[a-f0-9]{32}$")] | None = None
+    child_chunk_ids: tuple[Annotated[str, Field(pattern=r"^chk_[a-f0-9]{32}$")], ...] = Field(default_factory=tuple, max_length=64)
 
     @model_validator(mode="after")
     def citation_and_embedding_bindings(self) -> "SearchDocument":
-        if self.embedding.chunk_id != self.chunk_id or len({citation.element_id for citation in self.citations}) != len(self.citations):
+        if (self.embedding.chunk_id != self.chunk_id or len({citation.element_id for citation in self.citations}) != len(self.citations)
+                or self.parent_chunk_id == self.chunk_id or self.chunk_id in self.child_chunk_ids
+                or len(set(self.child_chunk_ids)) != len(self.child_chunk_ids)):
             raise ValueError("search document bindings are invalid")
         return self
 
@@ -118,6 +122,11 @@ class SearchIndexResult(IndexingContract):
     def payload_is_complete(self) -> "SearchIndexResult":
         if self.document_count != len(self.documents) or set(self.document_lengths) != {item.chunk_id for item in self.documents}:
             raise ValueError("index payload must cover exactly its documents")
+        by_id = {item.chunk_id: item for item in self.documents}
+        if any((item.parent_chunk_id and (item.parent_chunk_id not in by_id or item.chunk_id not in by_id[item.parent_chunk_id].child_chunk_ids))
+               or any(child not in by_id or by_id[child].parent_chunk_id != item.chunk_id for child in item.child_chunk_ids)
+               for item in self.documents):
+            raise ValueError("index hierarchy links must agree")
         return self
 
 

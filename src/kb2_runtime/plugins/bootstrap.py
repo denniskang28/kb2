@@ -19,6 +19,8 @@ from kb2_runtime.indexing.plugin import HashingEmbeddingPlugin, LocalHybridIndex
 from kb2_runtime.indexing.contracts import LocalHybridConfig
 from kb2_runtime.indexing.embedding import HASHING_IMPLEMENTATION_DIGEST
 from kb2_runtime.indexing.hybrid import INDEXER_IMPLEMENTATION_DIGEST
+from kb2_runtime.retrieval.contracts import HierarchyRetrieverConfig, RetrieverConfig
+from kb2_runtime.retrieval.plugin import hierarchy_plugin, keyword_plugin, metadata_plugin, table_plugin, vector_plugin
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -166,6 +168,25 @@ LOCAL_HYBRID_INDEXER_DESCRIPTOR = PluginDescriptor(
 )
 
 
+def _retriever_descriptor(plugin_id: str, digest: str, configuration: type[BaseModel]) -> PluginDescriptor:
+    return PluginDescriptor(
+        plugin_id=plugin_id, kind="retriever", implementation_digest=digest, runner=RunnerType.IN_PROCESS,
+        configuration_schema=configuration.model_json_schema(),
+        input_schemas=(("opaque.bytes", "v1"), ("search.index.result", "v1")),
+        output_schemas=(("retrieval.candidate.set", "v1"),),
+        input_ports=({"name": "question", "artifact_type": "opaque.bytes", "schema_revision": "v1"}, {"name": "index", "artifact_type": "search.index.result", "schema_revision": "v1"}),
+        output_ports=({"name": "candidates", "artifact_type": "retrieval.candidate.set", "schema_revision": "v1"},),
+        quality_signal_names=("retrieval_validation", "retrieval_strategy", "no_candidates"), timeout_seconds=10,
+    )
+
+
+RETRIEVER_KEYWORD_DESCRIPTOR = _retriever_descriptor("retriever.keyword@1", "6" * 64, RetrieverConfig)
+RETRIEVER_VECTOR_DESCRIPTOR = _retriever_descriptor("retriever.vector@1", "7" * 64, RetrieverConfig)
+RETRIEVER_HIERARCHY_DESCRIPTOR = _retriever_descriptor("retriever.hierarchy@1", "8" * 64, HierarchyRetrieverConfig)
+RETRIEVER_TABLE_DESCRIPTOR = _retriever_descriptor("retriever.table@1", "9" * 64, RetrieverConfig)
+RETRIEVER_METADATA_DESCRIPTOR = _retriever_descriptor("retriever.metadata@1", "a" * 64, RetrieverConfig)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -183,4 +204,9 @@ def bootstrap_registry(
     registry.register(EMBEDDER_HASHING_DESCRIPTOR, HashingEmbeddingPlugin, EmptyConfig)
     registry.register(SEARCH_DOCUMENT_PROJECTOR_DESCRIPTOR, SearchDocumentProjectorPlugin, EmptyConfig)
     registry.register(LOCAL_HYBRID_INDEXER_DESCRIPTOR, LocalHybridIndexPlugin, LocalHybridConfig)
+    registry.register(RETRIEVER_KEYWORD_DESCRIPTOR, keyword_plugin, RetrieverConfig)
+    registry.register(RETRIEVER_VECTOR_DESCRIPTOR, vector_plugin, RetrieverConfig)
+    registry.register(RETRIEVER_HIERARCHY_DESCRIPTOR, hierarchy_plugin, HierarchyRetrieverConfig)
+    registry.register(RETRIEVER_TABLE_DESCRIPTOR, table_plugin, RetrieverConfig)
+    registry.register(RETRIEVER_METADATA_DESCRIPTOR, metadata_plugin, RetrieverConfig)
     return registry

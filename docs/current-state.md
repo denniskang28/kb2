@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-011 Implemented; S-012 through S-027 Confirmed
-- **Active Story:** None; S-012 is next eligible
+- **Stories:** S-001 through S-012 Implemented; S-013 through S-027 Confirmed
+- **Active Story:** None; S-013 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -51,7 +51,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-011 next for query Profile compilation. S-011 through S-027 are
+Deliver S-013 next for candidate fusion and reranking. S-013 through S-027 are
 confirmed and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
@@ -116,3 +116,7 @@ corresponding engine/control API contracts.
   deterministic selection, pinned Search Artifact plan identity, baseline
   query-family fixtures, independent verification, and repaired final review;
   delivery commit `9fc5eab` was fast-forwarded into local main.
+- **2026-09-12:** S-012 completed provider-neutral independent keyword, vector,
+  hierarchy, table, and metadata retrieval candidate sets, request-bound
+  identity validation, safe retrieval failures, and replacement-provider
+  conformance; independent verification and repaired final review passed.

@@ -13,6 +13,7 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("embedding.set", "v1"),
     ("search.document.set", "v1"),
     ("search.index.result", "v1"),
+    ("retrieval.candidate.set", "v1"),
 })
 
 

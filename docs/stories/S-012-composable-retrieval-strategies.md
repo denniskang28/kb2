@@ -1,7 +1,7 @@
 # S-012: Composable Retrieval Strategies
 
 - **Parent Feature:** FEAT-003
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-003, S-008, S-009, S-011
@@ -75,3 +75,4 @@ None. Algorithms and initial local providers belong to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-003 sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-12:** Implemented, independently verified, and final-reviewed.
