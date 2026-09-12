@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-021 Implemented; S-022 through S-027 Confirmed
-- **Active Story:** None; S-022 is next eligible
+- **Stories:** S-001 through S-022 Implemented; S-023 through S-027 Confirmed
+- **Active Story:** None; S-023 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,9 +58,9 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-022 next for the workbench shell and runtime overview. S-022 through
-S-027 are confirmed and may enter just-in-time technical design when their
-declared dependencies are implemented.
+Deliver S-023 next for the Profile and Plugin Studio. S-023 through S-027 are
+confirmed and may enter just-in-time technical design when their declared
+dependencies are implemented.
 
 ## Change History
 
@@ -180,3 +180,9 @@ declared dependencies are implemented.
   navigation, and replay nondeterminism evidence. Independent non-Docker
   verification and final review passed; Docker lifecycle coverage remains
   unavailable due the known Compose startup limitation.
+- **2026-09-12:** S-022 completed the FastAPI-served workbench shell and
+  read-only runtime overview with bounded persisted Run/comparison projections,
+  distinct core/provider/Plugin readiness, responsive accessible drawer
+  navigation, and fixture-backed desktop/narrow visual verification. Delivery
+  commit `3bdfd41` was fast-forwarded into local main. Full Docker lifecycle
+  coverage remains environment-blocked by the known Compose startup stall.
