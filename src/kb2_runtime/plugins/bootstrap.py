@@ -29,6 +29,7 @@ from kb2_runtime.evidence.contracts import ContextAssemblerConfig
 from kb2_runtime.evidence.plugin import ContextAssemblerPlugin
 from kb2_runtime.generation import DeepSeekGenerator, DefaultGenerationConfig, FinalStatePlugin, GenerationConfig, HighPrecisionGenerationConfig, LocalVerifier, RepairConfig, VerificationConfig
 from kb2_runtime.generation.contracts import FinalStateConfig
+from kb2_runtime.evaluation.ingestion import IngestionMetricPlugin, METRICS
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -264,6 +265,24 @@ REPAIR_CONTROL_DESCRIPTOR = PluginDescriptor(
 )
 
 
+def _metric_descriptor(plugin_id: str, evidence: bool) -> PluginDescriptor:
+    observed = "chunk.set" if evidence else "canonical.document"
+    return PluginDescriptor(
+        plugin_id=plugin_id, kind="metric", implementation_digest="6" * 64,
+        runner=RunnerType.IN_PROCESS, configuration_schema=EmptyConfig.model_json_schema(),
+        input_schemas=(("golden.dataset.snapshot", "v1"), ("canonical.document", "v1"), (observed, "v1")),
+        output_schemas=(("metric.report", "v1"),),
+        input_ports=(
+            {"name": "snapshot", "artifact_type": "golden.dataset.snapshot", "schema_revision": "v1"},
+            {"name": "expected_document", "artifact_type": "canonical.document", "schema_revision": "v1"},
+            {"name": "observed_output", "artifact_type": observed, "schema_revision": "v1"},
+        ), output_ports=({"name": "report", "artifact_type": "metric.report", "schema_revision": "v1"},), timeout_seconds=10,
+    )
+
+
+INGESTION_METRIC_DESCRIPTORS = tuple(_metric_descriptor(metric_id, metric_id.endswith("evidence-preservation@1")) for metric_id in METRICS)
+
+
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
     runner_ready: Callable[[RunnerType], bool] = lambda _: True,
@@ -296,4 +315,6 @@ def bootstrap_registry(
     registry.register(VERIFIER_GROUNDED_DESCRIPTOR, LocalVerifier, VerificationConfig)
     registry.register(FINAL_STATE_DESCRIPTOR, FinalStatePlugin, FinalStateConfig)
     registry.register(REPAIR_CONTROL_DESCRIPTOR, FinalStatePlugin, RepairConfig)
+    for descriptor in INGESTION_METRIC_DESCRIPTORS:
+        registry.register(descriptor, lambda descriptor=descriptor: IngestionMetricPlugin(descriptor.plugin_id), EmptyConfig)
     return registry

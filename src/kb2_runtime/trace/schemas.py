@@ -21,6 +21,8 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("verification.result", "v1"),
     ("final.response", "v1"),
     ("golden.dataset.snapshot", "v1"),
+    ("metric.report", "v1"),
+    ("metric.aggregate", "v1"),
 })
 
 

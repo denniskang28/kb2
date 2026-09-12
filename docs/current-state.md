@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-016 Implemented; S-017 through S-027 Confirmed
-- **Active Story:** None; S-017 is next eligible
+- **Stories:** S-001 through S-017 Implemented; S-018 through S-027 Confirmed
+- **Active Story:** None; S-018 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -56,7 +56,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-017 next for ingestion evaluation. S-017 through S-027 are confirmed
+Deliver S-018 next for retrieval evaluation. S-018 through S-027 are confirmed
 and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
@@ -150,3 +150,9 @@ corresponding engine/control API contracts.
   fast-forwarded into local main. The Docker-backed catalog/restart scenario
   is collected but remains environment-blocked by the known Compose startup
   stall before containers are created.
+- **2026-09-12:** S-017 completed deterministic, independently registered
+  ingestion quality metrics with per-document Artifact evidence, explicit
+  missing-data states, taxonomy-aware slice aggregation, and traceable
+  aggregation lineage. Independent verification and final review passed; the
+  Docker lifecycle scenario remains environment-blocked by the known Compose
+  startup stall.
