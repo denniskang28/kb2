@@ -1,7 +1,7 @@
 # S-021: Evaluation Gates And Reproducible Comparison
 
 - **Parent Feature:** FEAT-004
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-010, S-015, S-016, S-017, S-018, S-019, S-020
@@ -82,3 +82,6 @@ calibration.
 
 - **2026-09-11:** Compiled from confirmed FEAT-004 sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-12:** Implemented evaluation manifests, layered reports, gates,
+  reproducible comparison, failed-case navigation, and replay evidence;
+  independent verification and final review passed.

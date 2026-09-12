@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-020 Implemented; S-021 through S-027 Confirmed
-- **Active Story:** None; S-021 is next eligible
+- **Stories:** S-001 through S-021 Implemented; S-022 through S-027 Confirmed
+- **Active Story:** None; S-022 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,10 +58,9 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-021 next for evaluation gates and comparison. S-021 through S-027 are confirmed
-and may enter just-in-time technical design when their declared
-dependencies are implemented. FEAT-005 implementation remains gated by the
-corresponding engine/control API contracts.
+Deliver S-022 next for the workbench shell and runtime overview. S-022 through
+S-027 are confirmed and may enter just-in-time technical design when their
+declared dependencies are implemented.
 
 ## Change History
 
@@ -176,3 +175,8 @@ corresponding engine/control API contracts.
   pinned per-slice calibration and drift eligibility, and scoped unavailable
   provider failures. Independent non-Docker verification and final review
   passed; delivery commit `aa42a69` was fast-forwarded into local main.
+- **2026-09-12:** S-021 completed pinned evaluation orchestration, layered
+  reports, slice-aware gates, reproducible Profile comparison, failed-case
+  navigation, and replay nondeterminism evidence. Independent non-Docker
+  verification and final review passed; Docker lifecycle coverage remains
+  unavailable due the known Compose startup limitation.

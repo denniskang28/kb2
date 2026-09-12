@@ -26,6 +26,15 @@ SUPPORTED_ARTIFACT_SCHEMAS: frozenset[tuple[str, str]] = frozenset({
     ("judge.calibration.report", "v1"),
     ("metric.report", "v1"),
     ("metric.aggregate", "v1"),
+    ("evaluation.input.catalog", "v1"),
+    ("evaluation.manifest", "v1"),
+    ("evaluation.gate.report", "v1"),
+    ("evaluation.operation.report", "v1"),
+    ("evaluation.report.catalog", "v1"),
+    ("evaluation.report", "v1"),
+    ("evaluation.comparison", "v1"),
+    ("evaluation.replay.observation", "v1"),
+    ("evaluation.navigation.index", "v1"),
 })
 
 
