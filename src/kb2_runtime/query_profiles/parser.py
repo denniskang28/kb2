@@ -71,7 +71,11 @@ def _unsafe(value: object, depth: int = 0) -> bool:
     if depth > 16:
         return True
     if isinstance(value, str):
-        return "${" in value or metadata_contains_sensitive_text(value)
+        # Registered provider identifiers are declarative allowlist labels, not
+        # provider payloads.  The generic trace sanitizer intentionally flags
+        # the provider name in all other metadata contexts.
+        provider_label = bool(re.fullmatch(r"(?:generator\.deepseek(?:-high-precision)?@[1-9][0-9]*|deepseek-v4-(?:flash|pro))", value))
+        return "${" in value or (not provider_label and metadata_contains_sensitive_text(value))
     if isinstance(value, float):
         return not math.isfinite(value)
     if isinstance(value, dict):

@@ -13,6 +13,7 @@ from kb2_runtime.plugins.registry import PluginRegistry
 from kb2_runtime.retrieval.contracts import HierarchyRetrieverConfig, RetrieverConfig
 from kb2_runtime.fusion.contracts import FusionConfig
 from kb2_runtime.evidence.contracts import ContextAssemblerConfig
+from kb2_runtime.generation.contracts import FinalStateConfig, GenerationConfig, RepairConfig, VerificationConfig
 from kb2_runtime.query_profiles import QueryArtifactBinding, QueryProfileCompiler, QueryProfileError, QueryProfileErrorCode, QueryProfileParser
 from kb2_runtime.trace.contracts import ArtifactReference
 
@@ -47,6 +48,14 @@ def registry() -> PluginRegistry:
     value.register(PluginDescriptor(plugin_id="fusion.reciprocal-rank@1", kind="fusion", implementation_digest="d" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=FusionConfig.model_json_schema(), input_schemas=(("retrieval.candidate.set", "v1"),), output_schemas=(("fusion.candidate.set", "v1"),), input_ports=({"name": "candidate_sets", "artifact_type": "retrieval.candidate.set", "schema_revision": "v1", "min_items": 1, "max_items": 8},), output_ports=({"name": "fused_candidates", "artifact_type": "fusion.candidate.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, FusionConfig)
     for plugin_id, candidate_type in (("context.from-retrieval@1", "retrieval.candidate.set"), ("context.from-fusion@1", "fusion.candidate.set"), ("context.from-rerank@1", "rerank.candidate.set")):
         value.register(PluginDescriptor(plugin_id=plugin_id, kind="context", implementation_digest="e" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=ContextAssemblerConfig.model_json_schema(), input_schemas=((candidate_type, "v1"), ("search.index.result", "v1")), output_schemas=(("evidence.set", "v1"),), input_ports=({"name": "candidates", "artifact_type": candidate_type, "schema_revision": "v1"}, {"name": "index", "artifact_type": "search.index.result", "schema_revision": "v1"}), output_ports=({"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"},), timeout_seconds=1), lambda: None, ContextAssemblerConfig)
+    for plugin_id, config, inputs, outputs, names in (
+        ("generator.deepseek@1", GenerationConfig, (("opaque.bytes", "v1"), ("evidence.set", "v1")), (("generated.answer", "v1"),), (("question", "opaque.bytes", "v1"), ("evidence", "evidence.set", "v1"), ("answer", "generated.answer", "v1"))),
+        ("generator.deepseek-high-precision@1", GenerationConfig, (("opaque.bytes", "v1"), ("evidence.set", "v1")), (("generated.answer", "v1"),), (("question", "opaque.bytes", "v1"), ("evidence", "evidence.set", "v1"), ("answer", "generated.answer", "v1"))),
+        ("verifier.grounded@1", VerificationConfig, (("generated.answer", "v1"), ("evidence.set", "v1")), (("verification.result", "v1"),), (("answer", "generated.answer", "v1"), ("evidence", "evidence.set", "v1"), ("verification", "verification.result", "v1"))),
+        ("query.repair-control@1", RepairConfig, (("evidence.set", "v1"), ("generated.answer", "v1"), ("verification.result", "v1")), (("generated.answer", "v1"), ("verification.result", "v1")), (("evidence", "evidence.set", "v1"), ("answer", "generated.answer", "v1"), ("verification", "verification.result", "v1"), ("answer", "generated.answer", "v1"), ("verification", "verification.result", "v1"))),
+        ("query.final-state@1", FinalStateConfig, (("evidence.set", "v1"), ("verification.result", "v1"), ("generated.answer", "v1")), (("final.response", "v1"),), (("evidence", "evidence.set", "v1"), ("verification", "verification.result", "v1"), ("answer", "generated.answer", "v1"), ("response", "final.response", "v1"))),
+    ):
+        value.register(PluginDescriptor(plugin_id=plugin_id, kind="query", implementation_digest="f" * 64, runner=RunnerType.IN_PROCESS, configuration_schema=config.model_json_schema(), input_schemas=inputs, output_schemas=outputs, input_ports=tuple({"name": name, "artifact_type": typ, "schema_revision": rev} for name, typ, rev in names[:len(inputs)]), output_ports=tuple({"name": name, "artifact_type": typ, "schema_revision": rev} for name, typ, rev in names[len(inputs):]), timeout_seconds=1), lambda: None, config)
     return value
 
 
@@ -167,6 +176,18 @@ def test_repair_inputs_cannot_reintroduce_question_or_retrieval_data() -> None:
 
     assert raised.value.code is QueryProfileErrorCode.PORT_UNBOUND
     assert raised.value.location.endswith("/inputs/question")
+
+
+def test_compiler_rejects_final_answer_and_verification_from_different_attempt_namespaces() -> None:
+    value = json.loads(Path("tests/fixtures/query_profiles/text-hybrid.json").read_text())
+    final = next(stage for stage in value["profiles"][0]["stages"] if stage["kind"] == "final_state")
+    final["inputs"]["answer"] = "repair.answer"
+    final["inputs"]["verification"] = "verify.verification"
+
+    with pytest.raises(QueryProfileError) as raised:
+        compile_source(json.dumps(value))
+
+    assert raised.value.code is QueryProfileErrorCode.FINAL_VALIDATION_MISSING
 
 
 def test_compilation_rejects_a_repair_stage_bound_to_raw_question_input() -> None:

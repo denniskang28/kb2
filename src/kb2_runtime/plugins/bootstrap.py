@@ -27,6 +27,8 @@ from kb2_runtime.reranking.contracts import RerankerConfig
 from kb2_runtime.reranking.plugin import RerankingPlugin
 from kb2_runtime.evidence.contracts import ContextAssemblerConfig
 from kb2_runtime.evidence.plugin import ContextAssemblerPlugin
+from kb2_runtime.generation import DeepSeekGenerator, DefaultGenerationConfig, FinalStatePlugin, GenerationConfig, HighPrecisionGenerationConfig, LocalVerifier, RepairConfig, VerificationConfig
+from kb2_runtime.generation.contracts import FinalStateConfig
 
 
 class SyntheticTransformConfig(BaseModel):
@@ -225,6 +227,42 @@ CONTEXT_FROM_RETRIEVAL_DESCRIPTOR = _context_descriptor("context.from-retrieval@
 CONTEXT_FROM_FUSION_DESCRIPTOR = _context_descriptor("context.from-fusion@1", "fusion.candidate.set", "e" * 64)
 CONTEXT_FROM_RERANK_DESCRIPTOR = _context_descriptor("context.from-rerank@1", "rerank.candidate.set", "f" * 64)
 
+GENERATOR_DEEPSEEK_DESCRIPTOR = PluginDescriptor(
+    plugin_id="generator.deepseek@1", kind="generate", implementation_digest="1" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=DefaultGenerationConfig.model_json_schema(),
+    input_schemas=(("opaque.bytes", "v1"), ("evidence.set", "v1")), output_schemas=(("generated.answer", "v1"),),
+    input_ports=({"name": "question", "artifact_type": "opaque.bytes", "schema_revision": "v1"}, {"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"}),
+    output_ports=({"name": "answer", "artifact_type": "generated.answer", "schema_revision": "v1"},),
+    quality_signal_names=("generation_validation",), capabilities=("generation.default",), timeout_seconds=30,
+)
+GENERATOR_DEEPSEEK_HIGH_PRECISION_DESCRIPTOR = GENERATOR_DEEPSEEK_DESCRIPTOR.model_copy(update={
+    "plugin_id": "generator.deepseek-high-precision@1", "implementation_digest": "2" * 64, "capabilities": ("generation.high_precision",), "configuration_schema": HighPrecisionGenerationConfig.model_json_schema(),
+})
+VERIFIER_GROUNDED_DESCRIPTOR = PluginDescriptor(
+    plugin_id="verifier.grounded@1", kind="verify", implementation_digest="3" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=VerificationConfig.model_json_schema(),
+    input_schemas=(("generated.answer", "v1"), ("evidence.set", "v1")), output_schemas=(("verification.result", "v1"),),
+    input_ports=({"name": "answer", "artifact_type": "generated.answer", "schema_revision": "v1"}, {"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"}),
+    output_ports=({"name": "verification", "artifact_type": "verification.result", "schema_revision": "v1"},),
+    quality_signal_names=("verification_validation",), timeout_seconds=10,
+)
+FINAL_STATE_DESCRIPTOR = PluginDescriptor(
+    plugin_id="query.final-state@1", kind="final_state", implementation_digest="4" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=FinalStateConfig.model_json_schema(),
+    input_schemas=(("evidence.set", "v1"), ("verification.result", "v1"), ("generated.answer", "v1")), output_schemas=(("final.response", "v1"),),
+    input_ports=({"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"}, {"name": "verification", "artifact_type": "verification.result", "schema_revision": "v1", "min_items": 0}, {"name": "answer", "artifact_type": "generated.answer", "schema_revision": "v1", "min_items": 0}),
+    output_ports=({"name": "response", "artifact_type": "final.response", "schema_revision": "v1"},),
+    quality_signal_names=("final_state_validation",), timeout_seconds=10,
+)
+REPAIR_CONTROL_DESCRIPTOR = PluginDescriptor(
+    plugin_id="query.repair-control@1", kind="repair", implementation_digest="5" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=RepairConfig.model_json_schema(),
+    input_schemas=(("evidence.set", "v1"), ("generated.answer", "v1"), ("verification.result", "v1")), output_schemas=(("generated.answer", "v1"), ("verification.result", "v1")),
+    input_ports=({"name": "evidence", "artifact_type": "evidence.set", "schema_revision": "v1"}, {"name": "answer", "artifact_type": "generated.answer", "schema_revision": "v1"}, {"name": "verification", "artifact_type": "verification.result", "schema_revision": "v1"}),
+    output_ports=({"name": "answer", "artifact_type": "generated.answer", "schema_revision": "v1"}, {"name": "verification", "artifact_type": "verification.result", "schema_revision": "v1"}),
+    quality_signal_names=("repair_validation",), timeout_seconds=10,
+)
+
 
 def bootstrap_registry(
     capability_check: Callable[[str], bool] = lambda _: True,
@@ -253,4 +291,9 @@ def bootstrap_registry(
     registry.register(CONTEXT_FROM_RETRIEVAL_DESCRIPTOR, lambda: ContextAssemblerPlugin("retrieval.candidate.set"), ContextAssemblerConfig)
     registry.register(CONTEXT_FROM_FUSION_DESCRIPTOR, lambda: ContextAssemblerPlugin("fusion.candidate.set"), ContextAssemblerConfig)
     registry.register(CONTEXT_FROM_RERANK_DESCRIPTOR, lambda: ContextAssemblerPlugin("rerank.candidate.set"), ContextAssemblerConfig)
+    registry.register(GENERATOR_DEEPSEEK_DESCRIPTOR, DeepSeekGenerator, DefaultGenerationConfig)
+    registry.register(GENERATOR_DEEPSEEK_HIGH_PRECISION_DESCRIPTOR, DeepSeekGenerator, HighPrecisionGenerationConfig)
+    registry.register(VERIFIER_GROUNDED_DESCRIPTOR, LocalVerifier, VerificationConfig)
+    registry.register(FINAL_STATE_DESCRIPTOR, FinalStatePlugin, FinalStateConfig)
+    registry.register(REPAIR_CONTROL_DESCRIPTOR, FinalStatePlugin, RepairConfig)
     return registry

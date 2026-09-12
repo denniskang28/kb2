@@ -145,6 +145,15 @@ class QueryProfileCompiler:
         if "evidence" not in {item["name"] for item in context["outputs"]}:
             raise QueryProfileError(QueryProfileErrorCode.FINAL_VALIDATION_MISSING, "/stages")
         final = next(item for item in stages if item["kind"] == "final_state")
+        final_sources = {item["name"]: item["source"] for item in final["inputs"]}
+        # Finalization may only pair answer/verification outputs from the same
+        # generation attempt namespace (initial or bounded repair).
+        answer_source = final_sources.get("answer")
+        verification_source = final_sources.get("verification")
+        if ((answer_source is not None or verification_source is not None)
+                and (not isinstance(answer_source, str) or not isinstance(verification_source, str)
+                     or answer_source.rsplit(".", 1)[0] != verification_source.rsplit(".", 1)[0])):
+            raise QueryProfileError(QueryProfileErrorCode.FINAL_VALIDATION_MISSING, "/stages")
         upstream = {
             f"{stage['stage_id']}.{output['name']}": {source for item in stage["inputs"] for source in (item["source"] if isinstance(item["source"], list) else [item["source"]])}
             for stage in stages for output in stage["outputs"]
