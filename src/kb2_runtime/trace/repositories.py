@@ -286,6 +286,42 @@ class TraceRepository:
             ingestion_evidence=IngestionEvidence(**evidence["resolution_json"]) if evidence else None,
         )
 
+    async def list_workbench_runs(self, limit: int = 8) -> tuple[dict[str, Any], ...]:
+        """Bounded chronological lifecycle projection for the operator console."""
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                """SELECT r.id, r.engine_kind, r.state, r.terminal_state, r.created_at,
+                    r.started_at, r.ended_at, p.plan_digest, failure.safe_error
+                FROM runs r JOIN execution_plan_snapshots p ON p.id=r.plan_snapshot_id
+                LEFT JOIN LATERAL (
+                    SELECT safe_error FROM stage_attempts s
+                    WHERE s.run_id=r.id AND s.state='FAILED' AND s.safe_error IS NOT NULL
+                    ORDER BY s.ended_at DESC NULLS LAST, s.id DESC LIMIT 1
+                ) failure ON TRUE
+                ORDER BY r.created_at DESC, r.id DESC LIMIT %s""",
+                (min(max(limit, 1), 8),),
+            )
+            return tuple(await cursor.fetchall())
+
+    async def count_active_runs(self) -> int:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute("SELECT COUNT(*) AS count FROM runs WHERE state IN ('PENDING', 'RUNNING')")
+            return int((await cursor.fetchone())["count"])
+
+    async def list_workbench_comparisons(self, limit: int = 4) -> tuple[dict[str, Any], ...]:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                """SELECT a.id, a.producing_run_id, a.created_at, a.content_digest, a.storage_locator
+                FROM artifacts a JOIN runs r ON r.id=a.producing_run_id
+                JOIN stage_attempts s ON s.id=a.producing_stage_attempt_id
+                WHERE a.artifact_type='evaluation.comparison' AND a.schema_revision='v1'
+                  AND r.state='SUCCEEDED' AND r.terminal_state='SUCCEEDED'
+                  AND s.state='SUCCEEDED' AND s.result='SUCCEEDED'
+                ORDER BY a.created_at DESC, a.id DESC LIMIT %s""",
+                (min(max(limit, 1), 4),),
+            )
+            return tuple(await cursor.fetchall())
+
     async def _metrics(self, cursor: Any, table: str, owner: str, identifier: UUID, metrics: Sequence[Metric]) -> None:
         for metric in metrics:
             await cursor.execute(f"INSERT INTO {table} ({owner}, name, value) VALUES (%s, %s, %s)", (identifier, metric.name, metric.value))
