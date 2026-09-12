@@ -10,7 +10,7 @@ only a stopped, accessible task whose pause is safe under this policy.
 
 ## Preconditions
 
-1. Operate only in `/Users/denniskang/work/kb`.
+1. Operate only in `/Users/denniskang/work/kb2`.
 2. Read `AGENTS.md` and `docs/current-state.md` from a clean local `main`.
 3. Identify exactly one relevant Story pipeline task from task metadata and its
    exact initial prompt `story-pipeline-agent S-###`. Treat titles and branch
