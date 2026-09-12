@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-014 Implemented; S-015 through S-027 Confirmed
-- **Active Story:** None; S-015 is next eligible
+- **Stories:** S-001 through S-015 Implemented; S-016 through S-027 Confirmed
+- **Active Story:** None; S-016 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -22,7 +22,8 @@
   embedding and local hybrid index Artifacts with failure recovery,
   deterministic candidate fusion and optional reranking with preserved
   attribution and safe failures, deterministic citation-ready EvidenceSet/v1
-  context assembly with bounded excerpts, traceable source locators, and safe
+  context assembly with bounded excerpts, traceable source locators, grounded
+  external generation with validated final states and bounded repair, and safe
   no-publication failures, a
   Docker-backed Artifact trace persistence/restart regression, and an isolated
   lifecycle regression
@@ -55,8 +56,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-015 next for grounded generation and final states. S-015 through S-027 are
-confirmed and may enter just-in-time technical design when their declared
+Deliver S-016 next for answer evaluation. S-016 through S-027 are confirmed
+and may enter just-in-time technical design when their declared
 dependencies are implemented. FEAT-005 implementation remains gated by the
 corresponding engine/control API contracts.
 
@@ -135,3 +136,10 @@ corresponding engine/control API contracts.
   adapters, and safe no-publication failures; independent verification and
   final review passed; delivery commit `3c2bd16` was fast-forwarded into local
   main.
+- **2026-09-12:** S-015 completed grounded DeepSeek generation, deterministic
+  verification/final states, bounded same-Evidence repair, capability-pinned
+  model configuration, and lineage-safe finalization. Independent verification
+  and final review passed; delivery commit `8461e00` was fast-forwarded into
+  local main and delivery-close reconciliation commit `86cef99` recorded the
+  run evidence. Docker lifecycle tests remain environment-blocked by the known
+  Compose startup stall.
