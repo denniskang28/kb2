@@ -1,7 +1,7 @@
 # S-026: Evaluation Dataset And Run UI
 
 - **Parent Feature:** FEAT-005
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P1
 - **Dependencies:** S-016, S-017, S-018, S-019, S-020, S-021, S-022, S-024

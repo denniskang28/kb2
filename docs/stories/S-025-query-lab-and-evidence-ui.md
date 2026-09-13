@@ -1,7 +1,7 @@
 # S-025: Query Lab And Evidence UI
 
 - **Parent Feature:** FEAT-005
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P1
 - **Dependencies:** S-015, S-022, S-024

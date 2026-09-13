@@ -1,7 +1,7 @@
 # S-015: Grounded Generation And Final-State Validation
 
 - **Parent Feature:** FEAT-003
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-001, S-003, S-011, S-014

@@ -1,7 +1,7 @@
 # S-024: Document, Ingestion Run, And Artifact UI
 
 - **Parent Feature:** FEAT-005
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P1
 - **Dependencies:** S-010, S-022

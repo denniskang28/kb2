@@ -1,7 +1,7 @@
 # S-006: Representative Parser And OCR Plugins
 
 - **Parent Feature:** FEAT-002
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-003, S-005

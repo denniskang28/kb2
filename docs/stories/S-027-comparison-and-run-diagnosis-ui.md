@@ -1,7 +1,7 @@
 # S-027: Comparison And Cross-Run Diagnosis UI
 
 - **Parent Feature:** FEAT-005
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P1
 - **Dependencies:** S-021, S-022, S-024, S-025, S-026

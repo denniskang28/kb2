@@ -1,7 +1,7 @@
 # S-005: Canonical Document And Normalization Boundary
 
 - **Parent Feature:** FEAT-002
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-002, S-003

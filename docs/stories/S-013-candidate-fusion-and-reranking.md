@@ -1,7 +1,7 @@
 # S-013: Candidate Fusion And Reranking
 
 - **Parent Feature:** FEAT-003
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P0
 - **Dependencies:** S-012
