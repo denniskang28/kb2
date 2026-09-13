@@ -5,6 +5,7 @@ from time import monotonic
 from uuid import uuid4
 
 from kb2_runtime.generation.contracts import FinalResponse
+from kb2_runtime.retrieval.contracts import IndexArtifactBinding, RetrievalCandidate, RetrievalCandidateSet
 from kb2_runtime.query_engine import QueryEngine
 from kb2_runtime.trace.contracts import ArtifactManifest
 from kb2_runtime.workbench.query import QueryWorkbenchService, _Preflight
@@ -27,10 +28,26 @@ def test_answer_projection_requires_evidence_bound_citations() -> None:
 
 
 def test_candidate_projection_does_not_merge_stage_sets() -> None:
-    first = QueryWorkbenchService._candidate_rows({"candidates": [{"chunk_id": "one"}]})
-    second = QueryWorkbenchService._candidate_rows({"candidates": [{"chunk_id": "two"}]})
-    assert first == [{"chunk_id": "one"}]
-    assert second == [{"chunk_id": "two"}]
+    index = IndexArtifactBinding(id=uuid4(), content_digest="a" * 64)
+    def candidate_set(suffix: str) -> RetrievalCandidateSet:
+        candidate = RetrievalCandidate(
+            candidate_id="rcd_" + suffix * 32, document_id="doc_" + "1" * 32,
+            chunk_id="chk_" + suffix * 32, element_ids=("elm_" + suffix * 32,),
+            locators=({"kind":"pdf","page_number":1,"x0":0,"y0":0,"x1":1,"y1":1},),
+            rank=1, safe_score=.8, score_kind="fixture.normalized",
+        )
+        return RetrievalCandidateSet(
+            candidate_set_id="rcs_" + suffix * 32, index=index, index_id="idx_" + "1" * 32,
+            document_id=candidate.document_id, retriever_plugin_id="retriever.fixture@1",
+            implementation_digest="b" * 64, contributor_id=f"fixture.{suffix}",
+            configuration_digest="c" * 64, candidates=(candidate,),
+        )
+    first, second = map(QueryWorkbenchService._candidate_rows, (candidate_set("1"), candidate_set("2")))
+    assert first[0]["chunkId"] == "chk_" + "1" * 32
+    assert second[0]["chunkId"] == "chk_" + "2" * 32
+    assert first[0]["locators"][0]["kind"] == "pdf"
+    assert first[0]["contributions"] == [{"contributorId":"fixture.1","originalRank":1,"safeScore":.8,"scoreKind":"fixture.normalized"}]
+    assert QueryWorkbenchService._candidate_rows({"candidates": [{"chunk_id": "untyped"}]}) == []
 
 
 def test_evidence_source_resolution_walks_index_lineage_to_locator_owner() -> None:
@@ -55,8 +72,16 @@ def test_evidence_source_resolution_walks_index_lineage_to_locator_owner() -> No
 
 def test_query_preflight_appends_plan_preview_before_submit_controls() -> None:
     source = Path("src/kb2_runtime/workbench/static/workbench.js").read_text()
-    assert "preview=el('section','',{class:'query-preflight'});preview.append(el('h2','已解析计划')" in source
-    assert "surface.replaceChildren(preview)" in source
+    assert "const plan=el('section','',{class:'query-preflight'})" in source
+    assert "plan.append(el('h2','已解析计划')" in source
+    assert "plan.append(submit);preview.replaceChildren(plan)" in source
+
+
+def test_evidence_contributor_projection_keeps_score_and_explicit_unavailable_fallbacks() -> None:
+    source = Path("src/kb2_runtime/workbench/static/workbench.js").read_text()
+    assert "c.contributor_id??c.contributorId??'不可用'" in source
+    assert "c.safe_score??c.safeScore??'不可用'" in source
+    assert "贡献者 / safe_score" in source
 
 
 def test_non_answered_final_states_never_project_answer_or_citations() -> None:

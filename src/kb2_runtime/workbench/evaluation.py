@@ -8,6 +8,7 @@ from uuid import UUID
 from kb2_runtime.evaluation.datasets.contracts import DatasetContent, GoldenDataset
 from kb2_runtime.evaluation.datasets.service import DatasetService, DatasetValidationError
 from kb2_runtime.evaluation.ingestion.contracts import MetricReport
+from kb2_runtime.evaluation.runs.contracts import EvaluationManifest, LayeredReport, NavigationIndex
 
 
 class EvaluationWorkbenchService:
@@ -69,6 +70,13 @@ class EvaluationWorkbenchService:
                 parsed = json.loads(raw)
                 if not isinstance(parsed, dict):
                     raise ValueError
+                validator = {
+                    "evaluation.manifest": EvaluationManifest,
+                    "evaluation.report": LayeredReport,
+                    "evaluation.navigation.index": NavigationIndex,
+                }.get(artifact.artifact_type)
+                if validator is not None:
+                    parsed = validator.model_validate(parsed).model_dump(mode="json", exclude_none=True)
             except Exception:
                 values["unavailable"].append({"artifactId": str(artifact.id), "artifactType": artifact.artifact_type, "code": "EVALUATION_ARTIFACT_UNAVAILABLE"})
                 continue
@@ -96,9 +104,28 @@ class EvaluationWorkbenchService:
                 if hashlib.sha256(payload).hexdigest() != manifest.content_digest:
                     raise ValueError
                 metric = MetricReport.model_validate_json(payload)
-                rows.append({"artifactId": str(identifier), "metricId": metric.metric_id, "owner": metric.owner,
-                             "status": metric.status, "value": metric.value, "labelledCount": metric.labelled_count,
-                             "matchedCount": metric.matched_count, "slices": metric.slices})
+                rows.append({
+                    "artifactId": str(identifier),
+                    "metricId": metric.metric_id,
+                    "owner": metric.owner,
+                    "method": metric.method,
+                    "direction": metric.direction,
+                    "stageKind": metric.stage_kind,
+                    "status": metric.status,
+                    "value": metric.value,
+                    "labelledCount": metric.labelled_count,
+                    "matchedCount": metric.matched_count,
+                    "sampleCount": metric.sample_count,
+                    "caseId": metric.case_id,
+                    "eligibility": metric.eligibility,
+                    "calibrationReportArtifactId": str(metric.calibration_report_artifact_id) if metric.calibration_report_artifact_id else None,
+                    "measuredArtifactId": str(metric.measured_artifact_id) if metric.measured_artifact_id else None,
+                    "labelEvidenceArtifactId": str(metric.label_evidence_artifact_id) if metric.label_evidence_artifact_id else None,
+                    "answerArtifactId": str(metric.answer_artifact_id) if metric.answer_artifact_id else None,
+                    "verificationArtifactId": str(metric.verification_artifact_id) if metric.verification_artifact_id else None,
+                    "finalResponseArtifactId": str(metric.final_response_artifact_id) if metric.final_response_artifact_id else None,
+                    "slices": metric.slices,
+                })
             except Exception:
                 rows.append({"artifactId": str(raw_id), "status": "UNAVAILABLE", "code": "METRIC_ARTIFACT_UNAVAILABLE"})
         return rows

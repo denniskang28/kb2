@@ -9,10 +9,13 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from kb2_runtime.evidence.contracts import EvidenceSet
+from kb2_runtime.fusion.contracts import FusionCandidateSet
 from kb2_runtime.generation.contracts import FinalResponse, VerificationResult
 from kb2_runtime.plugins.registry import PluginRegistry
 from kb2_runtime.query_engine import QueryEngine
 from kb2_runtime.query_profiles import QueryArtifactBinding, QueryProfileCompiler, QueryProfileParser
+from kb2_runtime.reranking.contracts import RerankedCandidateSet
+from kb2_runtime.retrieval.contracts import RetrievalCandidateSet
 from kb2_runtime.trace.contracts import EngineKind
 from kb2_runtime.trace.errors import TraceError
 from kb2_runtime.trace.service import ArtifactService, RunService
@@ -118,7 +121,7 @@ class QueryWorkbenchService:
                 parsed = await self._read(output.id, output.artifact_type, output.schema_revision)
                 if output.artifact_type in {"retrieval.candidate.set", "fusion.candidate.set", "rerank.candidate.set"}:
                     candidates.append({"stageId": row.stage_key, "artifact": self._artifact(output), "available": parsed is not None,
-                                       "rows": self._candidate_rows(parsed) if isinstance(parsed, dict) else []})
+                                       "rows": self._candidate_rows(parsed)})
                 elif output.artifact_type == "evidence.set" and isinstance(parsed, EvidenceSet):
                     evidence_artifact_ids.add(str(output.id))
                     for item in parsed.items:
@@ -164,7 +167,12 @@ class QueryWorkbenchService:
             if (kind, revision) == ("evidence.set", "v1"): return EvidenceSet.model_validate_json(raw)
             if (kind, revision) == ("verification.result", "v1"): return VerificationResult.model_validate_json(raw)
             if (kind, revision) == ("final.response", "v1"): return FinalResponse.model_validate_json(raw)
-            return json.loads(raw) if kind.endswith("candidate.set") else None
+            candidate_contract = {
+                "retrieval.candidate.set": RetrievalCandidateSet,
+                "fusion.candidate.set": FusionCandidateSet,
+                "rerank.candidate.set": RerankedCandidateSet,
+            }.get(kind)
+            return candidate_contract.model_validate_json(raw) if candidate_contract else None
         except (TraceError, ValueError, json.JSONDecodeError):
             return None
 
@@ -184,9 +192,30 @@ class QueryWorkbenchService:
                 "contentDigest": item.content_digest, "byteSize": item.byte_size, "summary": item.summary}
 
     @staticmethod
-    def _candidate_rows(value: dict[str, Any]) -> list[dict[str, Any]]:
-        rows = value.get("candidates", value.get("items", []))
-        return rows[:100] if isinstance(rows, list) else []
+    def _candidate_rows(value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, RetrievalCandidateSet):
+            return [{
+                "rank": item.rank, "chunkId": item.chunk_id, "safeScore": item.safe_score,
+                "scoreKind": item.score_kind,
+                "locators": [locator.model_dump(mode="json") for locator in item.locators],
+                "contributions": [{"contributorId": value.contributor_id, "originalRank": item.rank,
+                                   "safeScore": item.safe_score, "scoreKind": item.score_kind}],
+            } for item in value.candidates]
+        if isinstance(value, (FusionCandidateSet, RerankedCandidateSet)):
+            decisions = {item.chunk_id: item for item in getattr(value, "decisions", ())}
+            return [{
+                "rank": item.rank, "chunkId": item.chunk_id, "safeScore": item.safe_score,
+                "locators": [locator.model_dump(mode="json")
+                             for contribution in item.contributions for locator in contribution.candidate.locators],
+                "contributions": [{
+                    "contributorId": contribution.contributor_id,
+                    "originalRank": contribution.original_rank,
+                    "safeScore": contribution.candidate.safe_score,
+                    "scoreKind": contribution.candidate.score_kind,
+                } for contribution in item.contributions],
+                "decision": decisions[item.chunk_id].model_dump(mode="json") if item.chunk_id in decisions else None,
+            } for item in value.candidates]
+        return []
 
     async def _source_for_evidence(self, index_id: UUID, locators: list[dict[str, Any]]) -> str | None:
         """Find the lineage-owned inspector Artifact that actually contains a locator.

@@ -1,0 +1,18 @@
+{
+  "story": "S-025",
+  "uiAnchors": ["UI-005", "UI-008", "UI-013"],
+  "prototypeSha256": "a07df450d231d777cb814d3a6695d67553748beda5491ce12e529ec2dca32ea7",
+  "fixtureRevision": "s025-query-parity-v2",
+  "captureConditions": {"browser":{"product":"Chrome/152.0.7977.83","protocolVersion":"1.3","userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36","javascriptRuntime":"V8 15.2.124.21","renderingEngine":"537.36 (@79460ebecaa5625e57a5fb679a735659e73dc687)","headlessMode":"new","gpu":"disabled"},"device":{"deviceScaleFactor":1,"mobile":false},"media":{"type":"screen","colorScheme":"light","forcedColors":"none","reducedMotion":"no-preference"},"locale":{"browser":"zh-CN","document":"zh-CN"},"readiness":{"document":"complete","fontsPromise":"document.fonts.ready","archivoWeights":[400,600,800],"archivoFaceStatus":"loaded","assetResourceTimingRequired":true},"stabilization":{"animations":"none","transitions":"none","caretColor":"transparent"},"screenshotFormat":"png"},
+  "comparison": {"colorSpace": "RGBA", "channelTolerance": 12, "maximumDifferingPixelRatio": 0.005, "baselineUpdatesAutomatic": false},
+  "baselines": [
+    {"file":"query-answered-1440.png","scenario":"answered","viewport":[1440,900],"sha256":"b4a481accdfad9b5487b5e3f5b5e6768e19808ea66969f93a43d2ca8dfbc804f"},
+    {"file":"query-answered-644.png","scenario":"answered","viewport":[644,900],"sha256":"bed4ffa509fe31f6e184ffc70ad9748c0fd8020517229c5be77380c548ef3c19"},
+    {"file":"query-clarification-required-1440.png","scenario":"clarification-required","viewport":[1440,900],"sha256":"8b2338adfe02ab775a316c995f350ac25adc7769ff12d0f67e24ea0474e9b120"},
+    {"file":"query-clarification-required-644.png","scenario":"clarification-required","viewport":[644,900],"sha256":"1b44de237567437d39310dc1382ed36f01c935daecf986910f415f65686cf109"},
+    {"file":"query-abstained-1440.png","scenario":"abstained","viewport":[1440,900],"sha256":"26b506e2eb9951ebf1acc5f611a8f830e7ff2c736fc6e7488735f701be3f10d0"},
+    {"file":"query-abstained-644.png","scenario":"abstained","viewport":[644,900],"sha256":"3f40ae55258b4d67f636339ac649cc4c628b4a00c28ec9e2dd626fe956463da5"},
+    {"file":"query-failed-1440.png","scenario":"failed","viewport":[1440,900],"sha256":"024d504095bdc18dbc977ca7340ce8dca76b4d50105b839eef298e67bd3c9e89"},
+    {"file":"query-failed-644.png","scenario":"failed","viewport":[644,900],"sha256":"d0a52a28907bf30fe7d0001be504082fdb2b88aae5071503d8134f269e91b1e7"}
+  ]
+}

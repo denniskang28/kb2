@@ -1,6 +1,6 @@
 # Current State
 
-- **As Of:** 2026-09-13
+- **As Of:** 2026-09-14
 - **Harness State:** Lite Harness Initialized
 - **Product Requirements:** Approved - 2026-09-10 (17 confirmed REQs)
 - **Core Design:** Approved - 2026-09-10 (16 confirmed DES records)
@@ -227,3 +227,13 @@ before starting another delivery run.
   rotating preflight tokens, stale-submit prevention, structured lineage,
   deterministic desktop/narrow baselines, independent acceptance, and final
   review passed.
+- **2026-09-14:** S-025 UI-reference parity repair aligned Query Lab controls,
+  production-typed candidate and Context/Evidence diagnosis, authoritative final
+  states, synchronized source inspection, async authority, and eight responsive
+  visual baselines with UI-005, UI-008, and UI-013. Independent acceptance and
+  final review passed.
+- **2026-09-14:** S-026 UI-reference parity repair aligned Evaluation Dataset
+  editing and typed Evaluation Run manifest, layered metrics, gates,
+  applicability, Judge calibration, and failed-case evidence with UI-009,
+  UI-010, and UI-013. Ten responsive visual baselines, independent acceptance,
+  and final review passed.

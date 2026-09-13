@@ -6,6 +6,18 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from kb2_runtime.evaluation.datasets.contracts import DatasetContent, GoldenDataset
+from kb2_runtime.evaluation.runs.contracts import (
+    ArtifactBinding,
+    EvaluationManifest,
+    EvaluationSubject,
+    GateResult,
+    LayeredReport,
+    NavigationIndex,
+    OperationReport,
+    PlanIdentity,
+    RuntimeSummary,
+    digest,
+)
 from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService
 
 
@@ -44,10 +56,32 @@ def test_dataset_catalog_and_edit_are_engine_owned() -> None:
 
 def test_run_projection_keeps_manifest_report_navigation_and_safe_unavailable_artifacts() -> None:
     run_id, manifest_id, report_id, navigation_id, broken_id = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
+    case_id, metric_id = "qcase_0123456789abcdef", "metric.answer.fixture@1"
+    plan = {"plugin": "fixture.plugin@1"}
+    binding = ArtifactBinding(role="evidence", artifact_id=uuid4(), artifact_type="evidence.set", content_digest="c" * 64, case_id=case_id)
+    subject = lambda name: EvaluationSubject(
+        subject=name, ingestion_plan=plan, ingestion_plan_digest=digest(plan), query_plan=plan,
+        query_plan_digest=digest(plan), bindings=(binding,),
+        declared_identities=(PlanIdentity(plugin_id="fixture.plugin@1", implementation_digest="d" * 64),),
+    )
+    manifest = EvaluationManifest(
+        dataset_snapshot_id=uuid4(), dataset_snapshot_digest="a" * 64, taxonomy_digest="b" * 64,
+        input_catalog_digest="e" * 64, case_ids=(case_id,), subjects=(subject("baseline"), subject("candidate")),
+        metric_ids=(metric_id,), runtime=RuntimeSummary(runtime_digest="1" * 64, package_digest="2" * 64,
+        implementation_digest="3" * 64, os_family="linux", architecture="x86_64", resource_sampler_version="fixture.v1"),
+    )
+    metric_artifact_id = uuid4()
+    report = LayeredReport(
+        manifest_artifact_id=manifest_id, manifest_digest="f" * 64, report_ids=(metric_artifact_id,),
+        layers={name: ((metric_artifact_id,) if name == "answer" else ()) for name in ("ingestion", "retrieval", "answer", "citation", "decision", "judge", "latency", "resources")},
+        gate_results=(GateResult(gate_id="gate.answer", state="FAIL", reason="fixture", selected_report_ids=(metric_artifact_id,), sample_count=1),),
+        operation=OperationReport(elapsed_ms=1, availability="AVAILABLE"),
+    )
+    navigation = NavigationIndex(evaluation_report_id=report_id, evaluation_run_id=run_id)
     payloads = {
-        manifest_id: {"schema_version": "EvaluationManifest/v1", "dataset_snapshot_digest": "a" * 64},
-        report_id: {"schema_version": "EvaluationReport/v1", "layers": {"ingestion": ["metric"]}, "gate_results": [{"state": "FAILED"}]},
-        navigation_id: {"schema_version": "EvaluationNavigationIndex/v1", "links": [{"case_id": "qcase_0123456789abcdef", "source_artifact_id": str(uuid4())}]},
+        manifest_id: manifest.model_dump(mode="json", exclude_none=True),
+        report_id: report.model_dump(mode="json", exclude_none=True),
+        navigation_id: navigation.model_dump(mode="json", exclude_none=True),
     }
     class Traces:
         async def list_evaluation_workbench_runs(self):
@@ -64,8 +98,8 @@ def test_run_projection_keeps_manifest_report_navigation_and_safe_unavailable_ar
     async def exercise():
         result = await EvaluationWorkbenchService(object(), Traces(), Artifacts()).run(run_id)
         assert result and result["manifest"]["value"]["schema_version"] == "EvaluationManifest/v1"
-        assert result["report"]["value"]["gate_results"][0]["state"] == "FAILED"
-        assert result["navigation"]["value"]["links"][0]["case_id"] == "qcase_0123456789abcdef"
+        assert result["report"]["value"]["gate_results"][0]["state"] == "FAIL"
+        assert result["navigation"]["value"]["links"] == []
         assert result["unavailable"] == [{"artifactId": str(broken_id), "artifactType": "evaluation.gate.report", "code": "EVALUATION_ARTIFACT_UNAVAILABLE"}]
     asyncio.run(exercise())
 
@@ -77,5 +111,5 @@ def test_static_workbench_has_dataset_run_routes_and_no_browser_metric_calculati
     assert "evaluation-run" not in primary
     assert "'evaluation-run':{label:'评估运行',parent:'evaluation-dataset'}" in source
     assert "/api/workbench/evaluation-datasets" in source and "/api/workbench/evaluation-runs" in source
-    assert "标记已审核" in source and "质量门禁与 Judge 校准" in source
+    assert "标记已审核" in source and "质量门禁与适用性" in source and "Applicability / Judge" in source
     assert "overallScore" not in source and "Math.average" not in source

@@ -94,3 +94,7 @@ None. Exact query controls and renderer integration belong to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-005 and UI Reference sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-14:** Completed a UI-reference parity repair with production-typed
+  candidate projections, Evidence-to-Context synchronization, authoritative
+  final-state behavior, async stale-response protection, and eight reviewed
+  desktop/narrow visual baselines.

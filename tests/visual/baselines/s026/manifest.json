@@ -1,0 +1,20 @@
+{
+  "story": "S-026",
+  "uiAnchors": ["UI-009", "UI-010", "UI-013"],
+  "prototypeSha256": "a07df450d231d777cb814d3a6695d67553748beda5491ce12e529ec2dca32ea7",
+  "fixtureRevision": "s026-evaluation-parity-v3",
+  "captureConditions": {"browser":{"product":"Chrome/152.0.7977.83","protocolVersion":"1.3","userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36","javascriptRuntime":"V8 15.2.124.21","renderingEngine":"537.36 (@79460ebecaa5625e57a5fb679a735659e73dc687)","headlessMode":"new","gpu":"disabled"},"device":{"deviceScaleFactor":1,"mobile":false},"media":{"type":"screen","colorScheme":"light","forcedColors":"none","reducedMotion":"no-preference"},"locale":{"browser":"zh-CN","document":"zh-CN"},"readiness":{"document":"complete","fontsPromise":"document.fonts.ready","archivoWeights":[400,600,800],"archivoFaceStatus":"loaded","assetResourceTimingRequired":true},"stabilization":{"animations":"none","transitions":"none","caretColor":"transparent"},"screenshotFormat":"png"},
+  "comparison": {"colorSpace": "RGBA", "channelTolerance": 12, "maximumDifferingPixelRatio": 0.005, "baselineUpdatesAutomatic": false},
+  "baselines": [
+    {"file":"evaluation-dataset-editor-1440.png","scenario":"dataset-editor","viewport":[1440,900],"sha256":"7ac626476c2bf578900fb9a5803b3bfee09ca8061547a4cbec6f03a1eee23d0a"},
+    {"file":"evaluation-dataset-editor-644.png","scenario":"dataset-editor","viewport":[644,900],"sha256":"bb69e6ede84fe0294f02c0c4cd433f701bf2d04b37a7df587d9e3a22dc0bacc6"},
+    {"file":"evaluation-run-running-1440.png","scenario":"running","viewport":[1440,900],"sha256":"373123545c68965dab01748865ed1fb94f37dcb22f158d52f2fee085537f6aea"},
+    {"file":"evaluation-run-running-644.png","scenario":"running","viewport":[644,900],"sha256":"29c77cb86b92ced1cbd5e8503830d175e97e831b9a84e8fe5caf31e8543a01c3"},
+    {"file":"evaluation-run-failed-gates-1440.png","scenario":"failed-gates","viewport":[1440,900],"sha256":"848e5df38b01057c1994d5ea1f4aad8d6ab6fdd5e154b11d734e7b47a1f8ee25"},
+    {"file":"evaluation-run-failed-gates-644.png","scenario":"failed-gates","viewport":[644,900],"sha256":"8523d0680d3ec73572dd635456de4cc4a0acf8858a11ad567a68f585e46ebe51"},
+    {"file":"evaluation-run-passed-gates-1440.png","scenario":"passed-gates","viewport":[1440,900],"sha256":"8243d1703b4a26439e3ac97ee75fd37f7b101e91d15cd438a712635bb1b6e861"},
+    {"file":"evaluation-run-passed-gates-644.png","scenario":"passed-gates","viewport":[644,900],"sha256":"ab93b2c070dc5e54661592532a994f287dc25c1b34ecfd82015c4007add86d05"},
+    {"file":"evaluation-run-invalid-dataset-1440.png","scenario":"invalid-dataset","viewport":[1440,900],"sha256":"90012c00f26b65e17ae473588c9128297465b48d1af5edaa67573828ab69d4e2"},
+    {"file":"evaluation-run-invalid-dataset-644.png","scenario":"invalid-dataset","viewport":[644,900],"sha256":"099e73cbda8920c8b399eb1a8ad021f9afd2fe8d3f74abc0849494cb9ce8a559"}
+  ]
+}

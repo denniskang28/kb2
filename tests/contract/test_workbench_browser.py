@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -11,12 +12,28 @@ import socket
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import httpx
 import pytest
 import websocket
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
+
+from kb2_runtime.evaluation.datasets.contracts import DEFAULT_TAXONOMY, DatasetContent
+from kb2_runtime.evaluation.ingestion import MetricReport, MetricStatus, metric_report_bytes
+from kb2_runtime.evaluation.runs.contracts import (
+    ArtifactBinding, EvaluationManifest, EvaluationSubject, FailedCaseLink,
+    GateResult, LayeredReport, NavigationIndex, OperationReport, PlanIdentity,
+    QualityGate, RuntimeSummary, canonical_bytes, digest,
+)
+from kb2_runtime.evidence.contracts import ContextDecision, EvidenceShortage
+from kb2_runtime.fusion.contracts import CandidateContribution, FusedCandidate, FusionCandidateSet
+from kb2_runtime.reranking.contracts import RerankDecision, RerankInputCandidate, RerankedCandidateSet
+from kb2_runtime.retrieval.contracts import IndexArtifactBinding, RetrievalCandidate, RetrievalCandidateSet
+from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService
+from kb2_runtime.workbench.query import QueryWorkbenchService
 
 
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -25,6 +42,8 @@ S022_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines
 S022_CAPTURE = json.loads((S022_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))["captureConditions"]
 S024_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s024"
 S024_MANIFEST = json.loads((S024_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))
+S025_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s025"
+S026_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s026"
 S022_CHROME_FLAGS = (
     f"--headless={S022_CAPTURE['browser']['headlessMode']}",
     "--no-sandbox",
@@ -118,6 +137,27 @@ _VISUAL_RUN = "12345678-1234-5678-1234-567812345682"
 _CHUNK_ARTIFACT = "12345678-1234-5678-1234-567812345684"
 _EVALUATION_DATASET = "12345678-1234-5678-1234-567812345690"
 _EVALUATION_RUN = "12345678-1234-5678-1234-567812345691"
+_QUERY_RUNS = {
+    "answered": "12345678-1234-5678-1234-567812345701",
+    "clarification": "12345678-1234-5678-1234-567812345702",
+    "abstained": "12345678-1234-5678-1234-567812345703",
+    "failed": "12345678-1234-5678-1234-567812345704",
+    "active": "12345678-1234-5678-1234-567812345708",
+    "submit-error": "12345678-1234-5678-1234-567812345710",
+    "delayed-submit": "12345678-1234-5678-1234-567812345711",
+}
+_EVALUATION_RUNS = {
+    "failed-gates": _EVALUATION_RUN,
+    "running": "12345678-1234-5678-1234-567812345705",
+    "passed-gates": "12345678-1234-5678-1234-567812345706",
+    "invalid-dataset": "12345678-1234-5678-1234-567812345707",
+    "status-matrix": "12345678-1234-5678-1234-567812345709",
+}
+_query_scenarios: dict[str, str] = {}
+_active_query_stopped = False
+_active_query_reads = 0
+_QUERY_CHUNK = "chk_" + "1" * 32
+_QUERY_DOCUMENT = "doc_" + "1" * 32
 _COMPARISON = "12345678-1234-5678-1234-567812345693"
 _COMPARISON_BASELINE = "12345678-1234-5678-1234-567812345694"
 _COMPARISON_CANDIDATE = "12345678-1234-5678-1234-567812345695"
@@ -352,46 +392,187 @@ async def fixture_artifact(artifact_id: str) -> JSONResponse:
 
 
 @fixture_app.get("/api/workbench/query-lab/options")
-async def fixture_query_options() -> JSONResponse:
+async def fixture_query_options(request: Request) -> JSONResponse:
+    referer = request.headers.get("referer", "")
+    if "fixture=options-error" in referer:
+        return JSONResponse({"code": "QUERY_OPTIONS_UNAVAILABLE"}, status_code=503)
+    if "fixture=options-empty" in referer:
+        return JSONResponse({"profiles": [], "indexes": []})
+    if "fixture=options-loading" in referer:
+        await asyncio.sleep(.8)
     return JSONResponse({"profiles": [{"profileId": "browser-query", "updatedAt": "2026-09-13T00:00:00Z"}],
                          "indexes": [{"id": _ARTIFACT, "summary": "fixture indexed Artifact"}]})
 
 
 @fixture_app.post("/api/workbench/query-lab/preflights")
-async def fixture_query_preflight() -> JSONResponse:
-    return JSONResponse({"token": "query-token", "planDigest": "f" * 64,
-                         "stages": [{"stageId": "keyword", "kind": "retrieve", "pluginId": "retriever.keyword@1"}],
-                         "disclosure": {"externalStages": [{"stage": "generate", "capability": "generation.default"}]}})
+async def fixture_query_preflight(request: Request) -> JSONResponse:
+    global _active_query_stopped, _active_query_reads
+    question = str((await request.json()).get("question", "answered")).lower()
+    if "preflight-error" in question:
+        return JSONResponse({"code": "QUERY_PREFLIGHT_UNAVAILABLE"}, status_code=503)
+    if "stale-old" in question:
+        await asyncio.sleep(.2)
+    scenario = next((name for name in _QUERY_RUNS if name in question), "answered")
+    if scenario == "active":
+        _active_query_stopped = False
+        _active_query_reads = 0
+    token = f"query-token-{scenario}"
+    _query_scenarios[token] = scenario
+    return JSONResponse({"token": token, "planDigest": "f" * 64,
+                         "stages": [{"stageId": "keyword", "kind": "retrieve", "pluginId": "retriever.keyword@1"},
+                                    {"stageId": "fusion", "kind": "fuse", "pluginId": "fusion.rrf@1"},
+                                    {"stageId": "context", "kind": "context", "pluginId": "context.fixture@1"}],
+                         "disclosure": {"externalStages": [] if "local" in question else [{"stage": "generate", "capability": "generation.default"}]}})
 
 
-@fixture_app.post("/api/workbench/query-lab/preflights/query-token/runs")
-async def fixture_query_submit() -> JSONResponse:
-    return JSONResponse({"runId": "12345678-1234-5678-1234-567812345689", "planDigest": "f" * 64}, status_code=202)
+@fixture_app.post("/api/workbench/query-lab/preflights/{token}/runs")
+async def fixture_query_submit(token: str) -> JSONResponse:
+    scenario = _query_scenarios[token]
+    if scenario == "submit-error":
+        return JSONResponse({"code": "QUERY_SUBMIT_REJECTED"}, status_code=409)
+    if scenario == "delayed-submit":
+        await asyncio.sleep(.35)
+    return JSONResponse({"runId": _QUERY_RUNS[scenario], "planDigest": "f" * 64}, status_code=202)
+
+
+def _query_candidate_contracts(locator: dict[str, object]) -> tuple[RetrievalCandidateSet, FusionCandidateSet, RerankedCandidateSet]:
+    index = IndexArtifactBinding(id=UUID(_ARTIFACT), content_digest="a" * 64)
+    keyword = RetrievalCandidate(
+        candidate_id="rcd_" + "1" * 32, document_id=_QUERY_DOCUMENT, chunk_id=_QUERY_CHUNK,
+        element_ids=("elm_" + "1" * 32,), locators=(locator,), rank=1, safe_score=.8,
+        score_kind="bm25.normalized",
+    )
+    vector = keyword.model_copy(update={"candidate_id": "rcd_" + "2" * 32, "safe_score": .7, "score_kind": "cosine.normalized"})
+    keyword_set = RetrievalCandidateSet(
+        candidate_set_id="rcs_" + "1" * 32, index=index, index_id="idx_" + "1" * 32,
+        document_id=_QUERY_DOCUMENT, retriever_plugin_id="retriever.keyword@1",
+        implementation_digest="b" * 64, contributor_id="keyword", configuration_digest="c" * 64,
+        candidates=(keyword,),
+    )
+    fused = FusedCandidate(
+        document_id=_QUERY_DOCUMENT, chunk_id=_QUERY_CHUNK, rank=1, safe_score=.75,
+        contributions=(CandidateContribution(contributor_id="keyword", original_rank=1, candidate=keyword),
+                       CandidateContribution(contributor_id="vector", original_rank=1, candidate=vector)),
+    )
+    fusion_set = FusionCandidateSet(
+        candidate_set_id="fcs_" + "1" * 32, index=index, index_id="idx_" + "1" * 32,
+        document_id=_QUERY_DOCUMENT, fusion_plugin_id="fusion.rrf@1",
+        implementation_digest="d" * 64, configuration_digest="e" * 64,
+        contributor_set_ids=("rcs_" + "1" * 32, "rcs_" + "2" * 32), candidates=(fused,),
+    )
+    reranked_set = RerankedCandidateSet(
+        candidate_set_id="rrs_" + "1" * 32, fusion_candidate_set_id=fusion_set.candidate_set_id,
+        index=index, index_id="idx_" + "1" * 32, document_id=_QUERY_DOCUMENT,
+        reranker_plugin_id="reranker.lexical@1", implementation_digest="f" * 64,
+        configuration_digest="1" * 64,
+        input_candidates=(RerankInputCandidate(chunk_id=_QUERY_CHUNK, input_rank=1),),
+        candidates=(fused,), decisions=(RerankDecision(chunk_id=_QUERY_CHUNK, input_rank=1,
+        output_rank=1, safe_score=.75, reason="included"),),
+    )
+    return keyword_set, fusion_set, reranked_set
 
 
 @fixture_app.get("/api/workbench/query-runs/{run_id}")
 async def fixture_query_run(run_id: str) -> JSONResponse:
-    assert run_id == "12345678-1234-5678-1234-567812345689"
+    global _active_query_stopped, _active_query_reads
+    scenario = next(name for name, identifier in _QUERY_RUNS.items() if identifier == run_id)
     locator = {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5}
-    return JSONResponse({"id": run_id, "state": "SUCCEEDED", "terminalState": "SUCCEEDED", "actions": {"stop": False},
-                         "stages": [{"stageKey": "keyword", "attempt": 1, "state": "SUCCEEDED", "pluginId": "retriever.keyword@1"}],
-                         "candidates": [{"stageId": "keyword", "available": True, "rows": [{"chunk_id": "chk_fixture", "safe_score": .8}]}],
-                         "evidence": [{"citationKey": "cit_fixture", "excerpt": "Long fixture evidence " * 80, "documentId": "doc_fixture", "chunkId": "chk_fixture", "locators": [locator], "contributors": [{"contributor_id": "keyword", "safe_score": .8}], "hierarchy": [], "tableElementIds": [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator}],
-                         "details": [{"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []}],
-                         "final": {"state": "ANSWERED", "answer": "Evidence-bound fixture answer", "citationKeys": ["cit_fixture"], "action": None}})
+    finals = {
+        "answered": {"state": "ANSWERED", "answer": "Evidence-bound fixture answer", "citationKeys": ["cit_fixture"], "action": None},
+        "clarification": {"state": "CLARIFICATION_REQUIRED", "answer": None, "citationKeys": [], "action": "请明确目标文档范围。"},
+        "abstained": {"state": "ABSTAINED", "answer": None, "citationKeys": [], "action": "可用 Evidence 不足，未生成答案。"},
+        "failed": {"state": "FAILED", "answer": None, "citationKeys": [], "action": "验证失败，未发布答案。"},
+    }
+    if scenario == "active" and not _active_query_stopped:
+        _active_query_reads += 1
+        if _active_query_reads >= 2:
+            await asyncio.sleep(.5)
+        return JSONResponse({"id": run_id, "state": "RUNNING", "terminalState": None, "actions": {"stop": True}, "stages": [], "candidates": [], "evidence": [], "details": [], "final": {"state": "UNAVAILABLE"}})
+    projected_scenario = "answered" if scenario == "active" else scenario
+    verification = {
+        "answered": {"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []},
+        "clarification": {"kind": "verification", "outcome": "clarification_required", "failureCodes": [], "missingCitationKeys": []},
+        "abstained": {"kind": "verification", "outcome": "abstain", "failureCodes": ["EVIDENCE_INSUFFICIENT"], "missingCitationKeys": []},
+        "failed": {"kind": "verification", "outcome": "failed", "failureCodes": ["CITATION_VALIDATION_FAILED"], "missingCitationKeys": ["cit_missing"]},
+    }[projected_scenario]
+    contracts = _query_candidate_contracts(locator)
+    return JSONResponse({"id": run_id, "state": "SUCCEEDED" if projected_scenario != "failed" else "FAILED", "terminalState": "SUCCEEDED" if projected_scenario != "failed" else "FAILED", "actions": {"stop": False},
+                         "stages": [{"stageKey": "keyword", "attempt": 1, "state": "SUCCEEDED", "pluginId": "retriever.keyword@1", "startedAt": "2026-09-13T00:00:00Z", "endedAt": "2026-09-13T00:00:00.120Z"},
+                                    {"stageKey": "fusion", "attempt": 1, "state": "SUCCEEDED", "pluginId": "fusion.rrf@1", "startedAt": "2026-09-13T00:00:00.120Z", "endedAt": "2026-09-13T00:00:00.180Z"},
+                                    {"stageKey": "rerank", "attempt": 1, "state": "SUCCEEDED", "pluginId": "reranker.lexical@1", "startedAt": "2026-09-13T00:00:00.180Z", "endedAt": "2026-09-13T00:00:00.210Z"}],
+                         "candidates": [{"stageId": name, "available": True, "rows": QueryWorkbenchService._candidate_rows(value)}
+                                        for name, value in zip(("keyword", "fusion", "rerank"), contracts, strict=True)],
+                         "evidence": [{"citationKey": "cit_fixture", "excerpt": "Long fixture evidence " * 80, "documentId": _QUERY_DOCUMENT, "chunkId": _QUERY_CHUNK, "locators": [locator], "contributors": [{"contributor_id": "keyword", "safe_score": .8}], "hierarchy": [], "tableElementIds": [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator}],
+                         "details": [_fixture_context_detail(), verification], "final": finals[projected_scenario]})
+
+
+def _fixture_context_detail() -> dict[str, object]:
+    decisions = [{"chunk_id": _QUERY_CHUNK, "source_rank": 1, "reason": "included", "safe_score": .8},
+                 {"chunk_id": "chk_" + "2" * 32, "source_rank": 2, "reason": "excluded_budget", "safe_score": .6}]
+    return {"kind": "context", "decisions": decisions,
+            "shortage": {"minimum_items": 3, "selected_items": 1, "selected_tokens": 96, "reason": "below_minimum"}}
 
 
 def _evaluation_dataset() -> dict[str, object]:
     slices = {"format":"pdf","processing_class":"native","native_ocr":"native","structure":"prose","language":"zh","question_class":"lookup","difficulty":"low","criticality":"high"}
+    source = {"id":_ARTIFACT,"content_digest":"a" * 64,"schema_revision":"v1","artifact_type":"canonical.document"}
+    evidence = {"id":"12345678-1234-5678-1234-567812345699","content_digest":"9" * 64,"schema_revision":"v1","artifact_type":"evidence.set"}
+    def query_case(case_id: str, *, origin: str, reviewed: bool = False, question: str = "fixture question") -> dict[str, object]:
+        reviews = [{"operation":"mark_reviewed","reviewer":"fixture.reviewer","reviewed_at":"2026-09-13T00:10:00Z","content_digest":"b" * 64}] if reviewed else []
+        operation = {"generated":"generated", "manual":"create", "imported":"import"}[origin]
+        return {"id":case_id,"source":source,"slices":slices,"provenance":{"origin":origin,"operation":operation,"created_at":"2026-09-13T00:00:00Z"},"reviews":reviews,"question":question,"evidence":evidence,"answerability":"answerable","expected_facts":["fixture fact"],"forbidden_facts":["forbidden fixture"],"relevant_evidence_ids":["evd_"+"1"*32],"required_citation_keys":["cit_"+"2"*32],"deterministic_answer":"fixture answer"}
+    annotation = {"id":"ann_0123456789abcdef","source":source,"slices":slices,"provenance":{"origin":"manual","operation":"create","created_at":"2026-09-13T00:00:00Z"},"reviews":[],"target":{"kind":"cell","element_id":"elm_0123456789abcdef","table_id":"tbl_0123456789abcdef","cell_id":"cell_0123456789abcdef","locator":{"kind":"pdf","page_number":1,"x0":0,"y0":0,"x1":.5,"y1":.5},"start":2,"end":8},"label":"fixture annotation"}
+    rows = [query_case("qcase_0123456789abcdef", origin="generated"), query_case("qcase_1123456789abcdef", origin="manual", reviewed=True), query_case("qcase_2123456789abcdef", origin="imported"), query_case("qcase_3123456789abcdef", origin="manual")]
     return {"id": _EVALUATION_DATASET, "revision": 1, "revisionId": "12345678-1234-5678-1234-567812345692", "digest": "e" * 64,
-            "createdAt": "2026-09-13T00:00:00Z", "annotationCount": 0, "queryCaseCount": 1, "reviewedCount": 0, "caseCount": 1,
-            "validation": {"qcase_0123456789abcdef": []}, "content": {"schema_revision": "GoldenDataset/v1", "taxonomy": {"schema_version":"SliceTaxonomy/v1", "dimensions": {}}, "annotations": [],
-            "query_cases": [{"id":"qcase_0123456789abcdef", "source":{"id":_ARTIFACT,"content_digest":"a" * 64,"schema_revision":"v1","artifact_type":"canonical.document"}, "slices":slices,
-            "provenance":{"origin":"generated","operation":"generated","created_at":"2026-09-13T00:00:00Z"}, "reviews":[], "question":"fixture question", "evidence":None, "answerability":"unanswerable", "expected_facts":[], "forbidden_facts":[], "relevant_evidence_ids":[], "required_citation_keys":[], "deterministic_answer":None}]}}
+            "createdAt": "2026-09-13T00:00:00Z", "annotationCount": 1, "queryCaseCount": 4, "reviewedCount": 1, "caseCount": 5,
+            "validation": {"ann_0123456789abcdef": [], "qcase_0123456789abcdef": [], "qcase_1123456789abcdef": [], "qcase_2123456789abcdef": ["CASE_INVALID"], "qcase_3123456789abcdef": ["CASE_INCOMPLETE"]}, "content": {"schema_revision": "GoldenDataset/v1", "taxonomy": DEFAULT_TAXONOMY.model_dump(mode="json"), "annotations": [annotation], "query_cases": rows}}
+
+
+def test_s025_s026_browser_fixtures_use_production_contract_shapes() -> None:
+    detail = _fixture_context_detail()
+    assert [ContextDecision.model_validate(item).reason for item in detail["decisions"]] == ["included", "excluded_budget"]
+    assert EvidenceShortage.model_validate(detail["shortage"]).reason == "below_minimum"
+    candidate_sets = _query_candidate_contracts({"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5})
+    assert [type(value) for value in candidate_sets] == [RetrievalCandidateSet, FusionCandidateSet, RerankedCandidateSet]
+    assert QueryWorkbenchService._candidate_rows(candidate_sets[0])[0]["contributions"][0]["scoreKind"] == "bm25.normalized"
+    assert [item["contributorId"] for item in QueryWorkbenchService._candidate_rows(candidate_sets[1])[0]["contributions"]] == ["keyword", "vector"]
+    assert QueryWorkbenchService._candidate_rows(candidate_sets[2])[0]["decision"]["reason"] == "included"
+    content = DatasetContent.model_validate(_evaluation_dataset()["content"])
+    assert content.annotations[0].target.model_dump(mode="json", exclude_none=True) == _evaluation_dataset()["content"]["annotations"][0]["target"]
+    assert content.query_cases[0].evidence and content.query_cases[0].evidence.artifact_type == "evidence.set"
+    manifest, report, navigation = _evaluation_contracts(_EVALUATION_RUN, "failed-gates")
+    assert manifest.subjects[0].ingestion_plan_digest == digest(manifest.subjects[0].ingestion_plan)
+    assert manifest.subjects[0].query_plan_digest == digest(manifest.subjects[0].query_plan)
+    assert manifest.gates[0].selector == {"criticality": "high"} and manifest.gates[0].threshold == .7
+    assert report.operation.elapsed_ms == 60000 and report.operation.cpu_ms == 120
+    assert navigation.links[0].evaluation_run_id == UUID(_EVALUATION_RUN)
+
+
+def test_s026_fixture_projects_persisted_metric_reports_through_workbench_service() -> None:
+    manifest, report, _ = _evaluation_contracts(_EVALUATION_RUNS["status-matrix"], "status-matrix")
+    persisted = _evaluation_metric_reports(_EVALUATION_RUNS["status-matrix"], "status-matrix")
+    assert report.report_ids == tuple(sorted(persisted, key=str))
+    assert set(manifest.metric_ids) == {metric.metric_id for metric in persisted.values()}
+    assert all(set(metric.slices) == set(DEFAULT_TAXONOMY.dimensions) for metric in persisted.values())
+    assert all(metric.slices["question_class"] == "multi_evidence" for metric in persisted.values())
+    assert all(set(gate.selected_report_ids) <= set(report.report_ids) for gate in report.gate_results)
+
+    projected = asyncio.run(_evaluation_fixture_service(_EVALUATION_RUNS["status-matrix"], "status-matrix").run(UUID(_EVALUATION_RUNS["status-matrix"])))
+    assert projected is not None
+    rows = projected["metrics"]
+    assert {row["owner"] for row in rows} == {"ingestion", "retrieval", "context", "answer", "citation", "decision", "judge"}
+    assert all(UUID(row["artifactId"]) in report.report_ids for row in rows)
+    assert all(set(row["slices"]) == set(DEFAULT_TAXONOMY.dimensions) for row in rows)
+    judges = [row for row in rows if row["owner"] == "judge"]
+    assert {row["eligibility"] for row in judges} == {"ELIGIBLE", "ADVISORY", "INELIGIBLE", "DRIFTED"}
+    assert all(row["calibrationReportArtifactId"] == _COMPARISON for row in judges)
+    assert not any(row["artifactId"].startswith("metric-") for row in rows)
 
 
 @fixture_app.get("/api/workbench/evaluation-datasets")
-async def fixture_evaluation_datasets() -> JSONResponse:
+async def fixture_evaluation_datasets(q: str = "") -> JSONResponse:
+    if q == "empty":
+        return JSONResponse([])
     item = _evaluation_dataset()
     return JSONResponse([{key: item[key] for key in ("id", "revision", "revisionId", "digest", "createdAt", "annotationCount", "queryCaseCount", "reviewedCount", "caseCount")}])
 
@@ -405,29 +586,212 @@ async def fixture_evaluation_dataset(dataset_id: str) -> JSONResponse:
 @fixture_app.put("/api/workbench/evaluation-datasets/{dataset_id}")
 async def fixture_evaluation_dataset_save(dataset_id: str, request: Request) -> JSONResponse:
     assert dataset_id == _EVALUATION_DATASET
-    assert "GoldenDataset/v1" in (await request.body()).decode()
+    payload = await request.json()
+    assert payload["schema_revision"] == "GoldenDataset/v1"
+    annotation = payload["annotations"][0]
+    assert set(annotation["target"]) == {"kind", "element_id", "table_id", "cell_id", "locator", "start", "end"}
+    assert set(payload["query_cases"][0]["evidence"]) == {"id", "content_digest", "schema_revision", "artifact_type"}
+    if payload["query_cases"][0]["question"] == "trigger-save-failure":
+        return JSONResponse({"code": "DATASET_SAVE_FAILED"}, status_code=503)
     return JSONResponse({"valid": True, "dataset": _evaluation_dataset()})
 
 
 @fixture_app.post("/api/workbench/evaluation-datasets/{dataset_id}/revisions/{revision}/cases/{case_id}/review")
 async def fixture_evaluation_review(dataset_id: str, revision: int, case_id: str, request: Request) -> JSONResponse:
     assert (dataset_id, revision, case_id) == (_EVALUATION_DATASET, 1, "qcase_0123456789abcdef")
-    assert (await request.json())["reviewer"] == "fixture.reviewer"
+    reviewer = (await request.json())["reviewer"]
+    if reviewer == "fail.review":
+        return JSONResponse({"code": "CASE_REVIEW_FAILED"}, status_code=503)
+    assert reviewer == "fixture.reviewer"
     return JSONResponse({"valid": True, "dataset": _evaluation_dataset()})
 
 
 @fixture_app.get("/api/workbench/evaluation-runs")
 async def fixture_evaluation_runs() -> JSONResponse:
-    return JSONResponse([{ "id": _EVALUATION_RUN, "state": "FAILED", "terminalState": "FAILED", "createdAt": "2026-09-13T00:00:00Z", "startedAt": "2026-09-13T00:00:00Z", "endedAt": "2026-09-13T00:01:00Z", "planDigest": "f" * 64 }])
+    return JSONResponse([{ "id": identifier, "state": "RUNNING" if name == "running" else "FAILED" if name in {"failed-gates", "invalid-dataset"} else "SUCCEEDED", "terminalState": None if name == "running" else "FAILED" if name in {"failed-gates", "invalid-dataset"} else "SUCCEEDED", "createdAt": "2026-09-13T00:00:00Z", "startedAt": "2026-09-13T00:00:00Z", "endedAt": None if name == "running" else "2026-09-13T00:01:00Z", "planDigest": "f" * 64 } for name, identifier in _EVALUATION_RUNS.items()])
+
+
+def _evaluation_fixture_id(run_id: str, role: str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"kb2-workbench-evaluation-fixture:{run_id}:{role}")
+
+
+def _evaluation_metric_reports(run_id: str, scenario: str) -> dict[UUID, MetricReport]:
+    case_id = "qcase_0123456789abcdef"
+    slices = {
+        "format": "pdf", "processing_class": "mixed", "native_ocr": "ocr",
+        "structure": "layout_rich", "language": "multilingual",
+        "question_class": "multi_evidence", "difficulty": "high", "criticality": "high",
+    }
+    reference = lambda role: _evaluation_fixture_id(run_id, role)
+    reports: dict[UUID, MetricReport] = {}
+
+    def add(role: str, metric_id: str, owner: str, *, status: MetricStatus = MetricStatus.VALUE,
+            value: float | None = .8, eligibility: str | None = None) -> None:
+        fields: dict[str, object] = {
+            "metric_id": metric_id, "owner": owner, "snapshot_artifact_id": reference("snapshot"),
+            "taxonomy_digest": digest(DEFAULT_TAXONOMY), "slices": slices, "status": status,
+            "value": value if status is MetricStatus.VALUE else None, "elapsed_ms": 5,
+            "labelled_count": 1, "matched_count": 1 if status is MetricStatus.VALUE else 0,
+            "sample_count": 1 if status is MetricStatus.VALUE else 0,
+        }
+        if owner == "ingestion":
+            fields.update(required_annotation_kinds=("cell",), document_id=_QUERY_DOCUMENT,
+                          expected_artifact_id=reference("expected-document"), observed_artifact_id=reference("observed-document"))
+        elif owner in {"retrieval", "context"}:
+            fields.update(metric_family_id=metric_id, case_id=case_id, question_source_artifact_id=reference("question-source"),
+                          label_evidence_artifact_id=reference("label-evidence"), stage_kind="context" if owner == "context" else "retrieval",
+                          measured_artifact_id=reference(f"{owner}-measured"), k=5)
+        elif owner in {"answer", "citation"}:
+            fields.update(metric_family_id=metric_id, case_id=case_id, question_source_artifact_id=reference("question-source"),
+                          label_evidence_artifact_id=reference("label-evidence"), stage_kind="verification",
+                          answer_artifact_id=reference("answer"), verification_artifact_id=reference("verification"),
+                          final_response_artifact_id=reference("final-response"))
+        elif owner == "decision":
+            fields.update(metric_family_id=metric_id, case_id=case_id, label_evidence_artifact_id=reference("label-evidence"),
+                          stage_kind="final_state", final_response_artifact_id=reference("final-response"))
+        elif owner == "judge":
+            fields.update(method="llm_judge", metric_family_id=metric_id, case_id=case_id,
+                          question_source_artifact_id=reference("question-source"), label_evidence_artifact_id=reference("label-evidence"),
+                          stage_kind="final_state", final_response_artifact_id=reference("final-response"),
+                          judge_result_artifact_id=reference(f"{role}-result"), calibration_report_artifact_id=UUID(_COMPARISON),
+                          judge_definition_digest="6" * 64, calibration_policy_digest="7" * 64, eligibility=eligibility)
+        identifier = reference(f"metric:{role}")
+        reports[identifier] = MetricReport(**fields)
+
+    answer_value = .8 if scenario in {"passed-gates", "status-matrix"} else .3
+    add("ingestion", "ingestion.fixture@1", "ingestion")
+    add("retrieval", "retrieval.fixture@1", "retrieval")
+    add("context", "context.fixture@1", "context")
+    add("answer", "answer.coverage@1", "answer", value=answer_value)
+    add("citation", "citation.fixture@1", "citation", status=MetricStatus.INSUFFICIENT_LABELS)
+    add("decision", "decision.fixture@1", "decision")
+    add("judge-ineligible", "judge.ineligible@1", "judge", status=MetricStatus.NOT_APPLICABLE, eligibility="INELIGIBLE")
+    if scenario == "status-matrix":
+        add("answer-failure", "answer.failure@1", "answer", value=.3)
+        add("judge-eligible", "judge.eligible@1", "judge", value=.7, eligibility="ELIGIBLE")
+        add("judge-advisory", "judge.advisory@1", "judge", value=.7, eligibility="ADVISORY")
+        add("judge-drifted", "judge.drifted@1", "judge", value=.7, eligibility="DRIFTED")
+    return reports
+
+
+def _evaluation_contracts(run_id: str, scenario: str) -> tuple[EvaluationManifest, LayeredReport, NavigationIndex]:
+    case_id = "qcase_0123456789abcdef"
+    metric_reports = _evaluation_metric_reports(run_id, scenario)
+    metric_by_id = {report.metric_id: identifier for identifier, report in metric_reports.items()}
+    ingestion_plan, query_plan = {"plugin": "fixture.ingestion@1"}, {"plugin": "fixture.query@1"}
+    binding = ArtifactBinding(role="evidence", artifact_id=UUID(_ARTIFACT), artifact_type="evidence.set",
+                              content_digest="9" * 64, case_id=case_id)
+    identities = (
+        PlanIdentity(plugin_id="fixture.ingestion@1", implementation_digest="1" * 64, configuration_digest="2" * 64),
+        PlanIdentity(plugin_id="fixture.query@1", implementation_digest="3" * 64, configuration_digest="4" * 64,
+                     provider_id="fixture.local", model="fixture-model", prompt_digest="5" * 64),
+    )
+    subjects = tuple(EvaluationSubject(
+        subject=name, ingestion_plan=ingestion_plan, ingestion_plan_digest=digest(ingestion_plan),
+        query_plan=query_plan, query_plan_digest=digest(query_plan), bindings=(binding,),
+        declared_identities=identities,
+    ) for name in ("baseline", "candidate"))
+    gate_specs = (
+        (("gate.pass", "answer.coverage@1", "answer", "PASS"),
+         ("gate.fail", "answer.failure@1", "answer", "FAIL"),
+         ("gate.insufficient", "citation.fixture@1", "citation", "INSUFFICIENT"),
+         ("gate.ineligible", "judge.ineligible@1", "judge", "INELIGIBLE"))
+        if scenario == "status-matrix" else
+        (("gate.answer", "answer.coverage@1", "answer", "PASS" if scenario == "passed-gates" else "FAIL"),)
+    )
+    configured = tuple(QualityGate(
+        gate_id=gate_id, metric_id=metric_id, owner=owner, selector={"criticality": "high"}, aggregation="mean",
+        minimum_samples=1, direction="higher_is_better", threshold=.7, severity="hard",
+    ) for gate_id, metric_id, owner, _ in gate_specs)
+    manifest = EvaluationManifest(
+        dataset_snapshot_id=_evaluation_fixture_id(run_id, "snapshot"), dataset_snapshot_digest="d" * 64,
+        taxonomy_digest=digest(DEFAULT_TAXONOMY), input_catalog_digest="c" * 64, case_ids=(case_id,),
+        subjects=subjects, metric_ids=tuple(sorted(metric_by_id)), gates=configured,
+        runtime=RuntimeSummary(runtime_digest="a" * 64, package_digest="b" * 64,
+        implementation_digest="c" * 64, os_family="linux", architecture="x86_64",
+        resource_sampler_version="fixture.sampler.v1"),
+    )
+    results = tuple(GateResult(
+        gate_id=gate_id, state=state, reason="threshold_result", subject="candidate",
+        selected_report_ids=(metric_by_id[metric_id],), matched_case_ids=(case_id,) if state in {"PASS", "FAIL"} else (),
+        sample_count=1 if state in {"PASS", "FAIL"} else 0,
+        value=.8 if state == "PASS" else .3 if state == "FAIL" else None,
+        state_counts={"insufficient_labels": 1} if state == "INSUFFICIENT" else {"not_applicable": 1} if state == "INELIGIBLE" else {"value": 1},
+    ) for gate_id, metric_id, _, state in gate_specs)
+    manifest_id = _evaluation_fixture_id(run_id, "manifest")
+    report_id = _evaluation_fixture_id(run_id, "report")
+    answer_metric_id = metric_by_id["answer.coverage@1"]
+    link = FailedCaseLink(
+        case_id=case_id, subject="candidate", gate_id="gate.answer", metric_report_id=answer_metric_id,
+        ingestion_artifact_id=UUID(_ARTIFACT), retrieval_artifact_id=UUID(_ARTIFACT),
+        fusion_artifact_id=UUID(_ARTIFACT), rerank_artifact_id=UUID(_ARTIFACT),
+        source_artifact_id=UUID(_ARTIFACT), evidence_artifact_id=UUID(_ARTIFACT),
+        generation_artifact_id=UUID(_ARTIFACT), verification_artifact_id=UUID(_ARTIFACT),
+        final_response_artifact_id=UUID(_ARTIFACT), evaluation_run_id=UUID(run_id),
+    )
+    failed = (link,) if scenario == "failed-gates" else ()
+    layers = {name: [] for name in ("ingestion", "retrieval", "answer", "citation", "decision", "judge", "latency", "resources")}
+    for identifier, metric in metric_reports.items():
+        layers["retrieval" if metric.owner == "context" else metric.owner].append(identifier)
+    report = LayeredReport(
+        manifest_artifact_id=manifest_id, manifest_digest=hashlib.sha256(canonical_bytes(manifest)).hexdigest(),
+        report_ids=tuple(sorted(metric_reports, key=str)), report_subjects={identifier: "candidate" for identifier in metric_reports},
+        layers={name: tuple(sorted(identifiers, key=str)) for name, identifiers in layers.items()},
+        gate_results=results, operation=OperationReport(elapsed_ms=60000, cpu_ms=120,
+        peak_rss=1048576, io_bytes=4096, availability="AVAILABLE"), failed_cases=failed,
+    )
+    navigation = NavigationIndex(evaluation_report_id=report_id, evaluation_run_id=UUID(run_id), links=failed)
+    return manifest, report, navigation
+
+
+def _evaluation_fixture_service(run_id: str, scenario: str) -> EvaluationWorkbenchService:
+    manifest, report, navigation = _evaluation_contracts(run_id, scenario)
+    identifiers = {
+        "manifest": _evaluation_fixture_id(run_id, "manifest"),
+        "report": _evaluation_fixture_id(run_id, "report"),
+        "navigation": _evaluation_fixture_id(run_id, "navigation"),
+    }
+    payloads = {
+        identifiers["manifest"]: canonical_bytes(manifest),
+        identifiers["report"]: canonical_bytes(report),
+        identifiers["navigation"]: canonical_bytes(navigation),
+        **{identifier: metric_report_bytes(metric) for identifier, metric in _evaluation_metric_reports(run_id, scenario).items()},
+    }
+    types = {identifiers["manifest"]: "evaluation.manifest", identifiers["report"]: "evaluation.report",
+             identifiers["navigation"]: "evaluation.navigation.index",
+             **{identifier: "metric.report" for identifier in _evaluation_metric_reports(run_id, scenario)}}
+    if scenario == "invalid-dataset":
+        payloads[identifiers["manifest"]] = b'{"schema_version":"EvaluationManifest/v1"}'
+
+    class Traces:
+        async def list_evaluation_workbench_runs(self):
+            state = "RUNNING" if scenario == "running" else "FAILED" if scenario in {"failed-gates", "invalid-dataset"} else "SUCCEEDED"
+            now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+            return [{"id": UUID(run_id), "state": state, "terminal_state": None if scenario == "running" else state,
+                     "created_at": now, "started_at": now, "ended_at": None if scenario == "running" else now,
+                     "plan_digest": "f" * 64}]
+
+        async def list_run_artifacts(self, requested):
+            selected = (identifiers["manifest"],) if scenario in {"running", "invalid-dataset"} else tuple(payloads)
+            return [SimpleNamespace(id=identifier, artifact_type=types[identifier],
+                                    content_digest=hashlib.sha256(payloads[identifier]).hexdigest()) for identifier in selected]
+
+    class Artifacts:
+        async def read_content(self, identifier):
+            return payloads[identifier]
+
+        async def get_artifact_manifest(self, identifier):
+            return SimpleNamespace(artifact_type=types[identifier], content_digest=hashlib.sha256(payloads[identifier]).hexdigest())
+
+    return EvaluationWorkbenchService(object(), Traces(), Artifacts())
 
 
 @fixture_app.get("/api/workbench/evaluation-runs/{run_id}")
 async def fixture_evaluation_run(run_id: str) -> JSONResponse:
-    assert run_id == _EVALUATION_RUN
-    return JSONResponse({"id": run_id, "state": "FAILED", "terminalState": "FAILED", "planDigest": "f" * 64,
-        "manifest": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"schema_version":"EvaluationManifest/v1", "dataset_snapshot_digest":"d" * 64}},
-        "report": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"layers":{"ingestion":["m1"],"retrieval":["m2"],"answer":["m3"],"citation":[],"decision":["m4"],"latency":["m5"],"resources":["m6"]}, "gate_results":[{"state":"FAILED","state_counts":{"insufficient_labels":1}}]}},
-        "navigation": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"links":[{"case_id":"qcase_0123456789abcdef", "source_artifact_id":_ARTIFACT, "evidence_artifact_id":_ARTIFACT, "generation_artifact_id":_ARTIFACT, "verification_artifact_id":_ARTIFACT}]}}, "unavailable": []})
+    scenario = next(name for name, identifier in _EVALUATION_RUNS.items() if identifier == run_id)
+    projected = await _evaluation_fixture_service(run_id, scenario).run(UUID(run_id))
+    assert projected is not None
+    return JSONResponse(projected)
 
 
 def _comparison_fixture() -> dict[str, object]:
@@ -485,7 +849,10 @@ async def fixture_run_history_detail(run_id: str) -> JSONResponse:
 
 @fixture_app.post("/api/workbench/query-runs/{run_id}/stop")
 async def fixture_stop_query_run(run_id: str) -> JSONResponse:
-    assert run_id == _HISTORY_QUERY
+    global _active_query_stopped
+    assert run_id in {_HISTORY_QUERY, _QUERY_RUNS["active"]}
+    if run_id == _QUERY_RUNS["active"]:
+        _active_query_stopped = True
     return JSONResponse({"stopped": True})
 
 
@@ -839,6 +1206,23 @@ def test_s024_visual_manifest_is_pinned_and_baselines_are_reviewed_assets() -> N
         baseline = S024_BASELINE_ROOT / record["file"]
         assert baseline.is_file()
         assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
+
+
+def test_s025_s026_visual_manifests_are_pinned_and_complete() -> None:
+    expectations = ((S025_BASELINE_ROOT, "S-025", {"UI-005", "UI-008", "UI-013"}, 8),
+                    (S026_BASELINE_ROOT, "S-026", {"UI-009", "UI-010", "UI-013"}, 10))
+    for root, story, anchors, count in expectations:
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["story"] == story
+        assert set(manifest["uiAnchors"]) == anchors
+        assert manifest["prototypeSha256"] == hashlib.sha256(Path("docs/ui/kb_ui.zip").read_bytes()).hexdigest()
+        assert manifest["captureConditions"] == S022_CAPTURE
+        assert manifest["comparison"] == {"colorSpace": "RGBA", "channelTolerance": 12, "maximumDifferingPixelRatio": .005, "baselineUpdatesAutomatic": False}
+        assert len(manifest["baselines"]) == count
+        assert {tuple(record["viewport"]) for record in manifest["baselines"]} == {(1440, 900), (644, 900)}
+        for record in manifest["baselines"]:
+            baseline = root / record["file"]
+            assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
 
 
 @pytest.mark.skipif(
@@ -1404,9 +1788,9 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
 )
 @pytest.mark.parametrize("width", (1440, 644))
 def test_fixture_backed_query_lab_evidence_locator_and_narrow_layout(tmp_path: Path, width: int) -> None:
-    port, debug_port = "8898", _free_local_port()
+    port, debug_port = _free_local_port(), _free_local_port()
     environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
-    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
     try:
         for _ in range(60):
             try:
@@ -1439,7 +1823,8 @@ def test_fixture_backed_query_lab_evidence_locator_and_narrow_layout(tmp_path: P
         f"--window-size={width},900", f"--user-data-dir={tmp_path / 'query-profile'}", url,
     ])
     try:
-        expression = """(async () => { const wait = async (label,p) => { for(let i=0;i<100;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error(`Query Lab fixture did not render: ${label}`); }; await wait('initial controls',()=>document.querySelector('textarea[aria-label="问题"]') && document.querySelector('select[aria-label="已索引 Artifact"] option')); document.querySelector('textarea[aria-label="问题"]').value='long question'; [...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click(); await wait('preflight',()=>document.body.innerText.includes('已解析计划')); const ack=document.querySelector('input[aria-label="确认外部阶段披露"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'); const blocked=submit.disabled; ack.click(); submit.click(); const citation=await wait('run result',()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='cit_fixture')); citation.click(); const drawer=await wait('source inspector',()=>document.querySelector('.artifact-inspector')); const selected=await wait('source locator selection',()=>drawer.querySelectorAll('.source-selected').length===2); return {blocked, answer:document.body.innerText.includes('Evidence-bound fixture answer'), candidates:document.body.innerText.includes('chk_fixture'), selected, overflow:document.documentElement.scrollWidth<=innerWidth}; })()"""
+        expression = """(async () => { const wait = async (label,p) => { for(let i=0;i<100;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error(`Query Lab fixture did not render: ${label}`); }; await wait('initial controls',()=>document.querySelector('textarea[aria-label="问题"]') && document.querySelector('select[aria-label="已索引 Artifact"] option')); const q=document.querySelector('textarea[aria-label="问题"]');q.value='answered';q.dispatchEvent(new Event('input',{bubbles:true})); [...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click(); await wait('preflight',()=>document.body.innerText.includes('已解析计划')); const ack=document.querySelector('input[aria-label="确认外部阶段披露"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'); const blocked=submit.disabled; ack.click(); submit.click(); const citation=await wait('run result',()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='cit_fixture')); citation.click(); const drawer=await wait('source inspector',()=>document.querySelector('.artifact-inspector')); const selected=await wait('source locator selection',()=>drawer.querySelectorAll('.source-selected').length===2); return {blocked, answer:document.body.innerText.includes('Evidence-bound fixture answer'), candidates:document.body.innerText.includes('chk_fixture'), selected, overflow:document.documentElement.scrollWidth<=innerWidth}; })()"""
+        expression = expression.replace("'chk_fixture'", json.dumps(_QUERY_CHUNK))
         assert _cdp(int(debug_port), expression, await_promise=True, target_url=url) == {"blocked": True, "answer": True, "candidates": True, "selected": True, "overflow": True}
         _capture_cdp(int(debug_port), tmp_path / f"query-evidence-{width}.png", target_url=url)
         assert _cdp(int(debug_port), "(async()=>{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,30));return !document.querySelector('.artifact-inspector')})()", await_promise=True, target_url=url) is True
@@ -1460,16 +1845,154 @@ def test_fixture_backed_evaluation_dataset_and_run_states(tmp_path: Path, width:
     environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
     server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
     dataset_url = f"http://127.0.0.1:{port}/workbench/evaluation-dataset"
-    browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'evaluation'}", dataset_url])
+    _wait_for_fixture(dataset_url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'evaluation'}", dataset_url])
     try:
-        dataset = """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('dataset did not render')};const row=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('r1 / 0/1')));row.click();await wait(()=>document.querySelector('textarea[aria-label=\"评估数据集 Schema\"]'));window.prompt=()=> 'fixture.reviewer';[...document.querySelectorAll('button')].find(x=>x.textContent==='标记已审核').click();return {generated:document.body.innerText.includes('待审核'),review:document.body.innerText.includes('标记已审核'),overflow:document.documentElement.scrollWidth<=innerWidth}})()"""
-        assert _cdp(debug_port, dataset, await_promise=True, target_url=dataset_url) == {"generated": True, "review": True, "overflow": True}
-        _capture_cdp(debug_port, tmp_path / f"evaluation-dataset-{width}.png", target_url=dataset_url)
+        _prepare_s022_capture_environment(debug_port, dataset_url, width)
+        dataset = """(async()=>{for(let i=0;i<200;i++){const editor=document.querySelector('.dataset-case-editor textarea[aria-label=\"问题\"]');if(editor){const text=document.body.innerText,selected=document.querySelector('.dataset-case-row[aria-pressed=true] strong')?.textContent;return {generated:selected==='qcase_0123456789abcdef'&&text.includes('待审核'),review:!!document.querySelector('input[aria-label=\"Reviewer ID\"]'),states:text.includes('已审核')&&text.includes('无效')&&text.includes('不完整'),evidence:['Evidence Artifact ID','Evidence digest','Evidence schema','Evidence type'].every(x=>document.querySelector(`[aria-label=\"${x}\"]`)),slices:['format','processing_class','native_ocr','structure','language','question_class','difficulty','criticality'].every(x=>document.querySelector(`[aria-label=\"${x}\"]`)),overflow:document.documentElement.scrollWidth<=innerWidth}}await new Promise(r=>setTimeout(r,25))}throw new Error('dataset did not render')})()"""
+        assert _cdp(debug_port, dataset, await_promise=True, target_url=dataset_url) == {"generated": True, "review": True, "states": True, "evidence": True, "slices": True, "overflow": True}
+        if width == 644:
+            _cdp(debug_port, "document.querySelector('.dataset-case-editor').scrollIntoView(); true", target_url=dataset_url)
+        dataset_image = tmp_path / f"evaluation-dataset-editor-{width}.png"
+        _capture_cdp(debug_port, dataset_image, target_url=dataset_url)
+        _assert_manifest_visual(debug_port, dataset_image, dataset_image.name, target_url=dataset_url, baseline_root=S026_BASELINE_ROOT, story="S-026")
         run_url = f"http://127.0.0.1:{port}/workbench/evaluation-run?run={_EVALUATION_RUN}"
         assert _cdp(debug_port, f"location.href='{run_url}'; true", target_url=dataset_url) is True
-        run = """(async()=>{for(let i=0;i<200;i++){const text=document.body.innerText;if(text.includes('不可变 Manifest')&&text.includes('ingestion: 1 个报告')&&text.includes('质量门禁与 Judge 校准'))return {failed:text.includes('FAILED'),evidence:[...document.querySelectorAll('button')].some(x=>x.textContent==='source_artifact_id'),overflow:document.documentElement.scrollWidth<=innerWidth};await new Promise(r=>setTimeout(r,25));}throw new Error('run did not render')})()"""
-        assert _cdp(debug_port, run, await_promise=True, target_url=run_url) == {"failed": True, "evidence": True, "overflow": True}
+        run = """(async()=>{for(let i=0;i<200;i++){const text=document.body.innerText;if(text.includes('不可变 Manifest')&&text.includes('质量门禁与适用性'))return {failed:text.includes('失败'),evidence:[...document.querySelectorAll('.evidence-chain-actions button')].some(x=>x.textContent==='Source'),owners:['Ingestion','Retrieval','Context','Answer','Citation','Decision','Judge','Latency','Resources'].every(x=>text.includes(x)),overflow:document.documentElement.scrollWidth<=innerWidth};await new Promise(r=>setTimeout(r,25));}throw new Error('run did not render')})()"""
+        assert _cdp(debug_port, run, await_promise=True, target_url=run_url) == {"failed": True, "evidence": True, "owners": True, "overflow": True}
         _capture_cdp(debug_port, tmp_path / f"evaluation-run-{width}.png", target_url=run_url)
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-025 behavior")
+def test_s025_query_options_stale_preflight_poll_stop_and_terminal_cleanup(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/query?fixture=options-loading"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'query-behavior'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        options = _cdp(debug_port, """(async()=>{const initial=document.querySelector('.query-status')?.textContent;for(let i=0;i<100;i++){if(document.querySelector('.query-status')?.textContent==='Query Lab 已就绪。')return {initial,ready:true};await new Promise(r=>setTimeout(r,25))}return {initial,ready:false}})()""", await_promise=True, target_url=url)
+        assert options == {"initial": "加载 Query Lab 选项…", "ready": True}
+        empty_url = f"http://127.0.0.1:{port}/workbench/query?fixture=options-empty"
+        assert _cdp(debug_port, f"location.href={json.dumps(empty_url)};true", target_url=url) is True
+        assert _cdp(debug_port, """(async()=>{for(let i=0;i<100;i++){if(document.querySelector('.query-status')?.textContent==='没有可执行的 Query Profile 或索引。')return document.querySelectorAll('select option[value=""]').length===2;await new Promise(r=>setTimeout(r,25))}return false})()""", await_promise=True, target_url=empty_url) is True
+        error_url = f"http://127.0.0.1:{port}/workbench/query?fixture=options-error"
+        assert _cdp(debug_port, f"location.href={json.dumps(error_url)};true", target_url=empty_url) is True
+        assert _cdp(debug_port, """(async()=>{for(let i=0;i<100;i++){const s=document.querySelector('.query-status');if(s?.textContent==='Query Lab 选项不可用。')return s.getAttribute('role')==='alert';await new Promise(r=>setTimeout(r,25))}return false})()""", await_promise=True, target_url=error_url) is True
+        ready_url = f"http://127.0.0.1:{port}/workbench/query"
+        assert _cdp(debug_port, f"location.href={json.dumps(ready_url)};true", target_url=error_url) is True
+        behavior = """(async()=>{const wait=async p=>{for(let i=0;i<240;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}throw new Error('query behavior timed out')},setQuestion=value=>{q.value=value;q.dispatchEvent(new Event('input',{bubbles:true}))},preflight=()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled)?.click();const q=await wait(()=>document.querySelector('textarea[aria-label="问题"]')&&document.querySelector('.query-status')?.textContent==='Query Lab 已就绪。'&&document.querySelector('textarea[aria-label="问题"]'));setQuestion('preflight-error');preflight();await wait(()=>document.querySelector('.query-status')?.textContent==='预检失败，输入与选择已保留。');const preflightError=q.value==='preflight-error'&&!document.querySelector('.query-preflight')&&![...document.querySelectorAll('button')].some(x=>x.textContent==='创建 Query Run')&&!![...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled);setQuestion('submit-error');preflight();let ack=await wait(()=>document.querySelector('input[aria-label="确认外部阶段披露"]'));ack.click();let submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run');submit.click();await wait(()=>document.querySelector('.query-status')?.textContent==='Query Run 创建失败，可重试或重新预检。');const submitError=!!document.querySelector('.query-preflight')&&ack.checked&&!submit.disabled;setQuestion('stale-old');preflight();await new Promise(r=>setTimeout(r,30));setQuestion('local');(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled))).click();await wait(()=>document.querySelector('.query-preflight'));await new Promise(r=>setTimeout(r,250));const localOnly=!document.querySelector('input[aria-label="确认外部阶段披露"]')&&!document.body.innerText.includes('外部生成边界');setQuestion('delayed-submit');(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled))).click();ack=await wait(()=>document.querySelector('input[aria-label="确认外部阶段披露"]'));ack.click();[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run').click();setQuestion('changed while submit pending');await new Promise(r=>setTimeout(r,450));const delayedSubmit=q.value==='changed while submit pending'&&document.querySelector('.query-status')?.textContent==='输入已更改，请重新预检。'&&!document.querySelector('.final-state')&&!document.querySelector('.query-stop-host button)&&!![...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled);setQuestion('active');(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled))).click();ack=await wait(()=>document.querySelector('input[aria-label="确认外部阶段披露"]'));ack.click();[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run').click();await wait(()=>[...document.querySelectorAll('.query-stop-host button')].find(x=>x.textContent==='停止'));await new Promise(r=>setTimeout(r,1100));const oneStop=document.querySelectorAll('.query-stop-host button').length===1;document.querySelector('.query-stop-host button').click();await wait(()=>document.querySelector('.final-state')?.innerText.includes('ANSWERED')&&!document.querySelector('.query-stop-host button'));await new Promise(r=>setTimeout(r,650));const evidence=document.querySelector('.evidence-row')?.innerText||'',body=document.body.innerText;return {preflightError,submitError,localOnly,delayedSubmit,oneStop,terminalCleanup:!document.querySelector('.query-stop-host button')&&document.querySelector('.final-state')?.innerText.includes('ANSWERED'),citation:!![...document.querySelectorAll('.evidence-row button')].find(x=>x.textContent==='cit_fixture'),score:body.includes('keyword / 0.8'),decision:evidence.includes('included')&&evidence.includes('决策理由 / reason'),candidate:body.includes('vector #1 / 0.7 (cosine.normalized)')&&body.includes('Rerank 决策')&&body.includes('定位不可用')===false}})()"""
+        delayed_start, delayed_end = behavior.index("setQuestion('delayed-submit')"), behavior.index("setQuestion('active')")
+        behavior = behavior[:delayed_start] + behavior[delayed_end:]
+        behavior = behavior.replace("preflightError,submitError,localOnly,delayedSubmit,oneStop", "preflightError,submitError,localOnly,oneStop")
+        behavior = behavior.replace(
+            "const evidence=document.querySelector('.evidence-row')?.innerText||'',body=document.body.innerText;return",
+            "const evidence=document.querySelector('.evidence-row')?.innerText||'',candidateTabs=[...document.querySelectorAll('.candidate-tabs button')];candidateTabs.find(x=>x.textContent==='fusion').click();const fusionText=document.querySelector('.candidate-panel').innerText;candidateTabs.find(x=>x.textContent==='rerank').click();const rerankText=document.querySelector('.candidate-panel').innerText,body=document.body.innerText,candidateProjection=fusionText.includes('vector #1 / 0.7 (cosine.normalized)')&&fusionText.includes('第 1 页')&&rerankText.includes('included / 1->1');return",
+        ).replace(
+            "candidate:body.includes('vector #1 / 0.7 (cosine.normalized)')&&body.includes('Rerank 决策')&&body.includes('定位不可用')===false",
+            "candidate:candidateProjection",
+        )
+        assert _cdp(debug_port, behavior, await_promise=True, target_url=ready_url) == {"preflightError": True, "submitError": True, "localOnly": True, "oneStop": True, "terminalCleanup": True, "citation": True, "score": True, "decision": True, "candidate": True}
+        delayed_submit = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}throw new Error('delayed submit timeout')};const q=document.querySelector('textarea[aria-label="问题"]');q.value='delayed-submit';q.dispatchEvent(new Event('input',{bubbles:true}));(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled))).click();const ack=await wait(()=>document.querySelector('input[aria-label="确认外部阶段披露"]'));ack.click();[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run').click();q.value='changed while submit pending';q.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,450));return {question:q.value,status:document.querySelector('.query-status')?.textContent,preview:!!document.querySelector('.query-preflight'),final:!!document.querySelector('.final-state'),stop:!!document.querySelector('.query-stop-host button'),preflight:!![...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled)}})()"""
+        assert _cdp(debug_port, delayed_submit, await_promise=True, target_url=ready_url) == {"question": "changed while submit pending", "status": "输入已更改，请重新预检。", "preview": False, "final": False, "stop": False, "preflight": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-026 dataset behavior")
+def test_s026_dataset_round_trip_failures_empty_and_filter(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/evaluation-dataset"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'dataset-behavior'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}throw new Error('dataset behavior timed out')};await wait(()=>document.querySelector('.dataset-case-row[aria-pressed=true] strong')?.textContent==='qcase_0123456789abcdef');const queryFields=['Evidence Artifact ID','Evidence digest','Evidence schema','Evidence type'].every(x=>document.querySelector(`[aria-label="${x}"]`)),states=['已审核','无效','不完整'].every(x=>document.body.innerText.includes(x));[...document.querySelectorAll('.dataset-case-row')].find(x=>x.innerText.includes('ann_0123456789abcdef')).click();const targetFields=['Target kind','Target element ID','Target table ID','Target cell ID','Target locator','Target start','Target end'].every(x=>document.querySelector(`[aria-label="${x}"]`)),locator=await wait(()=>document.querySelector('[aria-label="Target locator"]')),save=()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='验证并保存');locator.value='{"kind":';locator.dispatchEvent(new Event('input',{bubbles:true}));const invalidLocator=locator.value==='{"kind":'&&save().disabled&&document.querySelector('.field-error')?.textContent.includes('有效 JSON');locator.value='{"kind":"pdf","page_number":1,"x0":0,"y0":0,"x1":0.5,"y1":0.5}';locator.dispatchEvent(new Event('input',{bubbles:true}));const correctedLocator=!save().disabled&&!document.querySelector('.field-error')?.textContent;const end=await wait(()=>document.querySelector('[aria-label="Target end"]'));end.value='9';end.dispatchEvent(new Event('input',{bubbles:true}));save().click();const question=await wait(()=>document.querySelector('textarea[aria-label="问题"]'));question.value='trigger-save-failure';question.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('button')].find(x=>x.textContent==='验证并保存').click();await wait(()=>document.querySelector('.dataset-status')?.textContent==='保存失败，编辑已保留。');const reviewer=await wait(()=>document.querySelector('input[aria-label="Reviewer ID"]'));reviewer.value='fail.review';reviewer.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('button')].find(x=>x.textContent==='标记已审核').click();await wait(()=>document.querySelector('.dataset-status')?.textContent==='审核失败，Reviewer ID 已保留。');const filter=await wait(()=>document.querySelector('input[aria-label="筛选评估数据集"]'));filter.value='empty';filter.dispatchEvent(new Event('input',{bubbles:true}));await wait(()=>document.body.innerText.includes('没有匹配数据集'));const empty=document.body.innerText.includes('没有可编辑数据集');filter.value='';filter.dispatchEvent(new Event('input',{bubbles:true}));await wait(()=>document.querySelector('.dataset-case-row[aria-pressed=true] strong')?.textContent==='qcase_0123456789abcdef'&&document.querySelector('[aria-label="Evidence Artifact ID"]'));return {queryFields,targetFields,invalidLocator,correctedLocator,saveFailure:question.value==='trigger-save-failure',reviewFailure:reviewer.value==='fail.review',empty,states,restored:document.querySelector('.dataset-detail-header h2')?.textContent==='评估数据集 / r1'&&document.querySelectorAll('.dataset-case-row').length===5}})()""", await_promise=True, target_url=url)
+        assert result == {"queryFields": True, "targetFields": True, "invalidLocator": True, "correctedLocator": True, "saveFailure": True, "reviewFailure": True, "empty": True, "states": True, "restored": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-026 gate and judge behavior")
+def test_s026_gate_and_judge_authoritative_state_matrix(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/evaluation-run?run={_EVALUATION_RUNS['status-matrix']}"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'evaluation-status'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        result = _cdp(debug_port, f"""(async()=>{{for(let i=0;i<160;i++){{if(document.querySelectorAll('.gate-row').length===4){{const text=document.body.innerText,gates=[...document.querySelectorAll('.gate-row')].map(x=>x.innerText),judge=[...document.querySelectorAll('.evaluation-diagnostic-pane dd')].map(x=>x.textContent),latency=document.querySelector('[data-owner="latency"]')?.innerText||'',resources=document.querySelector('[data-owner="resources"]')?.innerText||'',bindings=[['gate.pass','answer.coverage@1'],['gate.fail','answer.failure@1'],['gate.insufficient','citation.fixture@1'],['gate.ineligible','judge.ineligible@1']];return {{gates:['PASS','FAIL','INSUFFICIENT','INELIGIBLE'].every(x=>gates.some(row=>row.includes(x))),configured:bindings.every(([gate,metric])=>gates.some(row=>row.includes(gate)&&row.includes(metric)&&row.includes('criticality')&&row.includes('higher_is_better 0.7'))),metricNotApplicable:text.includes('NOT_APPLICABLE'),judge:['ELIGIBLE','ADVISORY','INELIGIBLE','DRIFTED'].every(x=>judge.some(row=>row.includes(x))),calibration:text.includes({json.dumps(_COMPARISON)}),manifest:text.includes('Ingestion plan digest')&&text.includes('Query plan digest')&&text.includes('fixture.ingestion@1')&&text.includes('fixture.query@1')&&text.includes('Package digest')&&text.includes('Resource sampler'),operation:latency.includes('Elapsed ms')&&!latency.includes('CPU ms')&&resources.includes('CPU ms')&&resources.includes('Peak RSS')&&resources.includes('IO bytes')&&!resources.includes('Elapsed ms')}}}}await new Promise(r=>setTimeout(r,25))}}return null}})()""", await_promise=True, target_url=url)
+        assert result == {"gates": True, "configured": True, "metricNotApplicable": True, "judge": True, "calibration": True, "manifest": True, "operation": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-025 visuals")
+@pytest.mark.parametrize("scenario", ("answered", "clarification", "abstained", "failed"))
+@pytest.mark.parametrize("width", (1440, 644))
+def test_s025_query_final_state_visual_matrix(tmp_path: Path, width: int, scenario: str) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/query"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'query-matrix'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, width)
+        expected = {"answered": "ANSWERED", "clarification": "CLARIFICATION_REQUIRED", "abstained": "ABSTAINED", "failed": "FAILED"}[scenario]
+        expression = f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}}throw new Error('query state did not render')}};const q=await wait(()=>document.querySelector('textarea[aria-label="问题"]'));q.value={json.dumps(scenario)};q.dispatchEvent(new Event('input',{{bubbles:true}}));const pre=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled));pre.click();const submit=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'));const blocked=submit.disabled;document.querySelector('input[aria-label="确认外部阶段披露"]').click();submit.click();await wait(()=>document.querySelector('.final-state')?.innerText.includes({json.dumps(expected)}));const tabs=[...document.querySelectorAll('[role=tab]')];tabs[0].focus();tabs[0].dispatchEvent(new KeyboardEvent('keydown',{{key:'ArrowRight',bubbles:true}}));const body=document.body.innerText,evidence=document.querySelector('.evidence-row')?.innerText||'',citation=[...document.querySelectorAll('.evidence-row button')].some(x=>x.textContent==='cit_fixture');return {{blocked,threePanes:document.querySelector('.query-workspace').children.length===3,tabbed:tabs.length===3&&tabs[1].getAttribute('aria-selected')==='true',decisions:body.includes('included')&&body.includes('excluded_budget')&&evidence.includes('决策理由 / reason')&&evidence.includes('included'),shortage:body.includes('below_minimum')&&body.includes('96'),candidate:body.includes('vector #1 / 0.7 (cosine.normalized)')&&body.includes('第 1 页'),evidenceScore:body.includes('贡献者 / safe_score')&&body.includes('keyword / 0.8'),missingCitation:{str(scenario != 'failed').lower()}||body.includes('cit_missing'),citationCommand:citation==={str(scenario == 'answered').lower()},noAnswer:{str(scenario == 'answered').lower()}||!body.includes('Evidence-bound fixture answer'),noInventedRepair:!body.includes('repair 1'),noRaw:!body.includes('[object Object]')&&!body.includes('"chunk_id"'),overflow:document.documentElement.scrollWidth<=innerWidth}}}})()"""
+        assert _cdp(debug_port, expression, await_promise=True, target_url=url) == {"blocked": True, "threePanes": True, "tabbed": True, "decisions": True, "shortage": True, "candidate": True, "evidenceScore": True, "missingCitation": True, "citationCommand": True, "noAnswer": True, "noInventedRepair": True, "noRaw": True, "overflow": True}
+        if width == 644:
+            assert _cdp(debug_port, "document.querySelector('.final-state').scrollIntoView();true", target_url=url) is True
+        baseline_scenario = "clarification-required" if scenario == "clarification" else scenario
+        image = tmp_path / f"query-{baseline_scenario}-{width}.png"
+        _capture_cdp(debug_port, image, target_url=url)
+        _assert_manifest_visual(debug_port, image, image.name, target_url=url, baseline_root=S025_BASELINE_ROOT, story="S-025")
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-026 visuals")
+@pytest.mark.parametrize("scenario", ("running", "failed-gates", "passed-gates", "invalid-dataset"))
+@pytest.mark.parametrize("width", (1440, 644))
+def test_s026_evaluation_run_visual_matrix(tmp_path: Path, width: int, scenario: str) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/evaluation-run?run={_EVALUATION_RUNS[scenario]}"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'evaluation-matrix'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, width)
+        has_report = scenario in {"failed-gates", "passed-gates"}
+        state = _cdp(debug_port, f"""(async()=>{{for(let i=0;i<160;i++){{if(document.querySelector('.evaluation-run-header')){{const text=document.body.innerText,latency=document.querySelector('[data-owner="latency"]')?.innerText||'',resources=document.querySelector('[data-owner="resources"]')?.innerText||'';return {{manifest:text.includes('不可变 Manifest')&&text.includes('Ingestion plan digest')&&text.includes('Query plan digest')&&text.includes('Declared identities')&&text.includes('Bindings')&&text.includes('Package digest'),layers:{str(not has_report).lower()}||['Ingestion','Retrieval','Context','Answer','Citation','Decision','Judge','Latency','Resources'].every(x=>text.includes(x)),operation:{str(not has_report).lower()}||(latency.includes('Elapsed ms')&&!latency.includes('CPU ms')&&resources.includes('CPU ms')&&!resources.includes('Elapsed ms')),configured:{str(not has_report).lower()}||text.includes('criticality')&&text.includes('higher_is_better 0.7'),permanent:{str(not has_report).lower()}||text.includes('质量门禁与适用性'),safeInvalid:{str(scenario != 'invalid-dataset').lower()}||text.includes('EVALUATION_ARTIFACT_UNAVAILABLE'),running:{str(scenario != 'running').lower()}||text.includes('指标将在不可变报告生成后显示'),noOverall:!text.includes('总体分数'),overflow:document.documentElement.scrollWidth<=innerWidth}}}}await new Promise(r=>setTimeout(r,25))}}throw new Error('evaluation run did not render')}})()""", await_promise=True, target_url=url)
+        assert state == {"manifest": scenario != "invalid-dataset", "layers": True, "operation": True, "configured": True, "permanent": True, "safeInvalid": True, "running": True, "noOverall": True, "overflow": True}
+        if has_report:
+            target = ".evaluation-diagnostic-pane" if width == 644 else ".evaluation-metric-pane"
+            _cdp(debug_port, f"document.querySelector({json.dumps(target)}).scrollIntoView(); true", target_url=url)
+        image = tmp_path / f"evaluation-run-{scenario}-{width}.png"
+        _capture_cdp(debug_port, image, target_url=url)
+        _assert_manifest_visual(debug_port, image, image.name, target_url=url, baseline_root=S026_BASELINE_ROOT, story="S-026")
+        if scenario == "failed-gates":
+            assert _cdp(debug_port, "(()=>{const owner=document.querySelector('select[aria-label=\"指标 Owner\"]');owner.value='answer';owner.dispatchEvent(new Event('change',{bubbles:true}));return document.body.innerText.includes('gate.answer')&&document.body.innerText.includes('INELIGIBLE')})()", target_url=url) is True
     finally:
         _close_isolated_chrome(debug_port, browser)
         server.terminate()
