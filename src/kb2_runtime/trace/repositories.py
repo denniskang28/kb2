@@ -350,6 +350,21 @@ class TraceRepository:
             )
             return tuple(await cursor.fetchall())
 
+    async def list_workbench_run_history(self, limit: int = 50) -> tuple[dict[str, Any], ...]:
+        """Bounded raw facts for the mixed history projection.
+
+        The workbench classifies only these stored plan facts; it must not infer
+        a run category from labels, errors, or artifact bodies.
+        """
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT r.id,r.engine_kind,r.state,r.terminal_state,r.created_at,r.started_at,r.ended_at,"
+                "p.plan_digest,p.plan_json FROM runs r JOIN execution_plan_snapshots p ON p.id=r.plan_snapshot_id "
+                "ORDER BY r.created_at DESC,r.id DESC LIMIT %s",
+                (max(1, min(limit, 100)),),
+            )
+            return tuple(await cursor.fetchall())
+
     async def list_run_artifacts(self, run_id: UUID) -> tuple[ArtifactManifest, ...]:
         async with self.connection.cursor() as cursor:
             await cursor.execute(

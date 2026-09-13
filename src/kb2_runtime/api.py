@@ -24,6 +24,7 @@ from kb2_runtime.ingestion_engine import IngestionEngine
 from kb2_runtime.workbench.documents import DocumentWorkbenchService
 from kb2_runtime.workbench.query import QueryWorkbenchService
 from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService
+from kb2_runtime.workbench.diagnosis import ComparisonWorkbenchService, RunHistoryWorkbenchService
 from kb2_runtime.evaluation.datasets.repository import DatasetRepository
 from uuid import UUID
 
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     app.state.workbench_documents = None
     app.state.workbench_query = None
     app.state.workbench_evaluation = None
+    app.state.workbench_diagnosis = None
 
     async def studio() -> StudioService:
         # The workspace value itself is durable in PostgreSQL; this cached
@@ -97,6 +99,13 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
             datasets = await DatasetRepository.connect(**runtime_settings.connection_kwargs())
             app.state.workbench_evaluation = EvaluationWorkbenchService(datasets, traces, ArtifactService(traces, ArtifactStore(runtime_settings.artifact_root)))
         return app.state.workbench_evaluation
+
+    async def diagnosis() -> tuple[ComparisonWorkbenchService, RunHistoryWorkbenchService]:
+        if app.state.workbench_diagnosis is None:
+            traces = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+            artifacts = ArtifactService(traces, ArtifactStore(runtime_settings.artifact_root))
+            app.state.workbench_diagnosis = (ComparisonWorkbenchService(traces, artifacts), RunHistoryWorkbenchService(traces))
+        return app.state.workbench_diagnosis
 
     def problem(code: str, status: int = 400) -> JSONResponse:
         return JSONResponse({"contractVersion": "workbench-problem/v1", "code": code}, status_code=status)
@@ -277,6 +286,41 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     async def evaluation_run(run_id: UUID) -> JSONResponse:
         result = await (await evaluation()).run(run_id)
         return JSONResponse(result) if result else problem("EVALUATION_RUN_NOT_FOUND", 404)
+
+    @app.get("/api/workbench/comparisons/eligible")
+    async def comparison_eligible() -> JSONResponse:
+        return JSONResponse(await (await diagnosis())[0].eligible())
+
+    @app.post("/api/workbench/comparisons")
+    async def comparison_create(payload: dict[str, object]) -> JSONResponse:
+        try:
+            baseline, candidate = UUID(str(payload.get("baselineReportId"))), UUID(str(payload.get("candidateReportId")))
+        except (ValueError, TypeError):
+            return problem("COMPARISON_INCOMPATIBLE", 422)
+        result = await (await diagnosis())[0].create(baseline, candidate)
+        return JSONResponse(result, status_code=201 if result["valid"] else 409)
+
+    @app.get("/api/workbench/comparisons/{artifact_id}")
+    async def comparison_detail(artifact_id: UUID) -> JSONResponse:
+        result = await (await diagnosis())[0].detail(artifact_id)
+        return JSONResponse(result) if result else problem("COMPARISON_NOT_FOUND", 404)
+
+    @app.get("/api/workbench/runs")
+    async def run_history(runType: str = Query(default="", max_length=16), state: str = Query(default="", max_length=16), q: str = Query(default="", max_length=64)) -> JSONResponse:
+        return JSONResponse(await (await diagnosis())[1].list(runType, state, q))
+
+    @app.get("/api/workbench/runs/{run_id}")
+    async def run_history_detail(run_id: UUID) -> JSONResponse:
+        result = await (await diagnosis())[1].detail(run_id)
+        # Recovery authority belongs to the owner workflow's live process map,
+        # never to a persisted Run state inferred by the history projection.
+        if result and result["type"] == "INGESTION":
+            owner = await (await documents()).run(run_id)
+            result["actions"] = owner["actions"] if owner else {}
+        elif result and result["type"] == "QUERY":
+            owner = await (await query_lab()).run(run_id)
+            result["actions"] = owner["actions"] if owner else {}
+        return JSONResponse(result) if result else problem("RUN_NOT_FOUND", 404)
 
     @app.post("/api/workbench/query-runs/{run_id}/stop")
     async def stop_query_run(run_id: UUID) -> JSONResponse:

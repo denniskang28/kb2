@@ -75,6 +75,10 @@ _ARTIFACT = "12345678-1234-5678-1234-567812345681"
 _VISUAL_RUN = "12345678-1234-5678-1234-567812345682"
 _EVALUATION_DATASET = "12345678-1234-5678-1234-567812345690"
 _EVALUATION_RUN = "12345678-1234-5678-1234-567812345691"
+_COMPARISON = "12345678-1234-5678-1234-567812345693"
+_COMPARISON_BASELINE = "12345678-1234-5678-1234-567812345694"
+_COMPARISON_CANDIDATE = "12345678-1234-5678-1234-567812345695"
+_HISTORY_QUERY = "12345678-1234-5678-1234-567812345696"
 
 
 @fixture_app.put("/api/workbench/documents/preflight")
@@ -279,6 +283,65 @@ async def fixture_evaluation_run(run_id: str) -> JSONResponse:
         "navigation": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"links":[{"case_id":"qcase_0123456789abcdef", "source_artifact_id":_ARTIFACT, "evidence_artifact_id":_ARTIFACT, "generation_artifact_id":_ARTIFACT, "verification_artifact_id":_ARTIFACT}]}}, "unavailable": []})
 
 
+def _comparison_fixture() -> dict[str, object]:
+    return {"schema_version": "EvaluationComparison/v1", "baseline_report_id": _COMPARISON_BASELINE,
+            "candidate_report_id": _COMPARISON_CANDIDATE, "mode": "MULTI_AXIS_NON_CAUSAL",
+            "axis": None, "changes": ["ingestion.plugin", "query.plugin"],
+            "quality": {"deltas": [{"key": ["answer", "expected-fact-coverage"],
+                         "delta": {"baseline": 0.0, "candidate": 0.2, "absolute": 0.2,
+                                   "relative": None, "relative_state": "UNDEFINED_BASELINE_ZERO"}}]},
+            "confidence": {"baseline": {"state": "UNAVAILABLE"}, "candidate": {"state": "VALUE", "samples": 12}},
+            "gates": {"baseline": [{"gate_id": "gate.answer", "state": "FAIL"}], "candidate": []},
+            "failed_cases": {"baseline": [{"case_id": "qcase_0123456789abcdef", "evidence_artifact_id": _ARTIFACT}], "candidate": []},
+            "latency": {"baseline": 8, "candidate": 9},
+            "resources": {"baseline": {"availability": "AVAILABLE"}, "candidate": {"availability": "PARTIAL"}},
+            "recommendation": "BASELINE_RETAINED"}
+
+
+@fixture_app.get("/api/workbench/comparisons/eligible")
+async def fixture_comparison_eligible() -> JSONResponse:
+    return JSONResponse([{"reportId": _COMPARISON_BASELINE, "runId": _EVALUATION_RUN, "manifestId": _ARTIFACT,
+                          "datasetDigest": "a" * 64, "inputCatalogDigest": "b" * 64, "state": "SUCCEEDED"},
+                         {"reportId": _COMPARISON_CANDIDATE, "runId": _EVALUATION_RUN, "manifestId": _ARTIFACT,
+                          "datasetDigest": "a" * 64, "inputCatalogDigest": "b" * 64, "state": "SUCCEEDED"}])
+
+
+@fixture_app.post("/api/workbench/comparisons")
+async def fixture_comparison_create(request: Request) -> JSONResponse:
+    payload = await request.json()
+    if payload == {"baselineReportId": _COMPARISON_BASELINE, "candidateReportId": _COMPARISON_BASELINE}:
+        return JSONResponse({"contractVersion": "workbench-problem/v1", "code": "COMPARISON_INCOMPATIBLE", "reason": "PINNED_INPUTS_NOT_EQUIVALENT"}, status_code=409)
+    assert payload == {"baselineReportId": _COMPARISON_BASELINE, "candidateReportId": _COMPARISON_CANDIDATE}
+    return JSONResponse({"valid": True, "runId": _EVALUATION_RUN, "artifactId": _COMPARISON,
+                         "comparison": {"artifactId": _COMPARISON, "comparison": _comparison_fixture()}}, status_code=201)
+
+
+@fixture_app.get("/api/workbench/runs")
+async def fixture_run_history(runType: str = "", state: str = "", q: str = "") -> JSONResponse:
+    rows = [{"id": _HISTORY_QUERY, "type": "QUERY", "state": "RUNNING", "terminalState": None,
+             "createdAt": "2026-09-13T00:00:00Z", "startedAt": "2026-09-13T00:00:00Z", "endedAt": None,
+             "planDigest": "f" * 64},
+            {"id": _EVALUATION_RUN, "type": "COMPARISON", "state": "SUCCEEDED", "terminalState": "SUCCEEDED",
+             "createdAt": "2026-09-12T00:00:00Z", "startedAt": "2026-09-12T00:00:00Z", "endedAt": "2026-09-12T00:01:00Z",
+             "planDigest": "e" * 64}]
+    return JSONResponse([row for row in rows if (not runType or row["type"] == runType) and (not state or row["state"] == state) and (not q or q.lower() in row["id"] or q.lower() in row["planDigest"])])
+
+
+@fixture_app.get("/api/workbench/runs/{run_id}")
+async def fixture_run_history_detail(run_id: str) -> JSONResponse:
+    assert run_id == _HISTORY_QUERY
+    return JSONResponse({"id": run_id, "type": "QUERY", "state": "RUNNING", "planDigest": "f" * 64,
+                         "stages": [{"stageKey": "evidence", "attempt": 1, "state": "RUNNING",
+                                     "artifacts": [{"id": _ARTIFACT, "artifactType": "evidence.set"}]}],
+                         "actions": {"stop": True}})
+
+
+@fixture_app.post("/api/workbench/query-runs/{run_id}/stop")
+async def fixture_stop_query_run(run_id: str) -> JSONResponse:
+    assert run_id == _HISTORY_QUERY
+    return JSONResponse({"stopped": True})
+
+
 @fixture_app.get("/workbench/assets/{asset_name}")
 async def fixture_asset(asset_name: str) -> FileResponse:
     media_type = {"workbench.js": "text/javascript", "workbench.css": "text/css", "artifact.css": "text/css"}.get(asset_name)
@@ -310,7 +373,8 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url:
         while True:
             message = json.loads(socket.recv())
             if message.get("id") == 1:
-                assert "exceptionDetails" not in message.get("result", {}), message
+                if "exceptionDetails" in message.get("result", {}):
+                    pytest.fail(message["result"]["exceptionDetails"]["exception"]["description"])
                 return message["result"]["result"].get("value")
     finally:
         socket.close()
@@ -647,5 +711,48 @@ def test_fixture_backed_evaluation_dataset_and_run_states(tmp_path: Path, width:
         _capture_cdp(debug_port, tmp_path / f"evaluation-run-{width}.png", target_url=run_url)
     finally:
         _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-027 visual evidence",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+def test_fixture_backed_comparison_and_mixed_history_diagnosis_matrix(tmp_path: Path, width: int) -> None:
+    """S-027 visual matrix: comparison bands, non-causal state, and Run drilldown."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    compare_url = f"http://127.0.0.1:{port}/workbench/compare"
+    for _ in range(60):
+        try:
+            if httpx.get(compare_url, timeout=.2).is_success:
+                break
+        except httpx.HTTPError:
+            pass
+        time.sleep(.05)
+    else:
+        server.terminate()
+        server.wait(timeout=10)
+        pytest.fail("S-027 fixture shell did not start")
+    browser = subprocess.Popen([str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 's027'}", compare_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        compare = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('comparison did not render: '+document.body.innerText)};const base=await wait(()=>{const x=document.querySelector('select[aria-label="基准 Evaluation Report"]');return x&&x.options.length===3&&x});const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');base.value='12345678-1234-5678-1234-567812345694';candidate.value=base.value;submit.click();await wait(()=>document.body.innerText.includes('PINNED_INPUTS_NOT_EQUIVALENT'));const safeReason=document.body.innerText.includes('COMPARISON_INCOMPATIBLE')&&!document.body.innerText.includes('comparison inputs are not pinned-equivalent');candidate.value='12345678-1234-5678-1234-567812345695';submit.click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));const text=document.body.innerText,table=document.querySelector('.dense-table');return {safeReason,nonCausal:text.includes('MULTI_AXIS_NON_CAUSAL')&&!text.includes('单轴变化'),bands:text.includes('质量门禁')&&text.includes('失败案例')&&text.includes('延迟（独立）')&&text.includes('本地资源（独立）'),confidence:text.includes('UNAVAILABLE')&&text.includes('samples'),zeroBaseline:text.includes('UNDEFINED_BASELINE_ZERO'),tableScrollable:table.parentElement.scrollWidth>table.parentElement.clientWidth,overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('button,select,input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
+        assert _cdp(debug_port, compare, await_promise=True, target_url=compare_url) == {"safeReason": True, "nonCausal": True, "bands": True, "confidence": True, "zeroBaseline": True, "tableScrollable": width < 900, "overflow": True, "controls": True}
+        _capture_cdp(debug_port, tmp_path / f"s027-comparison-{width}.png", target_url=compare_url)
+
+        history_url = f"http://127.0.0.1:{port}/workbench/runs?runType=QUERY&runState=RUNNING&q=12345678"
+        assert _cdp(debug_port, f"location.href={json.dumps(history_url)}", target_url=compare_url) == history_url
+        history = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('history did not render')};const trace=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='Trace'));trace.click();await wait(()=>document.body.innerText.includes('evidence.set'));const stop=[...document.querySelectorAll('button')].find(x=>x.textContent==='停止');const ownerAction=!!stop&&!document.body.innerText.includes('重新运行');stop.click();return {filters:document.querySelector('select[aria-label="Run 类型"]').value==='QUERY'&&document.querySelector('select[aria-label="Run 状态"]').value==='RUNNING',artifact:[...document.querySelectorAll('button')].some(x=>x.textContent.includes('Artifact evidence.set')),ownerAction,selected:location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('runType=QUERY')&&location.search.includes('runState=RUNNING'),overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('button,select,input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
+        assert _cdp(debug_port, history, await_promise=True, target_url=history_url) == {"filters": True, "artifact": True, "ownerAction": True, "selected": True, "overflow": True, "controls": True}
+        context = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('context flow did not render')};const artifact=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Artifact evidence.set'));artifact.click();await wait(()=>document.querySelector('.artifact-inspector'));const drawerPreserves=location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('q=12345678');document.querySelector('.artifact-inspector button').click();[...document.querySelectorAll('a')].find(x=>x.textContent==='比较').click();return drawerPreserves})()"""
+        assert _cdp(debug_port, context, await_promise=True) is True
+        assert _cdp(debug_port, "({compare:location.pathname.endsWith('/compare'),run:new URL(location).searchParams.get('run'),type:new URL(location).searchParams.get('runType'),state:new URL(location).searchParams.get('runState'),q:new URL(location).searchParams.get('q')})") == {"compare": True, "run": _HISTORY_QUERY, "type": "QUERY", "state": "RUNNING", "q": "12345678"}
+        _capture_cdp(debug_port, tmp_path / f"s027-history-{width}.png")
+    finally:
+        browser.terminate()
+        browser.wait(timeout=10)
         server.terminate()
         server.wait(timeout=10)
