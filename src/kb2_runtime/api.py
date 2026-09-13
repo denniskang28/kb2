@@ -22,6 +22,7 @@ from kb2_runtime.plugins.contracts import RunnerType
 from kb2_runtime.query_engine import QueryEngine
 from kb2_runtime.ingestion_engine import IngestionEngine
 from kb2_runtime.workbench.documents import DocumentWorkbenchService
+from kb2_runtime.workbench.query import QueryWorkbenchService
 from uuid import UUID
 
 
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     app.state.workbench_studio = None
     app.state.workbench_query_runner = None
     app.state.workbench_documents = None
+    app.state.workbench_query = None
 
     async def studio() -> StudioService:
         # The workspace value itself is durable in PostgreSQL; this cached
@@ -72,6 +74,19 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
                 external_capabilities=frozenset(item.id for item in runtime_catalog.capabilities if item.provider is not None),
             )
         return app.state.workbench_documents
+
+    async def query_lab() -> QueryWorkbenchService:
+        if app.state.workbench_query is None:
+            repository = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+            artifacts = ArtifactService(repository, ArtifactStore(runtime_settings.artifact_root))
+            runs = RunService(repository)
+            registry = bootstrap_registry()
+            executor = PluginExecutor(registry, {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)
+            app.state.workbench_query = QueryWorkbenchService(
+                await studio(), registry, QueryEngine(executor, runs, artifacts), runs, artifacts,
+                external_capabilities=frozenset(item.id for item in runtime_catalog.capabilities if item.provider is not None),
+            )
+        return app.state.workbench_query
 
     def problem(code: str, status: int = 400) -> JSONResponse:
         return JSONResponse({"contractVersion": "workbench-problem/v1", "code": code}, status_code=status)
@@ -180,6 +195,47 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     async def workbench_plugin(plugin_id: str) -> JSONResponse:
         item = await (await studio()).plugin_detail(plugin_id)
         return JSONResponse(item.model_dump(mode="json", exclude_none=True) if item else {"contractVersion": "workbench-problem/v1", "code": "PLUGIN_NOT_FOUND"}, status_code=200 if item else 404)
+
+    @app.get("/api/workbench/query-lab/options")
+    async def query_options() -> JSONResponse:
+        try:
+            return JSONResponse(await (await query_lab()).options())
+        except Exception:
+            return problem("QUERY_OPTIONS_UNAVAILABLE", 503)
+
+    @app.post("/api/workbench/query-lab/preflights")
+    async def query_preflight(payload: dict[str, object]) -> JSONResponse:
+        try:
+            question, profile_id, index_id = payload.get("question"), payload.get("profileId"), payload.get("indexId")
+            if not isinstance(question, str) or not isinstance(profile_id, str) or not isinstance(index_id, str):
+                raise ValueError
+            return JSONResponse(await (await query_lab()).preflight(question, profile_id, UUID(index_id)))
+        except LookupError as exc:
+            return problem(str(exc), 404)
+        except Exception:
+            return problem("QUERY_PREFLIGHT_INVALID", 422)
+
+    @app.post("/api/workbench/query-lab/preflights/{token}/runs")
+    async def query_submit(token: str, payload: dict[str, object]) -> JSONResponse:
+        try:
+            return JSONResponse(await (await query_lab()).submit(token, payload.get("acknowledgeExternal") is True), status_code=202)
+        except LookupError as exc:
+            return problem(str(exc), 404)
+        except PermissionError as exc:
+            return problem(str(exc), 409)
+        except RuntimeError:
+            return problem("QUERY_SUBMISSION_UNAVAILABLE", 503)
+        except Exception:
+            return problem("QUERY_SUBMISSION_INVALID", 422)
+
+    @app.get("/api/workbench/query-runs/{run_id}")
+    async def query_run(run_id: UUID) -> JSONResponse:
+        result = await (await query_lab()).run(run_id)
+        return JSONResponse(jsonable_encoder(result)) if result else problem("QUERY_RUN_NOT_FOUND", 404)
+
+    @app.post("/api/workbench/query-runs/{run_id}/stop")
+    async def stop_query_run(run_id: UUID) -> JSONResponse:
+        return JSONResponse({"stopped": True}) if await (await query_lab()).stop(run_id) else problem("QUERY_STOP_UNAVAILABLE", 409)
 
     @app.put("/api/workbench/documents/preflight")
     async def document_preflight(request: Request, profile_id: str = Header(alias="X-Profile-Id"), filename: str = Header(alias="X-Filename"), media_type: str = Header(default="application/octet-stream", alias="Content-Type")) -> JSONResponse:

@@ -234,6 +234,14 @@ class TraceRepository:
             signals = tuple(QualitySignal(**row) for row in await cursor.fetchall())
         return ArtifactManifest(parent_artifact_ids=parents, metrics=metrics, quality_signals=signals, **artifact)
 
+    async def list_artifact_manifests(self, artifact_type: str, schema_revision: str, limit: int = 100) -> tuple[ArtifactManifest, ...]:
+        """Bounded catalog read for workbench selectors; storage locations stay private."""
+        async with self.connection.cursor() as cursor:
+            await cursor.execute("""SELECT id FROM artifacts WHERE artifact_type=%s AND schema_revision=%s
+                                  ORDER BY id DESC LIMIT %s""", (artifact_type, schema_revision, limit))
+            identifiers = [row["id"] for row in await cursor.fetchall()]
+        return tuple(item for identifier in identifiers if (item := await self.get_artifact_manifest(identifier)) is not None)
+
     async def get_run_trace(self, run_id: UUID) -> RunTrace | None:
         async with self.connection.cursor() as cursor:
             await cursor.execute(

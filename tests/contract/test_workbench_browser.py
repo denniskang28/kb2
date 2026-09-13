@@ -4,6 +4,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import time
@@ -197,28 +198,61 @@ async def fixture_artifact(artifact_id: str) -> JSONResponse:
     })
 
 
+@fixture_app.get("/api/workbench/query-lab/options")
+async def fixture_query_options() -> JSONResponse:
+    return JSONResponse({"profiles": [{"profileId": "browser-query", "updatedAt": "2026-09-13T00:00:00Z"}],
+                         "indexes": [{"id": _ARTIFACT, "summary": "fixture indexed Artifact"}]})
+
+
+@fixture_app.post("/api/workbench/query-lab/preflights")
+async def fixture_query_preflight() -> JSONResponse:
+    return JSONResponse({"token": "query-token", "planDigest": "f" * 64,
+                         "stages": [{"stageId": "keyword", "kind": "retrieve", "pluginId": "retriever.keyword@1"}],
+                         "disclosure": {"externalStages": [{"stage": "generate", "capability": "generation.default"}]}})
+
+
+@fixture_app.post("/api/workbench/query-lab/preflights/query-token/runs")
+async def fixture_query_submit() -> JSONResponse:
+    return JSONResponse({"runId": "12345678-1234-5678-1234-567812345689", "planDigest": "f" * 64}, status_code=202)
+
+
+@fixture_app.get("/api/workbench/query-runs/{run_id}")
+async def fixture_query_run(run_id: str) -> JSONResponse:
+    assert run_id == "12345678-1234-5678-1234-567812345689"
+    locator = {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5}
+    return JSONResponse({"id": run_id, "state": "SUCCEEDED", "terminalState": "SUCCEEDED", "actions": {"stop": False},
+                         "stages": [{"stageKey": "keyword", "attempt": 1, "state": "SUCCEEDED", "pluginId": "retriever.keyword@1"}],
+                         "candidates": [{"stageId": "keyword", "available": True, "rows": [{"chunk_id": "chk_fixture", "safe_score": .8}]}],
+                         "evidence": [{"citationKey": "cit_fixture", "excerpt": "Long fixture evidence " * 80, "documentId": "doc_fixture", "chunkId": "chk_fixture", "locators": [locator], "contributors": [{"contributor_id": "keyword", "safe_score": .8}], "hierarchy": [], "tableElementIds": [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator}],
+                         "details": [{"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []}],
+                         "final": {"state": "ANSWERED", "answer": "Evidence-bound fixture answer", "citationKeys": ["cit_fixture"], "action": None}})
+
+
 @fixture_app.get("/workbench/assets/{asset_name}")
 async def fixture_asset(asset_name: str) -> FileResponse:
-    return FileResponse(STATIC_ROOT / asset_name)
+    media_type = {"workbench.js": "text/javascript", "workbench.css": "text/css", "artifact.css": "text/css"}.get(asset_name)
+    if media_type is None:
+        return FileResponse(STATIC_ROOT / "index.html", status_code=404, media_type="text/html")
+    return FileResponse(STATIC_ROOT / asset_name, media_type=media_type)
 
 
 @fixture_app.get("/workbench/{path:path}")
 async def fixture_shell(path: str) -> FileResponse:
-    return FileResponse(STATIC_ROOT / "index.html")
+    return FileResponse(STATIC_ROOT / "index.html", media_type="text/html")
 
 
-def _cdp(port: int, expression: str, *, await_promise: bool = False) -> object:
+def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url: str | None = None) -> object:
     for _ in range(60):
         try:
             pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=0.2).json()
-            if any("/workbench/" in page.get("url", "") for page in pages):
+            if any(page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")) for page in pages):
                 break
         except httpx.HTTPError:
             pass
         time.sleep(0.1)
     else:
         pytest.fail("Chrome DevTools endpoint did not start")
-    page = next(page for page in pages if "/workbench/" in page.get("url", ""))
+    page = next(page for page in pages if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
     socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
     try:
         socket.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": expression, "awaitPromise": await_promise, "returnByValue": True}}))
@@ -231,9 +265,9 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False) -> object:
         socket.close()
 
 
-def _capture_cdp(port: int, target: Path) -> None:
+def _capture_cdp(port: int, target: Path, *, target_url: str | None = None) -> None:
     pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=1).json()
-    page = next(page for page in pages if "/workbench/" in page.get("url", ""))
+    page = next(page for page in pages if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
     socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
     try:
         socket.send(json.dumps({"id": 2, "method": "Page.captureScreenshot", "params": {"format": "png"}}))
@@ -244,6 +278,41 @@ def _capture_cdp(port: int, target: Path) -> None:
                 return
     finally:
         socket.close()
+
+
+def _free_local_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _launch_isolated_chrome(arguments: list[str]) -> subprocess.Popen[str]:
+    """Start an isolated Chrome instance rather than handing off to macOS's app singleton."""
+    command = [str(CHROME), *arguments]
+    if sys.platform == "darwin":
+        command = ["open", "-na", "Google Chrome", "--args", *arguments]
+    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def _close_isolated_chrome(port: int, browser: subprocess.Popen[str]) -> tuple[str, str]:
+    """Close the CDP-owned app on macOS; the launcher process may already have exited."""
+    try:
+        version = httpx.get(f"http://127.0.0.1:{port}/json/version", timeout=1).json()
+        socket = websocket.create_connection(version["webSocketDebuggerUrl"], origin="http://localhost")
+        try:
+            socket.send(json.dumps({"id": 1, "method": "Browser.close"}))
+            socket.recv()
+        finally:
+            socket.close()
+    except (httpx.HTTPError, OSError, KeyError, websocket.WebSocketException):
+        pass
+    if browser.poll() is None:
+        browser.terminate()
+    try:
+        return browser.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        browser.kill()
+        return browser.communicate(timeout=10)
 
 
 @pytest.mark.skipif(
@@ -449,5 +518,57 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
     finally:
         browser.terminate()
         browser.wait(timeout=10)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-025 visual evidence",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+def test_fixture_backed_query_lab_evidence_locator_and_narrow_layout(tmp_path: Path, width: int) -> None:
+    port, debug_port = "8898", _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    try:
+        for _ in range(60):
+            try:
+                if httpx.get(f"http://127.0.0.1:{port}/api/workbench/query-lab/options", timeout=.2).is_success:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(.05)
+        else:
+            pytest.fail("Query Lab fixture server did not start")
+    except BaseException:
+        server.terminate()
+        server.wait(timeout=10)
+        raise
+    url = f"http://127.0.0.1:{port}/workbench/query"
+    for _ in range(60):
+        try:
+            if httpx.get(url, timeout=.2).is_success:
+                break
+        except httpx.HTTPError:
+            pass
+        time.sleep(.05)
+    else:
+        server.terminate()
+        server.wait(timeout=10)
+        pytest.fail("Query Lab fixture shell did not start")
+    browser = _launch_isolated_chrome([
+        "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
+        "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}",
+        f"--window-size={width},900", f"--user-data-dir={tmp_path / 'query-profile'}", url,
+    ])
+    try:
+        expression = """(async () => { const wait = async (label,p) => { for(let i=0;i<100;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error(`Query Lab fixture did not render: ${label}`); }; await wait('initial controls',()=>document.querySelector('textarea[aria-label="问题"]') && document.querySelector('select[aria-label="已索引 Artifact"] option')); document.querySelector('textarea[aria-label="问题"]').value='long question'; [...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click(); await wait('preflight',()=>document.body.innerText.includes('已解析计划')); const ack=document.querySelector('input[aria-label="确认外部阶段披露"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'); const blocked=submit.disabled; ack.click(); submit.click(); const citation=await wait('run result',()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='cit_fixture')); citation.click(); const drawer=await wait('source inspector',()=>document.querySelector('.artifact-inspector')); const selected=await wait('source locator selection',()=>drawer.querySelectorAll('.source-selected').length===2); return {blocked, answer:document.body.innerText.includes('Evidence-bound fixture answer'), candidates:document.body.innerText.includes('chk_fixture'), selected, overflow:document.documentElement.scrollWidth<=innerWidth}; })()"""
+        assert _cdp(int(debug_port), expression, await_promise=True, target_url=url) == {"blocked": True, "answer": True, "candidates": True, "selected": True, "overflow": True}
+        _capture_cdp(int(debug_port), tmp_path / f"query-evidence-{width}.png", target_url=url)
+        assert _cdp(int(debug_port), "(async()=>{document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,30));return !document.querySelector('.artifact-inspector')})()", await_promise=True, target_url=url) is True
+    finally:
+        stdout, stderr = _close_isolated_chrome(int(debug_port), browser)
+        assert not stdout and not stderr
         server.terminate()
         server.wait(timeout=10)
