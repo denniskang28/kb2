@@ -385,7 +385,14 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
 
     @app.get("/workbench/assets/{asset_name}")
     async def workbench_asset(asset_name: str) -> FileResponse:
-        if asset_name not in {"workbench.css", "workbench.js", "artifact.css"}:
+        if asset_name not in {
+            "workbench.css",
+            "workbench.js",
+            "artifact.css",
+            "archivo-400.woff2",
+            "archivo-600.woff2",
+            "archivo-800.woff2",
+        }:
             return FileResponse(static_root / "index.html", status_code=404)
         return FileResponse(static_root / asset_name)
 

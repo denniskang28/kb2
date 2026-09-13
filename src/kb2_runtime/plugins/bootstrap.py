@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from .contracts import PluginContext, PluginDescriptor, PluginInvocationResult, PluginOutput, ResourceHints, RunnerType
 from .registry import PluginRegistry
-from kb2_runtime.canonical.normalizer import CanonicalNormalizer, CanonicalNormalizerConfig
+from kb2_runtime.canonical.normalizer import MAX_PROVIDER_FIXTURE_BYTES, CanonicalNormalizer, CanonicalNormalizerConfig
 from kb2_runtime.ingestion_adapters import (
     LocalPdfParser,
     NativeOoxmlParser,
@@ -80,7 +80,7 @@ CANONICAL_NORMALIZER_DESCRIPTOR = PluginDescriptor(
     output_schemas=(("canonical.document", "v1"),),
     input_ports=({"name": "provider_result", "artifact_type": "provider.parse-result-fixture", "schema_revision": "v1"},),
     output_ports=({"name": "canonical_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
-    resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
+    resource_hints=ResourceHints(max_output_bytes=MAX_PROVIDER_FIXTURE_BYTES), timeout_seconds=10,
 )
 
 
@@ -101,7 +101,7 @@ LOCAL_PDF_PARSER_DESCRIPTOR = PluginDescriptor(
     input_ports=({"name": "source", "artifact_type": "opaque.bytes", "schema_revision": "v1"},),
     output_ports=({"name": "provider_result", "artifact_type": "provider.parse-result-fixture", "schema_revision": "v1"},),
     quality_signal_names=("layout_detected", "languages_observed"),
-    resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=30,
+    resource_hints=ResourceHints(max_output_bytes=MAX_PROVIDER_FIXTURE_BYTES), timeout_seconds=30,
 )
 
 

@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from kb2_runtime.canonical.contracts import ProviderFixture
+from kb2_runtime.canonical.normalizer import MAX_PROVIDER_FIXTURE_BYTES
 from kb2_runtime.plugins.bootstrap import bootstrap_registry
 from kb2_runtime.plugins.contracts import ArtifactInput as PluginArtifactInput, RunnerType
 from kb2_runtime.plugins.errors import PluginError, PluginErrorCode
@@ -145,10 +146,10 @@ def test_normalizer_rejects_any_input_count_other_than_its_single_declared_paren
     assert runs.failures == []
 
 
-def test_raw_fixture_over_512_kib_fails_before_decode_without_committing_an_artifact() -> None:
+def test_raw_fixture_over_limit_fails_before_decode_without_committing_an_artifact() -> None:
     async def exercise() -> tuple[Artifacts, Runs]:
         valid_json = json.dumps(fixture(), sort_keys=True, separators=(",", ":")).encode()
-        source = valid_json + (b" " * (512 * 1024 - len(valid_json) + 1))
+        source = valid_json + (b" " * (MAX_PROVIDER_FIXTURE_BYTES - len(valid_json) + 1))
         artifacts, runs = Artifacts(source), Runs()
         executor = PluginExecutor(
             bootstrap_registry(), {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts

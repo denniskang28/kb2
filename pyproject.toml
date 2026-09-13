@@ -29,7 +29,14 @@ test = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-"kb2_runtime.workbench" = ["static/*.css", "static/*.html", "static/*.js"]
+"kb2_runtime.workbench" = [
+  "static/*.css",
+  "static/*.html",
+  "static/*.js",
+  "static/*.json",
+  "static/*.txt",
+  "static/*.woff2",
+]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
