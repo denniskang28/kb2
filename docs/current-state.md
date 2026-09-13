@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-025 Implemented; S-026 through S-027 Confirmed
-- **Active Story:** None; S-026 is next eligible
+- **Stories:** S-001 through S-026 Implemented; S-027 Confirmed
+- **Active Story:** None; S-027 is next eligible
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,9 +58,9 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-026 next for evaluation dataset and evaluation run workflows.
-S-026 through S-027 are confirmed and may enter just-in-time technical design
-when their declared dependencies are implemented.
+Deliver S-027 next for comparison and cross-run diagnosis workflows.
+S-027 is confirmed and may enter just-in-time technical design when its
+declared dependencies are implemented.
 
 ## Change History
 
@@ -204,3 +204,9 @@ when their declared dependencies are implemented.
   fast-forwarded into local main and reconciliation commit `65f41e9` recorded
   the delivery close. Broader browser/Docker residuals remain documented as
   unrelated legacy harness/environment limitations.
+- **2026-09-13:** S-026 completed engine-owned Evaluation Dataset editing and
+  explicit review, immutable Evaluation Run manifest/report projections,
+  layered metric/applicability and gate visibility, failed-case Artifact
+  navigation, and responsive Chrome coverage. Focused service/API and browser
+  verification passed; the existing Docker lifecycle residual remains
+  environment-limited.

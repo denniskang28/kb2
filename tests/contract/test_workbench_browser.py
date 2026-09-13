@@ -73,6 +73,8 @@ compatible_requests: list[dict[str, object]] = []
 _INGESTION_RUN = "12345678-1234-5678-1234-567812345680"
 _ARTIFACT = "12345678-1234-5678-1234-567812345681"
 _VISUAL_RUN = "12345678-1234-5678-1234-567812345682"
+_EVALUATION_DATASET = "12345678-1234-5678-1234-567812345690"
+_EVALUATION_RUN = "12345678-1234-5678-1234-567812345691"
 
 
 @fixture_app.put("/api/workbench/documents/preflight")
@@ -226,6 +228,55 @@ async def fixture_query_run(run_id: str) -> JSONResponse:
                          "evidence": [{"citationKey": "cit_fixture", "excerpt": "Long fixture evidence " * 80, "documentId": "doc_fixture", "chunkId": "chk_fixture", "locators": [locator], "contributors": [{"contributor_id": "keyword", "safe_score": .8}], "hierarchy": [], "tableElementIds": [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator}],
                          "details": [{"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []}],
                          "final": {"state": "ANSWERED", "answer": "Evidence-bound fixture answer", "citationKeys": ["cit_fixture"], "action": None}})
+
+
+def _evaluation_dataset() -> dict[str, object]:
+    slices = {"format":"pdf","processing_class":"native","native_ocr":"native","structure":"prose","language":"zh","question_class":"lookup","difficulty":"low","criticality":"high"}
+    return {"id": _EVALUATION_DATASET, "revision": 1, "revisionId": "12345678-1234-5678-1234-567812345692", "digest": "e" * 64,
+            "createdAt": "2026-09-13T00:00:00Z", "annotationCount": 0, "queryCaseCount": 1, "reviewedCount": 0, "caseCount": 1,
+            "validation": {"qcase_0123456789abcdef": []}, "content": {"schema_revision": "GoldenDataset/v1", "taxonomy": {"schema_version":"SliceTaxonomy/v1", "dimensions": {}}, "annotations": [],
+            "query_cases": [{"id":"qcase_0123456789abcdef", "source":{"id":_ARTIFACT,"content_digest":"a" * 64,"schema_revision":"v1","artifact_type":"canonical.document"}, "slices":slices,
+            "provenance":{"origin":"generated","operation":"generated","created_at":"2026-09-13T00:00:00Z"}, "reviews":[], "question":"fixture question", "evidence":None, "answerability":"unanswerable", "expected_facts":[], "forbidden_facts":[], "relevant_evidence_ids":[], "required_citation_keys":[], "deterministic_answer":None}]}}
+
+
+@fixture_app.get("/api/workbench/evaluation-datasets")
+async def fixture_evaluation_datasets() -> JSONResponse:
+    item = _evaluation_dataset()
+    return JSONResponse([{key: item[key] for key in ("id", "revision", "revisionId", "digest", "createdAt", "annotationCount", "queryCaseCount", "reviewedCount", "caseCount")}])
+
+
+@fixture_app.get("/api/workbench/evaluation-datasets/{dataset_id}")
+async def fixture_evaluation_dataset(dataset_id: str) -> JSONResponse:
+    assert dataset_id == _EVALUATION_DATASET
+    return JSONResponse(_evaluation_dataset())
+
+
+@fixture_app.put("/api/workbench/evaluation-datasets/{dataset_id}")
+async def fixture_evaluation_dataset_save(dataset_id: str, request: Request) -> JSONResponse:
+    assert dataset_id == _EVALUATION_DATASET
+    assert "GoldenDataset/v1" in (await request.body()).decode()
+    return JSONResponse({"valid": True, "dataset": _evaluation_dataset()})
+
+
+@fixture_app.post("/api/workbench/evaluation-datasets/{dataset_id}/revisions/{revision}/cases/{case_id}/review")
+async def fixture_evaluation_review(dataset_id: str, revision: int, case_id: str, request: Request) -> JSONResponse:
+    assert (dataset_id, revision, case_id) == (_EVALUATION_DATASET, 1, "qcase_0123456789abcdef")
+    assert (await request.json())["reviewer"] == "fixture.reviewer"
+    return JSONResponse({"valid": True, "dataset": _evaluation_dataset()})
+
+
+@fixture_app.get("/api/workbench/evaluation-runs")
+async def fixture_evaluation_runs() -> JSONResponse:
+    return JSONResponse([{ "id": _EVALUATION_RUN, "state": "FAILED", "terminalState": "FAILED", "createdAt": "2026-09-13T00:00:00Z", "startedAt": "2026-09-13T00:00:00Z", "endedAt": "2026-09-13T00:01:00Z", "planDigest": "f" * 64 }])
+
+
+@fixture_app.get("/api/workbench/evaluation-runs/{run_id}")
+async def fixture_evaluation_run(run_id: str) -> JSONResponse:
+    assert run_id == _EVALUATION_RUN
+    return JSONResponse({"id": run_id, "state": "FAILED", "terminalState": "FAILED", "planDigest": "f" * 64,
+        "manifest": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"schema_version":"EvaluationManifest/v1", "dataset_snapshot_digest":"d" * 64}},
+        "report": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"layers":{"ingestion":["m1"],"retrieval":["m2"],"answer":["m3"],"citation":[],"decision":["m4"],"latency":["m5"],"resources":["m6"]}, "gate_results":[{"state":"FAILED","state_counts":{"insufficient_labels":1}}]}},
+        "navigation": {"artifactId": _ARTIFACT, "digest": "a" * 64, "value": {"links":[{"case_id":"qcase_0123456789abcdef", "source_artifact_id":_ARTIFACT, "evidence_artifact_id":_ARTIFACT, "generation_artifact_id":_ARTIFACT, "verification_artifact_id":_ARTIFACT}]}}, "unavailable": []})
 
 
 @fixture_app.get("/workbench/assets/{asset_name}")
@@ -570,5 +621,31 @@ def test_fixture_backed_query_lab_evidence_locator_and_narrow_layout(tmp_path: P
     finally:
         stdout, stderr = _close_isolated_chrome(int(debug_port), browser)
         assert not stdout and not stderr
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-026 visual evidence",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+def test_fixture_backed_evaluation_dataset_and_run_states(tmp_path: Path, width: int) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    dataset_url = f"http://127.0.0.1:{port}/workbench/evaluation-dataset"
+    browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'evaluation'}", dataset_url])
+    try:
+        dataset = """(async()=>{const wait=async p=>{for(let i=0;i<100;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('dataset did not render')};const row=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('r1 / 0/1')));row.click();await wait(()=>document.querySelector('textarea[aria-label=\"评估数据集 Schema\"]'));window.prompt=()=> 'fixture.reviewer';[...document.querySelectorAll('button')].find(x=>x.textContent==='标记已审核').click();return {generated:document.body.innerText.includes('待审核'),review:document.body.innerText.includes('标记已审核'),overflow:document.documentElement.scrollWidth<=innerWidth}})()"""
+        assert _cdp(debug_port, dataset, await_promise=True, target_url=dataset_url) == {"generated": True, "review": True, "overflow": True}
+        _capture_cdp(debug_port, tmp_path / f"evaluation-dataset-{width}.png", target_url=dataset_url)
+        run_url = f"http://127.0.0.1:{port}/workbench/evaluation-run?run={_EVALUATION_RUN}"
+        assert _cdp(debug_port, f"location.href='{run_url}'; true", target_url=dataset_url) is True
+        run = """(async()=>{for(let i=0;i<100;i++){const text=document.body.innerText;if(text.includes('不可变 Manifest')&&text.includes('ingestion: 1 个报告')&&text.includes('质量门禁与 Judge 校准'))return {failed:text.includes('FAILED'),evidence:[...document.querySelectorAll('button')].some(x=>x.textContent==='source_artifact_id'),overflow:document.documentElement.scrollWidth<=innerWidth};await new Promise(r=>setTimeout(r,25));}throw new Error('run did not render')})()"""
+        assert _cdp(debug_port, run, await_promise=True, target_url=run_url) == {"failed": True, "evidence": True, "overflow": True}
+        _capture_cdp(debug_port, tmp_path / f"evaluation-run-{width}.png", target_url=run_url)
+    finally:
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)

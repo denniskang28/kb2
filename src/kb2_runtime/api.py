@@ -23,6 +23,8 @@ from kb2_runtime.query_engine import QueryEngine
 from kb2_runtime.ingestion_engine import IngestionEngine
 from kb2_runtime.workbench.documents import DocumentWorkbenchService
 from kb2_runtime.workbench.query import QueryWorkbenchService
+from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService
+from kb2_runtime.evaluation.datasets.repository import DatasetRepository
 from uuid import UUID
 
 
@@ -42,6 +44,7 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     app.state.workbench_query_runner = None
     app.state.workbench_documents = None
     app.state.workbench_query = None
+    app.state.workbench_evaluation = None
 
     async def studio() -> StudioService:
         # The workspace value itself is durable in PostgreSQL; this cached
@@ -87,6 +90,13 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
                 external_capabilities=frozenset(item.id for item in runtime_catalog.capabilities if item.provider is not None),
             )
         return app.state.workbench_query
+
+    async def evaluation() -> EvaluationWorkbenchService:
+        if app.state.workbench_evaluation is None:
+            traces = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+            datasets = await DatasetRepository.connect(**runtime_settings.connection_kwargs())
+            app.state.workbench_evaluation = EvaluationWorkbenchService(datasets, traces, ArtifactService(traces, ArtifactStore(runtime_settings.artifact_root)))
+        return app.state.workbench_evaluation
 
     def problem(code: str, status: int = 400) -> JSONResponse:
         return JSONResponse({"contractVersion": "workbench-problem/v1", "code": code}, status_code=status)
@@ -232,6 +242,41 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
     async def query_run(run_id: UUID) -> JSONResponse:
         result = await (await query_lab()).run(run_id)
         return JSONResponse(jsonable_encoder(result)) if result else problem("QUERY_RUN_NOT_FOUND", 404)
+
+    @app.get("/api/workbench/evaluation-datasets")
+    async def evaluation_datasets(q: str = Query(default="", max_length=64)) -> JSONResponse:
+        try:
+            return JSONResponse(await (await evaluation()).datasets(q))
+        except Exception:
+            return problem("EVALUATION_DATASETS_UNAVAILABLE", 503)
+
+    @app.get("/api/workbench/evaluation-datasets/{dataset_id}")
+    async def evaluation_dataset(dataset_id: UUID, revision: int | None = Query(default=None, ge=1)) -> JSONResponse:
+        result = await (await evaluation()).dataset(dataset_id, revision)
+        return JSONResponse(result) if result else problem("EVALUATION_DATASET_NOT_FOUND", 404)
+
+    @app.put("/api/workbench/evaluation-datasets/{dataset_id}")
+    async def edit_evaluation_dataset(dataset_id: UUID, payload: dict[str, object]) -> JSONResponse:
+        result = await (await evaluation()).edit(dataset_id, payload)
+        return JSONResponse(result, status_code=200 if result["valid"] else 422)
+
+    @app.post("/api/workbench/evaluation-datasets/{dataset_id}/revisions/{revision}/cases/{case_id}/review")
+    async def review_evaluation_case(dataset_id: UUID, revision: int, case_id: str, payload: dict[str, object]) -> JSONResponse:
+        reviewer = payload.get("reviewer")
+        result = await (await evaluation()).review(dataset_id, revision, case_id, reviewer if isinstance(reviewer, str) else "")
+        return JSONResponse(result, status_code=200 if result["valid"] else 409)
+
+    @app.get("/api/workbench/evaluation-runs")
+    async def evaluation_runs() -> JSONResponse:
+        try:
+            return JSONResponse(await (await evaluation()).runs())
+        except Exception:
+            return problem("EVALUATION_RUNS_UNAVAILABLE", 503)
+
+    @app.get("/api/workbench/evaluation-runs/{run_id}")
+    async def evaluation_run(run_id: UUID) -> JSONResponse:
+        result = await (await evaluation()).run(run_id)
+        return JSONResponse(result) if result else problem("EVALUATION_RUN_NOT_FOUND", 404)
 
     @app.post("/api/workbench/query-runs/{run_id}/stop")
     async def stop_query_run(run_id: UUID) -> JSONResponse:

@@ -69,6 +69,20 @@ class DatasetRepository:
         hydrated = content.model_copy(update={"annotations": tuple(with_reviews(item) for item in content.annotations), "query_cases": tuple(with_reviews(item) for item in content.query_cases)})
         return GoldenDataset(id=dataset_id, revision_id=row["id"], revision=revision, parent_revision_id=row["parent_revision_id"], content=hydrated, content_digest=row["content_digest"], operation=row["operation"], created_at=row["created_at"])
 
+    async def list_latest(self, query: str = "", limit: int = 50) -> tuple[GoldenDataset, ...]:
+        """Return a bounded latest-revision catalog without inventing a second dataset model."""
+        needle = f"%{query.strip().lower()}%"
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT r.dataset_id, r.revision FROM golden_dataset_revisions r "
+                "JOIN (SELECT dataset_id, MAX(revision) AS revision FROM golden_dataset_revisions GROUP BY dataset_id) latest "
+                "ON latest.dataset_id=r.dataset_id AND latest.revision=r.revision "
+                "WHERE LOWER(r.content_json::text) LIKE %s ORDER BY r.created_at DESC LIMIT %s",
+                (needle, max(1, min(limit, 100))),
+            )
+            rows = await cursor.fetchall()
+        return tuple(await self.get(row["dataset_id"], row["revision"]) for row in rows)
+
     async def record_review(self, dataset_id: UUID, revision: int, case_id: str, review: ReviewEvent) -> None:
         async with self.connection.cursor() as cursor:
             await cursor.execute("SELECT id, content_json FROM golden_dataset_revisions WHERE dataset_id=%s AND revision=%s", (dataset_id, revision))

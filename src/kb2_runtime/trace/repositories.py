@@ -340,6 +340,27 @@ class TraceRepository:
             )
             return tuple(await cursor.fetchall())
 
+    async def list_evaluation_workbench_runs(self, limit: int = 50) -> tuple[dict[str, Any], ...]:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT r.id, r.state, r.terminal_state, r.created_at, r.started_at, r.ended_at, p.plan_digest "
+                "FROM runs r JOIN execution_plan_snapshots p ON p.id=r.plan_snapshot_id "
+                "WHERE r.engine_kind='evaluation' ORDER BY r.created_at DESC LIMIT %s",
+                (max(1, min(limit, 100)),),
+            )
+            return tuple(await cursor.fetchall())
+
+    async def list_run_artifacts(self, run_id: UUID) -> tuple[ArtifactManifest, ...]:
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT a.id, a.artifact_type, a.schema_revision, a.content_digest, a.byte_size, a.summary, "
+                "a.storage_locator, a.producing_run_id, a.producing_stage_attempt_id, a.producing_plugin_id, "
+                "a.configuration_digest, a.parent_artifact_ids "
+                "FROM artifacts a WHERE a.producing_run_id=%s ORDER BY a.created_at",
+                (run_id,),
+            )
+            return tuple(ArtifactManifest.model_validate(row) for row in await cursor.fetchall())
+
     async def list_plugin_workbench_runs(self, plugin_id: str, limit: int = 8) -> tuple[dict[str, Any], ...]:
         """Safe, bounded lifecycle facts only; no attempt error/configuration/artifact content."""
         async with self.connection.cursor() as cursor:
