@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict
 
 from kb2_runtime.canonical.contracts import ProviderFixture
-from kb2_runtime.ingestion_adapters import NativeOoxmlParser
+from kb2_runtime.ingestion_adapters import LocalPdfParser, NativeOoxmlParser
 from kb2_runtime.plugins.bootstrap import bootstrap_registry
 from kb2_runtime.plugins.contracts import PluginDescriptor, PluginInvocationResult, PluginOutput, RunnerType
 from kb2_runtime.plugins.executor import PluginExecutor
@@ -31,6 +31,25 @@ def native_docx() -> bytes:
         archive.writestr("_rels/.rels", relationships)
         archive.writestr("word/document.xml", document)
     return result.getvalue()
+
+
+def native_pdf() -> bytes:
+    objects = (
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 720 Td (Annual Report) Tj ET\nendstream",
+    )
+    result, offsets = bytearray(b"%PDF-1.4\n"), []
+    for index, value in enumerate(objects, start=1):
+        offsets.append(len(result))
+        result.extend(f"{index} 0 obj\n".encode() + value + b"\nendobj\n")
+    start = len(result)
+    result.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    result.extend(b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets))
+    result.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n".encode())
+    return bytes(result)
 
 
 class Runs:
@@ -99,6 +118,20 @@ def test_adapter_schemas_descriptors_and_native_provider_result_are_typed_and_de
     assert first_output.producing_plugin_id == "parser.native-ooxml@1"
     assert first_output.parent_artifact_ids == (first.id,)
     assert first_output.configuration_digest == hashlib.sha256(b"{}").hexdigest()
+
+
+def test_local_pdf_parser_extracts_page_text_with_pdf_locator() -> None:
+    registry = bootstrap_registry()
+    assert registry.get("parser.local-pdf@1").descriptor.input_schemas == (("opaque.bytes", "v1"),)
+    artifacts, runs = invoke("parser.local-pdf@1", "opaque.bytes", native_pdf())
+    output, payload = artifacts.commits[0][0][0]
+    fixture = ProviderFixture.model_validate_json(payload)
+    assert output.artifact_type == "provider.parse-result-fixture"
+    assert fixture.adapter_id == "parser.local-pdf@1"
+    assert fixture.elements[0].text == "Annual Report"
+    assert fixture.elements[0].locator.kind == "pdf"
+    assert fixture.elements[0].locator.page_number == 1
+    assert not runs.failures
 
 
 def test_scanned_ocr_fixture_is_bilingual_and_only_safe_evidence_is_emitted() -> None:

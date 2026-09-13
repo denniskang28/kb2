@@ -22,6 +22,7 @@ _SENSITIVE_TEXT = re.compile(
     r"(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|[A-Za-z0-9+/=_-]{32,})",
     re.IGNORECASE,
 )
+_DIGEST_FIELDS = frozenset({"implementation_digest", "configuration_digest", "content_digest", "plan_digest"})
 
 
 def safe_metadata_text(value: str) -> str:
@@ -37,7 +38,10 @@ def metadata_contains_sensitive_text(value: object) -> bool:
     if isinstance(value, str):
         return safe_metadata_text(value) == "[redacted]"
     if isinstance(value, dict):
-        return any(metadata_contains_sensitive_text(key) or metadata_contains_sensitive_text(item) for key, item in value.items())
+        return any(
+            metadata_contains_sensitive_text(key) or (key not in _DIGEST_FIELDS and metadata_contains_sensitive_text(item))
+            for key, item in value.items()
+        )
     if isinstance(value, (list, tuple)):
         return any(metadata_contains_sensitive_text(item) for item in value)
     return False

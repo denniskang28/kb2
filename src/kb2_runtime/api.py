@@ -21,6 +21,7 @@ from kb2_runtime.plugins.runner import InProcessRunner
 from kb2_runtime.plugins.contracts import RunnerType
 from kb2_runtime.query_engine import QueryEngine
 from kb2_runtime.ingestion_engine import IngestionEngine
+from kb2_runtime.ingestion_profiles.errors import ProfileError
 from kb2_runtime.workbench.documents import DocumentWorkbenchService
 from kb2_runtime.workbench.query import QueryWorkbenchService
 from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService

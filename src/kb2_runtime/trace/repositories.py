@@ -392,7 +392,7 @@ class TraceRepository:
         async with self.connection.cursor() as cursor:
             await cursor.execute(
                 "SELECT profile_id, profile_kind, updated_at FROM profile_workspaces "
-                "WHERE (%s IS NULL OR profile_kind=%s) AND profile_id ILIKE %s "
+                "WHERE (%s::text IS NULL OR profile_kind=%s::text) AND profile_id ILIKE %s "
                 "ORDER BY profile_kind, profile_id LIMIT 64",
                 (kind, kind, f"%{query}%"),
             )

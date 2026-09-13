@@ -35,6 +35,14 @@ def test_json_yaml_and_mapping_order_compile_to_same_complete_plan() -> None:
     assert [stage["axis"] for stage in first.canonical_payload["stages"]] == list(AXES)
 
 
+def test_profile_axes_can_be_reordered_by_persistent_json_storage() -> None:
+    value = profile()
+    axes = value["profiles"][0]["axes"]
+    value["profiles"][0]["axes"] = {name: axes[name] for name in reversed(AXES)}
+    plan = compiled(value).get("default").canonical_payload
+    assert [stage["axis"] for stage in plan["stages"]] == list(AXES)
+
+
 def test_compiled_plan_preserves_conditional_fallback_order_and_acceptance_policy() -> None:
     value = profile()
     axis = value["profiles"][0]["axes"]["extraction"]

@@ -87,7 +87,7 @@ class Profile(ProfileContract):
 
     @model_validator(mode="after")
     def all_axes(self) -> "Profile":
-        if tuple(self.axes) != AXES:
+        if set(self.axes) != set(AXES):
             raise ValueError("axes must contain exactly the fixed ingestion axes in order")
         return self
 

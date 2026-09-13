@@ -9,6 +9,7 @@ from .contracts import PluginContext, PluginDescriptor, PluginInvocationResult, 
 from .registry import PluginRegistry
 from kb2_runtime.canonical.normalizer import CanonicalNormalizer, CanonicalNormalizerConfig
 from kb2_runtime.ingestion_adapters import (
+    LocalPdfParser,
     NativeOoxmlParser,
     OcrExchangeConfig,
     ScannedOcrExchangeAdapter,
@@ -79,7 +80,7 @@ CANONICAL_NORMALIZER_DESCRIPTOR = PluginDescriptor(
     output_schemas=(("canonical.document", "v1"),),
     input_ports=({"name": "provider_result", "artifact_type": "provider.parse-result-fixture", "schema_revision": "v1"},),
     output_ports=({"name": "canonical_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
-    timeout_seconds=10,
+    resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
 )
 
 
@@ -90,6 +91,17 @@ NATIVE_OOXML_PARSER_DESCRIPTOR = PluginDescriptor(
     input_ports=({"name": "source", "artifact_type": "source.native-ooxml", "schema_revision": "v1"},),
     output_ports=({"name": "provider_result", "artifact_type": "provider.native-ooxml-result", "schema_revision": "v1"},),
     quality_signal_names=("layout_detected", "languages_observed"), timeout_seconds=10,
+)
+
+
+LOCAL_PDF_PARSER_DESCRIPTOR = PluginDescriptor(
+    plugin_id="parser.local-pdf@1", kind="parser", implementation_digest="4" * 64,
+    runner=RunnerType.IN_PROCESS, configuration_schema=CanonicalNormalizerConfig.model_json_schema(),
+    input_schemas=(("opaque.bytes", "v1"),), output_schemas=(("provider.parse-result-fixture", "v1"),),
+    input_ports=({"name": "source", "artifact_type": "opaque.bytes", "schema_revision": "v1"},),
+    output_ports=({"name": "provider_result", "artifact_type": "provider.parse-result-fixture", "schema_revision": "v1"},),
+    quality_signal_names=("layout_detected", "languages_observed"),
+    resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=30,
 )
 
 
@@ -139,7 +151,7 @@ CANONICAL_CHUNKER_DESCRIPTOR = PluginDescriptor(
     input_schemas=(("canonical.document", "v1"),), output_schemas=(("chunk.set", "v1"),),
     input_ports=({"name": "canonical_document", "artifact_type": "canonical.document", "schema_revision": "v1"},),
     output_ports=({"name": "chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
-    quality_signal_names=("chunk_validation", "citation_validation"), timeout_seconds=10,
+    quality_signal_names=("chunk_validation", "citation_validation"), resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
 )
 
 
@@ -149,7 +161,7 @@ CHUNK_METADATA_ENRICHER_DESCRIPTOR = PluginDescriptor(
     input_schemas=(("chunk.set", "v1"),), output_schemas=(("chunk.set", "v1"),),
     input_ports=({"name": "chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
     output_ports=({"name": "enriched_chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
-    quality_signal_names=("chunk_validation", "citation_validation", "enrichment_validation"), timeout_seconds=10,
+    quality_signal_names=("chunk_validation", "citation_validation", "enrichment_validation"), resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
 )
 
 EMBEDDER_HASHING_DESCRIPTOR = PluginDescriptor(
@@ -158,7 +170,7 @@ EMBEDDER_HASHING_DESCRIPTOR = PluginDescriptor(
     input_schemas=(("chunk.set", "v1"),), output_schemas=(("embedding.set", "v1"),),
     input_ports=({"name": "chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"},),
     output_ports=({"name": "embedding_set", "artifact_type": "embedding.set", "schema_revision": "v1"},),
-    quality_signal_names=("embedding_validation",), timeout_seconds=10,
+    quality_signal_names=("embedding_validation",), resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
 )
 
 SEARCH_DOCUMENT_PROJECTOR_DESCRIPTOR = PluginDescriptor(
@@ -167,7 +179,7 @@ SEARCH_DOCUMENT_PROJECTOR_DESCRIPTOR = PluginDescriptor(
     input_schemas=(("chunk.set", "v1"), ("embedding.set", "v1")), output_schemas=(("search.document.set", "v1"),),
     input_ports=({"name": "chunk_set", "artifact_type": "chunk.set", "schema_revision": "v1"}, {"name": "embedding_set", "artifact_type": "embedding.set", "schema_revision": "v1"}),
     output_ports=({"name": "search_document_set", "artifact_type": "search.document.set", "schema_revision": "v1"},),
-    quality_signal_names=("search_document_validation",), timeout_seconds=10,
+    quality_signal_names=("search_document_validation",), resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
 )
 
 LOCAL_HYBRID_INDEXER_DESCRIPTOR = PluginDescriptor(
@@ -176,7 +188,7 @@ LOCAL_HYBRID_INDEXER_DESCRIPTOR = PluginDescriptor(
     input_schemas=(("search.document.set", "v1"),), output_schemas=(("search.index.result", "v1"),),
     input_ports=({"name": "search_document_set", "artifact_type": "search.document.set", "schema_revision": "v1"},),
     output_ports=({"name": "search_index_result", "artifact_type": "search.index.result", "schema_revision": "v1"},),
-    quality_signal_names=("index_validation",), timeout_seconds=10,
+    quality_signal_names=("index_validation",), resource_hints=ResourceHints(max_output_bytes=16 * 1024 * 1024), timeout_seconds=10,
 )
 
 
@@ -350,6 +362,7 @@ def bootstrap_registry(
     registry.register(SYNTHETIC_TRANSFORM_DESCRIPTOR, SyntheticTransform, SyntheticTransformConfig)
     registry.register(CANONICAL_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
     registry.register(NATIVE_OOXML_PARSER_DESCRIPTOR, NativeOoxmlParser, CanonicalNormalizerConfig)
+    registry.register(LOCAL_PDF_PARSER_DESCRIPTOR, LocalPdfParser, CanonicalNormalizerConfig)
     registry.register(SCANNED_OCR_EXCHANGE_DESCRIPTOR, ScannedOcrExchangeAdapter, OcrExchangeConfig)
     registry.register(NATIVE_OOXML_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)
     registry.register(SCANNED_OCR_NORMALIZER_DESCRIPTOR, CanonicalNormalizer, CanonicalNormalizerConfig)

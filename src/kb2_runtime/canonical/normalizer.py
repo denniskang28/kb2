@@ -19,7 +19,7 @@ from .contracts import (
 )
 from .serializer import canonical_document_bytes, locator_key, stable_id
 
-MAX_PROVIDER_FIXTURE_BYTES = 512 * 1024
+MAX_PROVIDER_FIXTURE_BYTES = 16 * 1024 * 1024
 
 
 class CanonicalNormalizerConfig(BaseModel):

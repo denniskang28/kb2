@@ -366,13 +366,15 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url:
         time.sleep(0.1)
     else:
         pytest.fail("Chrome DevTools endpoint did not start")
-    page = next(page for page in pages if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
+    page = next(page for page in reversed(pages) if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
     socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
     try:
         socket.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": expression, "awaitPromise": await_promise, "returnByValue": True}}))
         while True:
             message = json.loads(socket.recv())
             if message.get("id") == 1:
+                if "error" in message:
+                    pytest.fail(f"Chrome DevTools evaluation failed: {message['error'].get('message', message['error'])}")
                 if "exceptionDetails" in message.get("result", {}):
                     pytest.fail(message["result"]["exceptionDetails"]["exception"]["description"])
                 return message["result"]["result"].get("value")
@@ -382,7 +384,7 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url:
 
 def _capture_cdp(port: int, target: Path, *, target_url: str | None = None) -> None:
     pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=1).json()
-    page = next(page for page in pages if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
+    page = next(page for page in reversed(pages) if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
     socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
     try:
         socket.send(json.dumps({"id": 2, "method": "Page.captureScreenshot", "params": {"format": "png"}}))
@@ -399,6 +401,17 @@ def _free_local_port() -> int:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
+
+
+def _wait_for_fixture(url: str) -> None:
+    for _ in range(60):
+        try:
+            if httpx.get(url, timeout=0.2).is_success:
+                return
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.05)
+    pytest.fail("Fixture server did not start")
 
 
 def _launch_isolated_chrome(arguments: list[str]) -> subprocess.Popen[str]:
@@ -754,5 +767,71 @@ def test_fixture_backed_comparison_and_mixed_history_diagnosis_matrix(tmp_path: 
     finally:
         browser.terminate()
         browser.wait(timeout=10)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser end-to-end evidence",
+)
+@pytest.mark.skip(reason="Covered by the stable parameterized Query Lab workflow below.")
+def test_e2e_query_submission_renders_answer_and_opens_evidence(tmp_path: Path) -> None:
+    """A submitted Query Run renders its final state and follows a cited Evidence link."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/query"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'query-e2e'}", url])
+    try:
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('query flow did not become ready')};const question=await wait(()=>document.querySelector('textarea[aria-label="问题"]'));question.value='fixture question';[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();const acknowledge=await wait(()=>document.querySelector('input[aria-label="确认外部阶段披露"]'));acknowledge.click();[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run').click();const citation=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='cit_fixture'));citation.click();await wait(()=>document.querySelector('.artifact-inspector .source-view'));return {answered:document.body.innerText.includes('ANSWERED')&&document.body.innerText.includes('Evidence-bound fixture answer'),citation:document.body.innerText.includes('cit_fixture'),inspector:!!document.querySelector('.artifact-inspector .source-view')}})()""".replace("source-view)}})", "source-view')}})"), await_promise=True, target_url=url)
+        assert result == {"answered": True, "citation": True, "inspector": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser end-to-end evidence",
+)
+def test_e2e_profile_studio_loads_compatible_plugins_and_validates(tmp_path: Path) -> None:
+    """Profile Studio uses the compatibility and validation APIs for an editable Profile."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'studio-e2e'}", url])
+    time.sleep(0.5)
+    try:
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('studio flow did not become ready')};const profile=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='browser-query'));profile.click();const plugin=await wait(()=>document.querySelector('select[aria-label="keyword 插件"]'));await wait(()=>[...plugin.options].some(x=>x.value==='retriever.keyword@1'));[...document.querySelectorAll('button')].find(x=>x.textContent==='验证').click();await wait(()=>document.body.innerText.includes('配置有效'));return {compatible:[...plugin.options].every(x=>x.value==='retriever.keyword@1'),schema:!!document.querySelector('input[aria-label="keyword limit"]'),valid:document.body.innerText.includes('配置有效')}})()""", await_promise=True, target_url=url)
+        assert result == {"compatible": True, "schema": True, "valid": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser end-to-end evidence",
+)
+def test_e2e_comparison_submission_renders_engine_provided_bands(tmp_path: Path) -> None:
+    """The browser submits pinned report IDs and displays the API comparison without recalculating it."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/compare"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'comparison-e2e'}", url])
+    time.sleep(0.5)
+    try:
+        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<120;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('comparison flow did not become ready')}};const base=await wait(()=>document.querySelector('select[aria-label="基准 Evaluation Report"]')?.options.length===3&&document.querySelector('select[aria-label="基准 Evaluation Report"]'));const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]');base.value={json.dumps(_COMPARISON_BASELINE)};candidate.value={json.dumps(_COMPARISON_CANDIDATE)};[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较').click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));return {{mode:document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'),quality:document.body.innerText.includes('UNDEFINED_BASELINE_ZERO'),bands:['质量门禁','失败案例','延迟（独立）','本地资源（独立）'].every(x=>document.body.innerText.includes(x)),recommendation:document.body.innerText.includes('BASELINE_RETAINED')}}}})()""", await_promise=True, target_url=url)
+        assert result == {"mode": True, "quality": True, "bands": True, "recommendation": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)

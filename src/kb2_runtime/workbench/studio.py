@@ -96,13 +96,13 @@ class StudioService:
             payload = source if source is not None else __import__("json").dumps(document)
             if kind == "ingestion":
                 parsed = ProfileParser.parse(payload, media_type)  # type: ignore[arg-type]
-                normalized = parsed.model_dump(mode="json")
+                normalized = parsed.model_dump(mode="json", exclude_none=True)
                 if not compile:
                     return ProfileValidation(valid=True, normalizedDocument=normalized)
                 plan = ProfileCompiler(await self._registry()).compile(parsed).get(parsed.default_profile_id)
             else:
                 parsed = QueryProfileParser.parse(payload, media_type)  # type: ignore[arg-type]
-                normalized = parsed.model_dump(mode="json")
+                normalized = parsed.model_dump(mode="json", exclude_none=True)
                 if not compile:
                     return ProfileValidation(valid=True, normalizedDocument=normalized)
                 if search_artifact is None:

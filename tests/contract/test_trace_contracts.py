@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult
+from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult, metadata_contains_sensitive_text
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.schemas import schema_is_supported
@@ -260,6 +260,11 @@ def test_plan_digest_is_canonical_bounded_and_engine_types_are_closed() -> None:
     with pytest.raises(TraceError, match="PLAN_SNAPSHOT_INVALID"):
         plan_digest({"callable": lambda: None})
     assert {kind.value for kind in EngineKind} == {"ingestion", "query", "evaluation"}
+
+
+def test_plan_metadata_allows_identity_digests_but_not_secrets() -> None:
+    assert not metadata_contains_sensitive_text({"implementation_digest": "a" * 64})
+    assert metadata_contains_sensitive_text({"configuration": {"api_key": CANARY_SECRET}})
 
 
 def test_parent_lineage_contract_rejects_duplicates() -> None:

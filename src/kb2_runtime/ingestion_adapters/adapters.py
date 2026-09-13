@@ -7,6 +7,8 @@ import zipfile
 from typing import Annotated
 from xml.etree import ElementTree
 
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from kb2_runtime.canonical.contracts import ProviderFixture
@@ -15,6 +17,10 @@ from kb2_runtime.plugins.contracts import PluginContext, PluginInvocationResult,
 from kb2_runtime.plugins.errors import PluginError, PluginErrorCode
 
 MAX_SOURCE_BYTES = 512 * 1024
+MAX_PDF_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_PDF_PAGES = 1_000
+MAX_PDF_PAGE_TEXT = 16_384
+MAX_PDF_ELEMENT_TOKENS = 480
 MAX_ZIP_ENTRIES = 64
 MAX_XML_BYTES = 256 * 1024
 MAX_OCR_PAGES = 32
@@ -162,6 +168,66 @@ class NativeOoxmlParser:
                     {"name": "layout_detected", "status": "PASS", "value": "word_processing", "summary": "document paragraphs"},
                     {"name": "languages_observed", "status": "PASS", "value": languages, "summary": "detected"},
                 )}
+
+
+class LocalPdfParser:
+    """Extract embedded PDF text locally into the typed provider fixture."""
+
+    async def invoke(self, context: PluginContext) -> PluginInvocationResult:
+        source = await context.input(context.invocation.inputs[0].id)
+        try:
+            fixture = self._parse(source.content, source.reference.content_digest)
+        except PluginError:
+            raise
+        except (OSError, PdfReadError, ValueError) as exc:
+            raise PluginError(PluginErrorCode.RESULT_INVALID) from exc
+        content = _provider_bytes(fixture)
+        languages = fixture["quality_signals"][1]["value"]  # type: ignore[index]
+        return PluginInvocationResult(outputs=(PluginOutput(
+            artifact_type="provider.parse-result-fixture", schema_revision="v1", content=content,
+            summary="local PDF text extracted", metrics=(
+                {"name": "source_bytes", "value": len(source.content)},
+                {"name": "page_count", "value": len(fixture["elements"])},
+                {"name": "element_count", "value": len(fixture["elements"])},
+            ), quality_signals=(
+                {"name": "layout_detected", "status": "PASS", "value": "pdf_page", "summary": "page text"},
+                {"name": "languages_observed", "status": "PASS", "value": languages, "summary": "detected"},
+            ),
+        ),), summary="local PDF text extracted")
+
+    @staticmethod
+    def _parse(content: bytes, source_digest: str) -> dict[str, object]:
+        if not content.startswith(b"%PDF-") or len(content) > MAX_PDF_SOURCE_BYTES:
+            raise ValueError("invalid PDF source")
+        reader = PdfReader(io.BytesIO(content), strict=True)
+        if not reader.pages or len(reader.pages) > MAX_PDF_PAGES:
+            raise ValueError("PDF page count is unsupported")
+        elements: list[dict[str, object]] = []
+        for page_number, page in enumerate(reader.pages, start=1):
+            text = page.extract_text().strip()
+            if not text:
+                continue
+            words = text[:MAX_PDF_PAGE_TEXT].split()
+            for start in range(0, len(words), MAX_PDF_ELEMENT_TOKENS):
+                if len(elements) == 4_096:
+                    raise ValueError("PDF contains too many text segments")
+                elements.append({
+                    "kind": "paragraph", "reading_order": len(elements),
+                    "locator": {"kind": "pdf", "page_number": page_number, "x0": 0, "y0": 0, "x1": 1, "y1": 1},
+                    "text": " ".join(words[start:start + MAX_PDF_ELEMENT_TOKENS]),
+                })
+        if not elements:
+            raise ValueError("PDF has no extractable text")
+        languages = _languages([(str(item["text"]), None) for item in elements])
+        return {
+            "adapter_id": "parser.local-pdf@1", "source_content_digest": source_digest,
+            "metadata": {"media_type": "application/pdf", "language": languages.replace(",", "-")},
+            "elements": elements,
+            "quality_signals": (
+                {"name": "layout_detected", "status": "PASS", "value": "pdf_page", "summary": "page text"},
+                {"name": "languages_observed", "status": "PASS", "value": languages, "summary": "detected"},
+            ),
+        }
 
 
 def _required_part(archive: zipfile.ZipFile, name: str) -> bytes:
