@@ -10,8 +10,8 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-026 Implemented; S-027 Confirmed
-- **Active Story:** None; S-027 is next eligible
+- **Stories:** S-001 through S-027 Implemented
+- **Active Story:** None
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
   Registry/Runner contracts, declarative Ingestion Profile compilation and
@@ -58,9 +58,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-027 next for comparison and cross-run diagnosis workflows.
-S-027 is confirmed and may enter just-in-time technical design when its
-declared dependencies are implemented.
+All currently mapped Stories are implemented. Confirm or map the next Story
+before starting another delivery run.
 
 ## Change History
 
@@ -210,3 +209,8 @@ declared dependencies are implemented.
   navigation, and responsive Chrome coverage. Focused service/API and browser
   verification passed; the existing Docker lifecycle residual remains
   environment-limited.
+- **2026-09-13:** S-027 completed server-owned compatible comparison selection
+  and projection, mixed Run-history diagnosis, owner-authoritative recovery
+  handoffs, persistent diagnosis context, and responsive Compare/Runs views.
+  Focused service/API and Chrome coverage passed; the existing Docker Compose
+  lifecycle residual remains environment-limited.
