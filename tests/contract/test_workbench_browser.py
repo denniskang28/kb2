@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -18,6 +20,16 @@ from fastapi.responses import FileResponse, JSONResponse
 
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 STATIC_ROOT = Path(__file__).parents[2] / "src" / "kb2_runtime" / "workbench" / "static"
+S022_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s022"
+S022_CAPTURE = json.loads((S022_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))["captureConditions"]
+S022_CHROME_FLAGS = (
+    f"--headless={S022_CAPTURE['browser']['headlessMode']}",
+    "--no-sandbox",
+    "--disable-gpu" if S022_CAPTURE["browser"]["gpu"] == "disabled" else "--enable-gpu",
+    "--no-first-run",
+    f"--lang={S022_CAPTURE['locale']['browser']}",
+    "--remote-allow-origins=*",
+)
 
 _PROFILE = {
     "profileId": "browser-query",
@@ -53,23 +65,43 @@ _PLUGIN = {
 
 def _fixture(state: str) -> dict[str, object]:
     unavailable = state == "dependency"
-    return {
+    payload = {
         "contractVersion": "workbench-overview/v1",
         "checkedAt": "2026-09-12T12:00:00Z",
         "coreStatus": "not_ready" if unavailable else "ready",
-        "core": [{"id": "postgres", "status": "unavailable" if unavailable else "ready", "code": "CONNECTION_REFUSED" if unavailable else "OK"}],
-        "optionalCapabilities": [{"id": "deepseek", "status": "not_configured", "code": "NOT_CONFIGURED", "provider": "deepseek", "model": None, "latencyMs": 0}],
-        "plugins": [{"pluginId": "parser.pdf", "runnable": not unavailable, "reason": "RUNNER_UNAVAILABLE" if unavailable else None}],
+        "core": [
+            {"id": "postgres", "status": "unavailable" if unavailable else "ready", "code": "CONNECTION_REFUSED" if unavailable else "OK"},
+            {"id": "artifact-store", "status": "ready", "code": "OK"},
+        ],
+        "optionalCapabilities": [
+            {"id": "deepseek", "status": "not_configured", "code": "NOT_CONFIGURED", "provider": "deepseek", "model": None, "latencyMs": 0},
+            {"id": "runner.container", "status": "unavailable" if unavailable else "ready", "code": "RUNNER_UNAVAILABLE" if unavailable else "OK", "provider": None, "model": None, "latencyMs": 0},
+        ],
+        "plugins": [
+            {"pluginId": "parser.pdf@1", "runnable": not unavailable, "reason": "RUNNER_UNAVAILABLE" if unavailable else None},
+            {"pluginId": "retriever.keyword@1", "runnable": True, "reason": None},
+        ],
         "activeRunCount": 1,
-        "recentRuns": [{"id": "12345678-1234-5678-1234-567812345678", "engineKind": "evaluation", "state": "FAILED", "terminalState": "FAILED", "createdAt": "2026-09-12T12:00:00Z", "startedAt": "2026-09-12T12:00:00Z", "endedAt": "2026-09-12T12:00:00Z", "planDigest": "a" * 64, "failure": {"code": "TRACE_STORAGE_FAILURE", "retryable": True}}],
+        "recentRuns": [
+            {"id": "12345678-1234-5678-1234-567812345678", "engineKind": "evaluation", "state": "FAILED", "terminalState": "FAILED", "createdAt": "2026-09-12T12:00:00Z", "startedAt": "2026-09-12T11:59:00Z", "endedAt": "2026-09-12T12:00:00Z", "planDigest": "a" * 64, "failure": {"code": "TRACE_STORAGE_FAILURE", "retryable": True}},
+            {"id": "22345678-1234-5678-1234-567812345678", "engineKind": "query", "state": "SUCCEEDED", "terminalState": "SUCCEEDED", "createdAt": "2026-09-12T11:00:00Z", "startedAt": "2026-09-12T11:00:00Z", "endedAt": "2026-09-12T11:00:01Z", "planDigest": "b" * 64, "failure": None},
+            {"id": "32345678-1234-5678-1234-567812345678", "engineKind": "ingestion", "state": "FAILED", "terminalState": "FAILED", "createdAt": "2026-09-12T10:00:00Z", "startedAt": None, "endedAt": None, "planDigest": "c" * 64, "failure": {"code": "INPUT_INVALID", "retryable": False}},
+        ],
         "recentComparisons": [{"artifactId": "12345678-1234-5678-1234-567812345679", "runId": "12345678-1234-5678-1234-567812345678", "createdAt": "2026-09-12T12:00:00Z", "mode": "candidate", "axis": "quality", "recommendation": "CANDIDATE_ELIGIBLE"}],
     }
+    if state == "empty":
+        payload["activeRunCount"] = 0
+        payload["recentRuns"] = []
+        payload["recentComparisons"] = []
+    return payload
 
 
 # Test-only transport: production never returns these sample values. The static
 # shell is served byte-for-byte from the implementation under test.
 fixture_app = FastAPI()
 compatible_requests: list[dict[str, object]] = []
+_overview_request_count = 0
+_overview_release = asyncio.Event()
 _INGESTION_RUN = "12345678-1234-5678-1234-567812345680"
 _ARTIFACT = "12345678-1234-5678-1234-567812345681"
 _VISUAL_RUN = "12345678-1234-5678-1234-567812345682"
@@ -105,10 +137,27 @@ async def fixture_document_submit(request: Request) -> JSONResponse:
 
 @fixture_app.get("/api/workbench/overview")
 async def fixture_overview(request: Request) -> JSONResponse:
+    global _overview_request_count
     state = os.getenv("KB2_WORKBENCH_FIXTURE_STATE", "populated")
+    _overview_request_count += 1
     if state == "loading":
-        await __import__("asyncio").sleep(2)
-    return JSONResponse(_fixture("dependency" if state == "dependency" else "populated"))
+        await _overview_release.wait()
+    if state == "first-error" and _overview_request_count == 1:
+        return JSONResponse({"code": "OVERVIEW_UNAVAILABLE"}, status_code=503)
+    if state == "refresh-error" and _overview_request_count == 2:
+        return JSONResponse({"code": "OVERVIEW_UNAVAILABLE"}, status_code=503)
+    return JSONResponse(_fixture(state if state in {"dependency", "empty"} else "populated"))
+
+
+@fixture_app.post("/api/workbench/overview/release")
+async def fixture_overview_release() -> JSONResponse:
+    _overview_release.set()
+    return JSONResponse({"released": True})
+
+
+@fixture_app.get("/api/fixture/overview-request-count")
+async def fixture_overview_request_count() -> JSONResponse:
+    return JSONResponse({"count": _overview_request_count})
 
 
 @fixture_app.get("/api/workbench/profiles")
@@ -344,7 +393,14 @@ async def fixture_stop_query_run(run_id: str) -> JSONResponse:
 
 @fixture_app.get("/workbench/assets/{asset_name}")
 async def fixture_asset(asset_name: str) -> FileResponse:
-    media_type = {"workbench.js": "text/javascript", "workbench.css": "text/css", "artifact.css": "text/css"}.get(asset_name)
+    media_type = {
+        "workbench.js": "text/javascript",
+        "workbench.css": "text/css",
+        "artifact.css": "text/css",
+        "archivo-400.woff2": "font/woff2",
+        "archivo-600.woff2": "font/woff2",
+        "archivo-800.woff2": "font/woff2",
+    }.get(asset_name)
     if media_type is None:
         return FileResponse(STATIC_ROOT / "index.html", status_code=404, media_type="text/html")
     return FileResponse(STATIC_ROOT / asset_name, media_type=media_type)
@@ -367,17 +423,26 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url:
     else:
         pytest.fail("Chrome DevTools endpoint did not start")
     page = next(page for page in pages if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
-    socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
-    try:
-        socket.send(json.dumps({"id": 1, "method": "Runtime.evaluate", "params": {"expression": expression, "awaitPromise": await_promise, "returnByValue": True}}))
-        while True:
-            message = json.loads(socket.recv())
-            if message.get("id") == 1:
+    protocol_error: object = None
+    for attempt in range(3):
+        connection = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
+        request_id = attempt + 1
+        try:
+            connection.send(json.dumps({"id": request_id, "method": "Runtime.evaluate", "params": {"expression": expression, "awaitPromise": await_promise, "returnByValue": True}}))
+            while True:
+                message = json.loads(connection.recv())
+                if message.get("id") != request_id:
+                    continue
+                if "error" in message:
+                    protocol_error = message["error"]
+                    break
                 if "exceptionDetails" in message.get("result", {}):
                     pytest.fail(message["result"]["exceptionDetails"]["exception"]["description"])
                 return message["result"]["result"].get("value")
-    finally:
-        socket.close()
+        finally:
+            connection.close()
+        time.sleep(.05)
+    pytest.fail(f"Chrome DevTools evaluation did not return a result: {protocol_error}")
 
 
 def _capture_cdp(port: int, target: Path, *, target_url: str | None = None) -> None:
@@ -385,7 +450,7 @@ def _capture_cdp(port: int, target: Path, *, target_url: str | None = None) -> N
     page = next(page for page in pages if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
     socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
     try:
-        socket.send(json.dumps({"id": 2, "method": "Page.captureScreenshot", "params": {"format": "png"}}))
+        socket.send(json.dumps({"id": 2, "method": "Page.captureScreenshot", "params": {"format": S022_CAPTURE["screenshotFormat"]}}))
         while True:
             message = json.loads(socket.recv())
             if message.get("id") == 2:
@@ -393,6 +458,155 @@ def _capture_cdp(port: int, target: Path, *, target_url: str | None = None) -> N
                 return
     finally:
         socket.close()
+
+
+def _assert_s022_visual(
+    port: int,
+    current: Path,
+    baseline_name: str,
+    *,
+    target_url: str,
+) -> None:
+    """Decode through Chrome and compare RGBA pixels without mutating baselines."""
+    baseline = S022_BASELINE_ROOT / baseline_name
+    assert baseline.is_file(), f"missing reviewed S-022 baseline: {baseline}"
+    current_url = "data:image/png;base64," + base64.b64encode(current.read_bytes()).decode("ascii")
+    baseline_url = "data:image/png;base64," + base64.b64encode(baseline.read_bytes()).decode("ascii")
+    expression = f"""(async()=>{{
+      const load=source=>new Promise((resolve,reject)=>{{const image=new Image();image.onload=()=>resolve(image);image.onerror=reject;image.src=source}});
+      const [expected,actual]=await Promise.all([load({json.dumps(baseline_url)}),load({json.dumps(current_url)})]);
+      if(expected.width!==actual.width||expected.height!==actual.height)return {{dimensions:[expected.width,expected.height,actual.width,actual.height],ratio:1,bounds:null,diffPng:null}};
+      const canvas=document.createElement('canvas'),other=document.createElement('canvas');canvas.width=other.width=expected.width;canvas.height=other.height=expected.height;
+      const expectedPixels=canvas.getContext('2d',{{willReadFrequently:true}}),actualPixels=other.getContext('2d',{{willReadFrequently:true}});expectedPixels.drawImage(expected,0,0);actualPixels.drawImage(actual,0,0);
+      const before=expectedPixels.getImageData(0,0,canvas.width,canvas.height).data,after=actualPixels.getImageData(0,0,canvas.width,canvas.height).data;
+      const diff=expectedPixels.createImageData(canvas.width,canvas.height);let count=0,minX=canvas.width,minY=canvas.height,maxX=-1,maxY=-1;
+      for(let offset=0,pixel=0;offset<before.length;offset+=4,pixel++){{let changed=false;for(let channel=0;channel<4;channel++)if(Math.abs(before[offset+channel]-after[offset+channel])>12)changed=true;if(changed){{count++;const x=pixel%canvas.width,y=Math.floor(pixel/canvas.width);minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);diff.data.set([236,48,19,255],offset)}}else diff.data.set([before[offset]/3,before[offset+1]/3,before[offset+2]/3,72],offset)}}
+      const ratio=count/(canvas.width*canvas.height);let diffPng=null;if(ratio>0.005){{expectedPixels.putImageData(diff,0,0);diffPng=canvas.toDataURL('image/png').split(',')[1]}}
+      return {{dimensions:[expected.width,expected.height,actual.width,actual.height],ratio,bounds:count?[minX,minY,maxX,maxY]:null,diffPng}};
+    }})()"""
+    result = _cdp(port, expression, await_promise=True, target_url=target_url)
+    assert isinstance(result, dict)
+    if result["ratio"] > 0.005:
+        current_diagnostic = current.with_name(f"{baseline.stem}-current.png")
+        diff_diagnostic = current.with_name(f"{baseline.stem}-diff.png")
+        shutil.copyfile(current, current_diagnostic)
+        if result["diffPng"]:
+            diff_diagnostic.write_bytes(base64.b64decode(result["diffPng"]))
+        pytest.fail(
+            f"S-022 visual difference {result['ratio']:.4%} exceeds 0.5% "
+            f"(channel tolerance 12, dimensions {result['dimensions']}, bounds {result['bounds']}); "
+            f"current={current_diagnostic}, diff={diff_diagnostic}"
+        )
+
+
+def _cdp_command(
+    port: int,
+    method: str,
+    params: dict[str, object] | None = None,
+    *,
+    target_url: str | None = None,
+) -> dict[str, object]:
+    for _ in range(60):
+        try:
+            pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=0.2).json()
+            if any(
+                page.get("type") == "page"
+                and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", ""))
+                for page in pages
+            ):
+                break
+        except httpx.HTTPError:
+            pass
+        time.sleep(0.1)
+    else:
+        pytest.fail("Chrome DevTools endpoint did not start")
+    page = next(
+        page
+        for page in pages
+        if page.get("type") == "page"
+        and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", ""))
+    )
+    connection = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
+    try:
+        connection.send(json.dumps({"id": 1, "method": method, "params": params or {}}))
+        while True:
+            message = json.loads(connection.recv())
+            if message.get("id") != 1:
+                continue
+            if "error" in message:
+                pytest.fail(f"Chrome DevTools command failed: {message['error']}")
+            return message.get("result", {})
+    finally:
+        connection.close()
+
+
+def _prepare_s022_capture_environment(port: int, target_url: str, width: int) -> None:
+    """Apply and verify every rendering condition recorded with the goldens."""
+    device = S022_CAPTURE["device"]
+    media = S022_CAPTURE["media"]
+    _cdp_command(
+        port,
+        "Emulation.setDeviceMetricsOverride",
+        {
+            "width": width,
+            "height": 900,
+            "deviceScaleFactor": device["deviceScaleFactor"],
+            "mobile": device["mobile"],
+        },
+        target_url=target_url,
+    )
+    _cdp_command(
+        port,
+        "Emulation.setEmulatedMedia",
+        {
+            "media": media["type"],
+            "features": [
+                {"name": "prefers-color-scheme", "value": media["colorScheme"]},
+                {"name": "forced-colors", "value": media["forcedColors"]},
+                {"name": "prefers-reduced-motion", "value": media["reducedMotion"]},
+            ],
+        },
+        target_url=target_url,
+    )
+    _cdp_command(
+        port,
+        "Emulation.setLocaleOverride",
+        {"locale": S022_CAPTURE["locale"]["browser"]},
+        target_url=target_url,
+    )
+
+    version = httpx.get(f"http://127.0.0.1:{port}/json/version", timeout=1).json()
+    browser = S022_CAPTURE["browser"]
+    assert {
+        "product": version["Browser"],
+        "protocolVersion": version["Protocol-Version"],
+        "userAgent": version["User-Agent"],
+        "javascriptRuntime": f"V8 {version['V8-Version']}",
+        "renderingEngine": version["WebKit-Version"],
+    } == {key: browser[key] for key in ("product", "protocolVersion", "userAgent", "javascriptRuntime", "renderingEngine")}
+
+    conditions = _cdp(
+        port,
+        """(async()=>{
+          for(let i=0;i<100&&document.readyState!=='complete';i++)await new Promise(resolve=>setTimeout(resolve,20));
+          let stability=document.querySelector('#s022-capture-stability');if(!stability){stability=document.createElement('style');stability.id='s022-capture-stability';stability.textContent='*{animation:none!important;transition:none!important;caret-color:transparent!important}';document.head.append(stability)}
+          await document.fonts.ready;const resources=performance.getEntriesByType('resource'),faces=[...document.fonts].filter(face=>face.family.replaceAll('"','')==='Archivo').map(face=>[Number(face.weight),face.status]).sort((a,b)=>a[0]-b[0]);
+          return {viewport:[innerWidth,innerHeight,devicePixelRatio],locale:[navigator.language,document.documentElement.lang],media:[matchMedia('(prefers-color-scheme: light)').matches,!matchMedia('(forced-colors: active)').matches,matchMedia('(prefers-reduced-motion: no-preference)').matches],ready:[document.readyState,faces,[400,600,800].every(weight=>resources.some(resource=>resource.name.endsWith(`/workbench/assets/archivo-${weight}.woff2`)))],stability:stability.textContent};
+        })()""",
+        await_promise=True,
+        target_url=target_url,
+    )
+    assert conditions == {
+        "viewport": [width, 900, device["deviceScaleFactor"]],
+        "locale": [S022_CAPTURE["locale"]["browser"], S022_CAPTURE["locale"]["document"]],
+        "media": [True, True, True],
+        "ready": [
+            S022_CAPTURE["readiness"]["document"],
+            [[weight, S022_CAPTURE["readiness"]["archivoFaceStatus"]] for weight in S022_CAPTURE["readiness"]["archivoWeights"]],
+            S022_CAPTURE["readiness"]["assetResourceTimingRequired"],
+        ],
+        "stability": "*{animation:none!important;transition:none!important;caret-color:transparent!important}",
+    }
 
 
 def _free_local_port() -> int:
@@ -434,19 +648,33 @@ def _close_isolated_chrome(port: int, browser: subprocess.Popen[str]) -> tuple[s
     not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
     reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser shell evidence",
 )
-@pytest.mark.parametrize(("state", "plugin_runnable"), (("populated", True), ("dependency", False), ("loading", True)))
-def test_fixture_backed_workbench_shell_renders_overview_states(tmp_path: Path, state: str, plugin_runnable: bool) -> None:
-    """Exercise shipped browser assets with test-only, API-backed overview states."""
-    port = "8894"
+@pytest.mark.parametrize(
+    ("fixture_state", "expected_state", "width"),
+    (
+        ("populated", "populated", 1440),
+        ("empty", "populated", 1440),
+        ("dependency", "populated", 1440),
+        ("loading", "loading", 1440),
+        ("first-error", "error", 1440),
+        ("refresh-error", "populated", 1440),
+        ("populated", "populated", 644),
+    ),
+)
+def test_fixture_backed_workbench_shell_renders_deterministic_overview_states(
+    tmp_path: Path, fixture_state: str, expected_state: str, width: int
+) -> None:
+    """Exercise semantic state, geometry, and visual evidence from shipped assets."""
+    port, debug_port = _free_local_port(), _free_local_port()
     environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
-    environment["KB2_WORKBENCH_FIXTURE_STATE"] = state
+    environment["KB2_WORKBENCH_FIXTURE_STATE"] = fixture_state
     server = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port],
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
     url = f"http://127.0.0.1:{port}/workbench/overview?workspace=local_demo"
+    browser: subprocess.Popen[str] | None = None
     try:
-        for _ in range(40):
+        for _ in range(80):
             try:
                 if httpx.get(url, timeout=0.2).status_code == 200:
                     break
@@ -455,27 +683,269 @@ def test_fixture_backed_workbench_shell_renders_overview_states(tmp_path: Path, 
             time.sleep(0.1)
         else:
             pytest.fail("FastAPI workbench shell did not start")
-        payload = httpx.get(f"http://127.0.0.1:{port}/api/workbench/overview", timeout=3).json()
-        assert payload["recentRuns"][0]["failure"]["code"] == "TRACE_STORAGE_FAILURE"
-        assert payload["recentComparisons"][0]["recommendation"] == "CANDIDATE_ELIGIBLE"
-        assert payload["plugins"][0]["runnable"] is plugin_runnable
-        for width in (1440, 644):
-            image = tmp_path / f"{state}-workbench-{width}.png"
-            browser = subprocess.Popen(
-                [str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--disable-crash-reporter", f"--window-size={width},900", f"--screenshot={image}", "--virtual-time-budget=1000", f"--user-data-dir={tmp_path / str(width)}", url],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        browser = _launch_isolated_chrome([
+            *S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}",
+            f"--window-size={width},900", f"--user-data-dir={tmp_path / fixture_state}", url,
+        ])
+        _prepare_s022_capture_environment(debug_port, url, width)
+        wait_for_state = f"""(async()=>{{for(let i=0;i<160;i++){{if(document.querySelector('[data-overview-state="{expected_state}"]'))return true;await new Promise(r=>setTimeout(r,25))}}throw new Error('overview state did not render')}})()"""
+        assert _cdp(debug_port, wait_for_state, await_promise=True, target_url=url) is True
+        if fixture_state == "loading":
+            assert _cdp(debug_port, "document.querySelectorAll('.skeleton-line').length >= 6", target_url=url) is True
+        if fixture_state == "first-error":
+            assert _cdp(debug_port, "document.querySelector('[role=alert]').textContent.includes('无法刷新概览')", target_url=url) is True
+            unavailable_context = _cdp(
+                debug_port,
+                "[...document.querySelectorAll('.context-bar .context-group')].map(x=>[x.querySelector('.context-label')?.textContent,x.querySelector('.status-tag')?.textContent,x.querySelector('.context-skeleton')===null])",
+                target_url=url,
             )
-            try:
-                for _ in range(60):
-                    if image.exists() and image.stat().st_size > 1_000:
-                        break
-                    time.sleep(0.1)
-                else:
-                    pytest.fail(f"Chrome did not capture fixture state at {width}px")
-            finally:
-                browser.terminate()
-                browser.wait(timeout=10)
+            assert unavailable_context == [
+                ["核心", "状态不可用", True],
+                ["外部能力", "状态不可用", True],
+                ["Plugin", "状态不可用", True],
+                ["活动 Run", "状态不可用", True],
+            ]
+            unavailable_regions = _cdp(
+                debug_port,
+                """(()=>{const surface=document.querySelector('.overview-surface'),regions=[surface.querySelector(':scope > .dependency-band'),surface.querySelector(':scope > .overview-grid > .overview-runs'),surface.querySelector(':scope > .overview-grid > .overview-side > .overview-failures'),surface.querySelector(':scope > .overview-grid > .overview-side > .overview-comparisons')];return {commands:[...document.querySelectorAll('.overview-commands .command-link')].map(link=>link.pathname),grid:!!surface.querySelector(':scope > .overview-grid > .overview-side'),regions:regions.map(region=>({labelledby:region.getAttribute('aria-labelledby'),heading:region.querySelector('h2').textContent,meta:region.querySelector('.section-meta').textContent,unavailable:region.querySelector('.empty-state strong').textContent,retry:region.querySelector('.empty-state button').textContent}))}})()""",
+                target_url=url,
+            )
+            assert unavailable_regions == {
+                "commands": [
+                    "/workbench/documents", "/workbench/studio", "/workbench/query",
+                    "/workbench/evaluation-dataset",
+                ],
+                "grid": True,
+                "regions": [
+                    {"labelledby": "dependency-title", "heading": "依赖状态", "meta": "不可用", "unavailable": "依赖状态不可用", "retry": "重新刷新"},
+                    {"labelledby": "recent-runs-title", "heading": "最近运行", "meta": "不可用", "unavailable": "最近运行不可用", "retry": "重新刷新"},
+                    {"labelledby": "failed-runs-title", "heading": "失败分诊", "meta": "不可用", "unavailable": "失败分诊不可用", "retry": "重新刷新"},
+                    {"labelledby": "comparisons-title", "heading": "最近比较", "meta": "不可用", "unavailable": "最近比较不可用", "retry": "重新刷新"},
+                ],
+            }
+            assert _cdp(debug_port, "[...document.querySelectorAll('button')].find(x=>x.textContent==='重新刷新').click(); true", target_url=url) is True
+            assert _cdp(debug_port, "(async()=>{for(let i=0;i<100;i++){if(document.querySelector('[data-overview-state=populated]'))return true;await new Promise(r=>setTimeout(r,25))}return false})()", await_promise=True, target_url=url) is True
+        if fixture_state == "refresh-error":
+            assert _cdp(debug_port, "document.querySelector('[aria-label=\"刷新概览\"]').click(); true", target_url=url) is True
+            assert _cdp(debug_port, "(async()=>{for(let i=0;i<100;i++){if(document.querySelector('[data-overview-state=stale]'))return document.body.innerText.includes('TRACE_STORAGE_FAILURE');await new Promise(r=>setTimeout(r,25))}return false})()", await_promise=True, target_url=url) is True
+
+        evidence = _cdp(debug_port, f"""(async()=>{{
+          await document.fonts.ready;
+          const sidebar=document.querySelector('.sidebar'), shell=document.querySelector('.shell'), top=document.querySelector('.top'), command=document.querySelector('.command-link');command.focus();
+          const paths=[...document.querySelectorAll('.sidebar .nav-link')].map(x=>x.pathname);
+          const drawerPaths=[...document.querySelectorAll('#drawer .nav-link')].map(x=>x.pathname);
+          const commands=[...document.querySelectorAll('.overview-commands .command-link')].map(x=>x.pathname);
+          const overviewRequests=(await fetch('/api/fixture/overview-request-count').then(x=>x.json())).count;
+          const resources=performance.getEntriesByType('resource');
+          const archivoFaces=[...document.fonts].filter(face=>face.family.replaceAll('"','')==='Archivo').map(face=>[Number(face.weight),face.status]).sort((a,b)=>a[0]-b[0]);
+          return {{desktopLinks:document.querySelectorAll('.sidebar .nav-link').length,drawerLinks:document.querySelectorAll('#drawer .nav-link').length,paths,drawerPaths,commands,workspace:[...document.querySelectorAll('.nav-link,.command-link')].every(x=>new URL(x.href).searchParams.get('workspace')==='local_demo'),contexts:document.querySelectorAll('.context-bar .context-group').length,overviewRequests,fontAssets:[400,600,800].every(weight=>resources.some(resource=>resource.name.endsWith(`/workbench/assets/archivo-${{weight}}.woff2`))),archivoFaces,overflow:document.documentElement.scrollWidth<=innerWidth,viewport:[innerWidth,innerHeight,devicePixelRatio],sidebar:{'true' if width >= 900 else 'false'}?Math.abs(sidebar.getBoundingClientRect().width-220)<=1:getComputedStyle(sidebar).display==='none',menu:{'true' if width < 900 else 'false'}?getComputedStyle(document.querySelector('.menu')).display!=='none':getComputedStyle(document.querySelector('.menu')).display==='none',body:{'true' if width >= 900 else 'false'}?Math.abs(shell.children[1].getBoundingClientRect().left-220)<=1:true,sticky:getComputedStyle(top).position==='sticky',radius:getComputedStyle(command).borderRadius==='0px',focus:getComputedStyle(command).outlineWidth==='2px',prototype:!document.body.innerText.includes('Prototype control')&&!document.querySelector('[aria-label*=语言]')}}
+        }})()""", await_promise=True, target_url=url)
+        expected_paths = [
+            "/workbench/overview", "/workbench/documents", "/workbench/studio",
+            "/workbench/query", "/workbench/evaluation-dataset", "/workbench/compare",
+            "/workbench/runs", "/workbench/plugins",
+        ]
+        assert evidence == {
+            "desktopLinks": 8,
+            "drawerLinks": 8,
+            "paths": expected_paths,
+            "drawerPaths": expected_paths,
+            "commands": [
+                "/workbench/documents", "/workbench/studio", "/workbench/query",
+                "/workbench/evaluation-dataset",
+            ],
+            "workspace": True,
+            "contexts": 4,
+            "overviewRequests": 2 if fixture_state in {"first-error", "refresh-error"} else 1,
+            "fontAssets": True,
+            "archivoFaces": [[400, "loaded"], [600, "loaded"], [800, "loaded"]],
+            "overflow": True,
+            "viewport": [width, 900, 1],
+            "sidebar": True,
+            "menu": True,
+            "body": True,
+            "sticky": True,
+            "radius": True,
+            "focus": True,
+            "prototype": True,
+        }
+
+        text_state = _cdp(debug_port, "document.body.innerText", target_url=url)
+        if fixture_state in {"populated", "refresh-error"}:
+            assert "TRACE_STORAGE_FAILURE" in text_state
+            assert "CANDIDATE_ELIGIBLE" in text_state
+            assert _cdp(debug_port, "document.querySelectorAll('.recovery-action').length", target_url=url) == 1
+        elif fixture_state == "empty":
+            assert "尚无运行记录" in text_state and "尚无比较结果" in text_state
+        elif fixture_state == "dependency":
+            assert "部分依赖不可用" in text_state and "RUNNER_UNAVAILABLE" in text_state
+
+        image = tmp_path / f"s022-{fixture_state}-{width}.png"
+        _capture_cdp(debug_port, image, target_url=url)
+        assert image.stat().st_size > 1_000
+        baseline_names = {
+            ("populated", 1440): "overview-populated-1440.png",
+            ("empty", 1440): "overview-empty-1440.png",
+            ("dependency", 1440): "overview-dependency-1440.png",
+            ("loading", 1440): "overview-loading-1440.png",
+            ("refresh-error", 1440): "overview-refresh-error-1440.png",
+            ("populated", 644): "overview-populated-644.png",
+        }
+        if baseline_name := baseline_names.get((fixture_state, width)):
+            _assert_s022_visual(debug_port, image, baseline_name, target_url=url)
+
+        if fixture_state == "populated" and width == 1440:
+            keyboard_contract = _cdp(
+                debug_port,
+                "(()=>{const links=[...document.querySelectorAll('.sidebar .nav-link')];const target=links.find(x=>x.pathname==='/workbench/documents');target.focus();return {native:links.every(x=>x.tagName==='A'&&x.tabIndex===0),focused:document.activeElement===target,labels:links.map(x=>x.textContent)}})()",
+                target_url=url,
+            )
+            assert keyboard_contract == {
+                "native": True,
+                "focused": True,
+                "labels": ["概览", "文档", "Profile Studio", "Query Lab", "评估数据集", "比较", "运行记录", "插件注册表"],
+            }
+            _cdp_command(
+                debug_port,
+                "Input.dispatchKeyEvent",
+                {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13},
+                target_url=url,
+            )
+            document_url = f"http://127.0.0.1:{port}/workbench/documents?workspace=local_demo"
+            assert _cdp(debug_port, "location.pathname", target_url=document_url) == "/workbench/documents"
+            evaluation_url = f"http://127.0.0.1:{port}/workbench/evaluation-run?workspace=local_demo&run={_EVALUATION_RUN}"
+            _cdp(debug_port, f"location.assign({json.dumps(evaluation_url)}); true", target_url=document_url)
+            child_route = _cdp(
+                debug_port,
+                "(async()=>{for(let i=0;i<100;i++){const current=[...document.querySelectorAll('.nav-link[aria-current=page]')];if(current.length===2)return {paths:current.map(x=>x.pathname),crumb:document.querySelector('.crumb [aria-current=page]').textContent};await new Promise(r=>setTimeout(r,25))}return null})()",
+                await_promise=True,
+                target_url=evaluation_url,
+            )
+            assert child_route == {
+                "paths": ["/workbench/evaluation-dataset", "/workbench/evaluation-dataset"],
+                "crumb": "评估运行",
+            }
+        if fixture_state == "loading":
+            httpx.post(f"http://127.0.0.1:{port}/api/workbench/overview/release", timeout=1).raise_for_status()
     finally:
+        if browser is not None:
+            _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for drawer evidence",
+)
+def test_fixture_backed_narrow_drawer_geometry_and_focus_contract(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": "populated"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/overview?workspace=local_demo"
+    browser: subprocess.Popen[str] | None = None
+    try:
+        for _ in range(80):
+            try:
+                if httpx.get(url, timeout=.2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(.1)
+        browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=644,900", f"--user-data-dir={tmp_path / 'drawer'}", url])
+        _prepare_s022_capture_environment(debug_port, url, 644)
+        open_drawer = """(async()=>{for(let i=0;i<120;i++){if(document.querySelector('[data-overview-state=populated]'))break;await new Promise(r=>setTimeout(r,25))}const menu=document.querySelector('[aria-label="打开导航"]');menu.focus();menu.click();const modal=document.querySelector('#drawer'),panel=document.querySelector('.drawer-panel'),links=[...modal.querySelectorAll('.nav-link')],focusables=[...modal.querySelectorAll('button,a')];focusables.at(-1).focus();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));return {width:Math.abs(panel.getBoundingClientRect().width-220)<=1,left:Math.abs(panel.getBoundingClientRect().left)<=1,inert:document.querySelector('#workbench-shell').hasAttribute('inert'),modal:modal.getAttribute('aria-modal')==='true',looped:document.activeElement===focusables[0],links:links.length,viewport:[innerWidth,innerHeight,devicePixelRatio],overflow:document.documentElement.scrollWidth<=innerWidth}})()"""
+        assert _cdp(debug_port, open_drawer, await_promise=True, target_url=url) == {"width": True, "left": True, "inert": True, "modal": True, "looped": True, "links": 8, "viewport": [644, 900, 1], "overflow": True}
+        image = tmp_path / "s022-populated-drawer-open-644.png"
+        _capture_cdp(debug_port, image, target_url=url)
+        _assert_s022_visual(debug_port, image, "overview-drawer-open-644.png", target_url=url)
+        close_drawer = """(async()=>{const menu=document.querySelector('[aria-label="打开导航"]'),modal=document.querySelector('#drawer');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,20));return {closed:!modal.classList.contains('open'),focusReturned:document.activeElement===menu,inertRemoved:!document.querySelector('#workbench-shell').hasAttribute('inert')}})()"""
+        assert _cdp(debug_port, close_drawer, await_promise=True, target_url=url) == {"closed": True, "focusReturned": True, "inertRemoved": True}
+    finally:
+        if browser is not None:
+            _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for breakpoint evidence",
+)
+def test_fixture_backed_navigation_survives_both_breakpoint_resize_directions(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": "populated"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/overview?workspace=local_demo"
+    browser: subprocess.Popen[str] | None = None
+    try:
+        for _ in range(80):
+            try:
+                if httpx.get(url, timeout=.2).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(.1)
+        else:
+            pytest.fail("FastAPI workbench shell did not start")
+        browser = _launch_isolated_chrome([
+            *S022_CHROME_FLAGS,
+            f"--remote-debugging-port={debug_port}",
+            "--window-size=1440,900",
+            f"--user-data-dir={tmp_path / 'resize'}",
+            url,
+        ])
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        assert _cdp(
+            debug_port,
+            """(async()=>{for(let i=0;i<120;i++){if(document.querySelector('[data-overview-state=populated]'))break;await new Promise(resolve=>setTimeout(resolve,25))}const current=document.querySelector('.sidebar .nav-link[aria-current=page]');current.focus();return {sidebar:getComputedStyle(document.querySelector('.sidebar')).display!=='none',menu:getComputedStyle(document.querySelector('.menu')).display==='none',focused:document.activeElement===current,inert:document.querySelector('#workbench-shell').hasAttribute('inert')}})()""",
+            await_promise=True,
+            target_url=url,
+        ) == {"sidebar": True, "menu": True, "focused": True, "inert": False}
+
+        device = S022_CAPTURE["device"]
+        _cdp_command(
+            debug_port,
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 644, "height": 900, "deviceScaleFactor": device["deviceScaleFactor"], "mobile": device["mobile"]},
+            target_url=url,
+        )
+        narrow = _cdp(
+            debug_port,
+            """(async()=>{for(let i=0;i<80;i++){const menu=document.querySelector('.menu');if(innerWidth===644&&getComputedStyle(menu).display!=='none'&&document.activeElement===menu)return {viewport:[innerWidth,innerHeight,devicePixelRatio],sidebar:getComputedStyle(document.querySelector('.sidebar')).display==='none',menu:true,close:!!document.querySelector('[aria-label="关闭导航"]'),drawerOpen:document.querySelector('#drawer').classList.contains('open'),inert:document.querySelector('#workbench-shell').hasAttribute('inert'),focus:'menu'};await new Promise(resolve=>setTimeout(resolve,25))}return null})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert narrow == {"viewport": [644, 900, 1], "sidebar": True, "menu": True, "close": True, "drawerOpen": False, "inert": False, "focus": "menu"}
+
+        opened = _cdp(
+            debug_port,
+            """(()=>{document.querySelector('.menu').click();const drawer=document.querySelector('#drawer'),close=document.querySelector('[aria-label="关闭导航"]');return {open:drawer.classList.contains('open'),ariaHidden:drawer.getAttribute('aria-hidden'),inert:document.querySelector('#workbench-shell').hasAttribute('inert'),focus:document.activeElement===close}})()""",
+            target_url=url,
+        )
+        assert opened == {"open": True, "ariaHidden": None, "inert": True, "focus": True}
+
+        _cdp_command(
+            debug_port,
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 1440, "height": 900, "deviceScaleFactor": device["deviceScaleFactor"], "mobile": device["mobile"]},
+            target_url=url,
+        )
+        desktop = _cdp(
+            debug_port,
+            """(async()=>{for(let i=0;i<80;i++){const drawer=document.querySelector('#drawer'),current=document.querySelector('.sidebar .nav-link[aria-current=page]');if(innerWidth===1440&&!drawer.classList.contains('open')&&!document.querySelector('#workbench-shell').hasAttribute('inert')&&document.activeElement===current)return {viewport:[innerWidth,innerHeight,devicePixelRatio],sidebar:getComputedStyle(document.querySelector('.sidebar')).display!=='none',menu:getComputedStyle(document.querySelector('.menu')).display==='none',closed:drawer.getAttribute('aria-hidden')==='true',inert:false,focus:'current-desktop-route'};await new Promise(resolve=>setTimeout(resolve,25))}return null})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert desktop == {"viewport": [1440, 900, 1], "sidebar": True, "menu": True, "closed": True, "inert": False, "focus": "current-desktop-route"}
+    finally:
+        if browser is not None:
+            _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)
 
@@ -739,13 +1209,13 @@ def test_fixture_backed_comparison_and_mixed_history_diagnosis_matrix(tmp_path: 
         pytest.fail("S-027 fixture shell did not start")
     browser = subprocess.Popen([str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 's027'}", compare_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        compare = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('comparison did not render: '+document.body.innerText)};const base=await wait(()=>{const x=document.querySelector('select[aria-label="基准 Evaluation Report"]');return x&&x.options.length===3&&x});const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');base.value='12345678-1234-5678-1234-567812345694';candidate.value=base.value;submit.click();await wait(()=>document.body.innerText.includes('PINNED_INPUTS_NOT_EQUIVALENT'));const safeReason=document.body.innerText.includes('COMPARISON_INCOMPATIBLE')&&!document.body.innerText.includes('comparison inputs are not pinned-equivalent');candidate.value='12345678-1234-5678-1234-567812345695';submit.click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));const text=document.body.innerText,table=document.querySelector('.dense-table');return {safeReason,nonCausal:text.includes('MULTI_AXIS_NON_CAUSAL')&&!text.includes('单轴变化'),bands:text.includes('质量门禁')&&text.includes('失败案例')&&text.includes('延迟（独立）')&&text.includes('本地资源（独立）'),confidence:text.includes('UNAVAILABLE')&&text.includes('samples'),zeroBaseline:text.includes('UNDEFINED_BASELINE_ZERO'),tableScrollable:table.parentElement.scrollWidth>table.parentElement.clientWidth,overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('button,select,input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
+        compare = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('comparison did not render: '+document.body.innerText)};const base=await wait(()=>{const x=document.querySelector('select[aria-label="基准 Evaluation Report"]');return x&&x.options.length===3&&x});const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');base.value='12345678-1234-5678-1234-567812345694';candidate.value=base.value;submit.click();await wait(()=>document.body.innerText.includes('PINNED_INPUTS_NOT_EQUIVALENT'));const safeReason=document.body.innerText.includes('COMPARISON_INCOMPATIBLE')&&!document.body.innerText.includes('comparison inputs are not pinned-equivalent');candidate.value='12345678-1234-5678-1234-567812345695';submit.click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));const text=document.body.innerText,table=document.querySelector('.dense-table');return {safeReason,nonCausal:text.includes('MULTI_AXIS_NON_CAUSAL')&&!text.includes('单轴变化'),bands:text.includes('质量门禁')&&text.includes('失败案例')&&text.includes('延迟（独立）')&&text.includes('本地资源（独立）'),confidence:text.includes('UNAVAILABLE')&&text.includes('samples'),zeroBaseline:text.includes('UNDEFINED_BASELINE_ZERO'),tableScrollable:table.parentElement.scrollWidth>table.parentElement.clientWidth,overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('main button,main select,main input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
         assert _cdp(debug_port, compare, await_promise=True, target_url=compare_url) == {"safeReason": True, "nonCausal": True, "bands": True, "confidence": True, "zeroBaseline": True, "tableScrollable": width < 900, "overflow": True, "controls": True}
         _capture_cdp(debug_port, tmp_path / f"s027-comparison-{width}.png", target_url=compare_url)
 
         history_url = f"http://127.0.0.1:{port}/workbench/runs?runType=QUERY&runState=RUNNING&q=12345678"
         assert _cdp(debug_port, f"location.href={json.dumps(history_url)}", target_url=compare_url) == history_url
-        history = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('history did not render')};const trace=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='Trace'));trace.click();await wait(()=>document.body.innerText.includes('evidence.set'));const stop=[...document.querySelectorAll('button')].find(x=>x.textContent==='停止');const ownerAction=!!stop&&!document.body.innerText.includes('重新运行');stop.click();return {filters:document.querySelector('select[aria-label="Run 类型"]').value==='QUERY'&&document.querySelector('select[aria-label="Run 状态"]').value==='RUNNING',artifact:[...document.querySelectorAll('button')].some(x=>x.textContent.includes('Artifact evidence.set')),ownerAction,selected:location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('runType=QUERY')&&location.search.includes('runState=RUNNING'),overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('button,select,input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
+        history = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('history did not render')};const trace=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='Trace'));trace.click();await wait(()=>document.body.innerText.includes('evidence.set'));const stop=[...document.querySelectorAll('button')].find(x=>x.textContent==='停止');const ownerAction=!!stop&&!document.body.innerText.includes('重新运行');stop.click();return {filters:document.querySelector('select[aria-label="Run 类型"]').value==='QUERY'&&document.querySelector('select[aria-label="Run 状态"]').value==='RUNNING',artifact:[...document.querySelectorAll('button')].some(x=>x.textContent.includes('Artifact evidence.set')),ownerAction,selected:location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('runType=QUERY')&&location.search.includes('runState=RUNNING'),overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('main button,main select,main input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
         assert _cdp(debug_port, history, await_promise=True, target_url=history_url) == {"filters": True, "artifact": True, "ownerAction": True, "selected": True, "overflow": True, "controls": True}
         context = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('context flow did not render')};const artifact=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Artifact evidence.set'));artifact.click();await wait(()=>document.querySelector('.artifact-inspector'));const drawerPreserves=location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('q=12345678');document.querySelector('.artifact-inspector button').click();[...document.querySelectorAll('a')].find(x=>x.textContent==='比较').click();return drawerPreserves})()"""
         assert _cdp(debug_port, context, await_promise=True) is True

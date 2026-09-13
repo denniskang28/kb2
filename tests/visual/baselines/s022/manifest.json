@@ -1,0 +1,99 @@
+{
+  "story": "S-022",
+  "uiAnchors": ["UI-001", "UI-002", "UI-013"],
+  "prototypeSha256": "a07df450d231d777cb814d3a6695d67553748beda5491ce12e529ec2dca32ea7",
+  "fixtureRevision": "s022-overview-fixture-v2",
+  "captureConditions": {
+    "browser": {
+      "product": "Chrome/152.0.7977.83",
+      "protocolVersion": "1.3",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+      "javascriptRuntime": "V8 15.2.124.21",
+      "renderingEngine": "537.36 (@79460ebecaa5625e57a5fb679a735659e73dc687)",
+      "headlessMode": "new",
+      "gpu": "disabled"
+    },
+    "device": {
+      "deviceScaleFactor": 1,
+      "mobile": false
+    },
+    "media": {
+      "type": "screen",
+      "colorScheme": "light",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference"
+    },
+    "locale": {
+      "browser": "zh-CN",
+      "document": "zh-CN"
+    },
+    "readiness": {
+      "document": "complete",
+      "fontsPromise": "document.fonts.ready",
+      "archivoWeights": [400, 600, 800],
+      "archivoFaceStatus": "loaded",
+      "assetResourceTimingRequired": true
+    },
+    "stabilization": {
+      "animations": "none",
+      "transitions": "none",
+      "caretColor": "transparent"
+    },
+    "screenshotFormat": "png"
+  },
+  "comparison": {
+    "colorSpace": "RGBA",
+    "channelTolerance": 12,
+    "maximumDifferingPixelRatio": 0.005,
+    "baselineUpdatesAutomatic": false
+  },
+  "excludedPrototypeContent": [
+    "prototype control bar",
+    "prototype-only demonstration facts",
+    "locale switcher"
+  ],
+  "baselines": [
+    {
+      "file": "overview-populated-1440.png",
+      "scenario": "populated",
+      "viewport": [1440, 900],
+      "sha256": "17de46c057bfecc339b608a9f9e94a55f8283aef4310035cb96ba32f504b5688"
+    },
+    {
+      "file": "overview-empty-1440.png",
+      "scenario": "empty",
+      "viewport": [1440, 900],
+      "sha256": "59bb7cc6663cc30b87192240682747a5a88a5095b0ac448eac42746c44fe7422"
+    },
+    {
+      "file": "overview-dependency-1440.png",
+      "scenario": "dependency",
+      "viewport": [1440, 900],
+      "sha256": "fa479514a011dc5580db0e6f0f77f0f6e9e1bee162723fc37c2acc93f2d1e73c"
+    },
+    {
+      "file": "overview-loading-1440.png",
+      "scenario": "loading",
+      "viewport": [1440, 900],
+      "sha256": "413edd15692faf06713532ef33cfaba56d0fef40408613344aac41009dfbc8a3"
+    },
+    {
+      "file": "overview-refresh-error-1440.png",
+      "scenario": "refresh-error",
+      "viewport": [1440, 900],
+      "sha256": "bd57772ab8534aa4178c427b4fbe7c6b33bc9cf52112b125ca54ae1ec7fe30aa"
+    },
+    {
+      "file": "overview-populated-644.png",
+      "scenario": "populated",
+      "viewport": [644, 900],
+      "sha256": "29dd90bf1be68f2f5072eab3943e0756f9bd1c66e385033a8294db8f4a585da3"
+    },
+    {
+      "file": "overview-drawer-open-644.png",
+      "scenario": "drawer-open",
+      "viewport": [644, 900],
+      "sha256": "246b2f959a4b80756198b83607bcfe159260c126bb8bdd3e2477f9acb4534b6a"
+    }
+  ]
+}

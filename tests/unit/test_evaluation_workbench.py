@@ -72,7 +72,10 @@ def test_run_projection_keeps_manifest_report_navigation_and_safe_unavailable_ar
 
 def test_static_workbench_has_dataset_run_routes_and_no_browser_metric_calculation() -> None:
     source = open("src/kb2_runtime/workbench/static/workbench.js", encoding="utf-8").read()
-    assert "['evaluation-dataset','评估数据集']" in source and "['evaluation-run','评估运行']" in source
+    primary = source.split("const PRIMARY_DESTINATIONS=[", 1)[1].split("];", 1)[0]
+    assert "{id:'evaluation-dataset',label:'评估数据集'" in primary
+    assert "evaluation-run" not in primary
+    assert "'evaluation-run':{label:'评估运行',parent:'evaluation-dataset'}" in source
     assert "/api/workbench/evaluation-datasets" in source and "/api/workbench/evaluation-runs" in source
     assert "标记已审核" in source and "质量门禁与 Judge 校准" in source
     assert "overallScore" not in source and "Math.average" not in source

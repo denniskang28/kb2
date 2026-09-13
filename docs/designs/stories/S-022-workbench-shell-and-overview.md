@@ -2,231 +2,303 @@
 
 ## Status
 
-Approved for Story Pipeline development.
+Approved for Story Pipeline repair development.
 
 ## Story Contract Snapshot
 
-- Story: `S-022`, confirmed 2026-09-11.
-- Sources checked: the confirmed Story; `REQ-017`; `DES-001` and `DES-016`;
-  the FEAT-005 routing manifest; UI-001, UI-002, and UI-013; the exact shell,
-  overview, and route-definition regions in the adopted archive; and delivered
-  S-001, S-002, S-003, and S-021 code/contracts/tests.
-- Material decisions requiring approval: None. `story-pipeline` authorizes the
-  implementation choices below. The workbench is Simplified Chinese only and
-  has no prototype controls, state-forcing data, or locale selector.
+- Story: `S-022`, confirmed 2026-09-11 and currently implemented.
+- Repair trigger: confirmed UI-001, UI-002, and UI-013 behavior and visual
+  direction are materially under-rendered by the current browser client. This
+  is an implementation correction, not a product, Feature, or UI Reference
+  change.
+- Sources checked: the self-contained Story; exact shell and route regions at
+  archive entry lines 50-120 and 2584-2594; exact Overview region at lines
+  121-263; confirmed UI-001, UI-002, and UI-013 entries; design-system
+  `readme.md`, `styles.css`, and manifest; current Overview contracts/service;
+  current static shell/CSS; and Chrome/CDP browser tests.
+- Material decisions requiring approval: None. The invoking repair pipeline
+  authorizes the choices below. No prototype implementation or demo fact
+  becomes production code or data.
 
 ## AC To Design Mapping
 
 | AC | Implementation | Planned Verification |
 |---|---|---|
-| 1 | Serve one browser shell with exactly eight semantic navigation links, stable route paths, breadcrumbs, and a URL-derived workspace context. Route components own presentation/loading state only; all runtime facts come from the control API. | Browser keyboard test tabs through all destinations, activates each with Enter/Space, asserts `aria-current`, URL/breadcrumb context persistence, and no duplicate request-derived engine data store. |
-| 2 | Add a bounded read-only overview projection that combines non-probing core health, optional capability state, registered Plugin availability, and active Run count. Render core health, optional providers, and Plugins in separate labelled status groups with safe code-based diagnostics and recheck/navigation actions. | API contract tests prove core readiness makes no external call, optional states remain separate, unsafe text cannot appear, and unavailable/degraded/not-configured states produce the correct accessible actions. Component tests cover labels and retry state. |
-| 3 | Read recent runs and comparison Artifacts from S-002/S-021 persistence through a new overview query service; expose four commands as navigation only. Render recent Runs, failure inspection/retry only when the Run contract permits it, and actual comparison summaries. | Repository/query-service fixtures cover mixed engine kinds, active/failed/terminal runs, no comparison records, and bounded comparison parsing. UI tests cover populated table, failed-run triage, command routing, and no fabricated counts/values. |
-| 4 | Keep a fixed shell and stable overview regions while each API section has loading, empty, dependency-unavailable, and recoverable refresh-error presentation. Preserve the last valid overview during refresh failure and expose retry without hiding primary commands. | Component/browser matrix asserts every state has a distinct accessible heading/status, retry transitions correctly, command placement is stable, and no synthetic default rows or shifting shell geometry occurs. |
-| 5 | Use CSS grid/flex with a fixed 220 px desktop navigation at widths at least 900 px and an off-canvas modal drawer below 900 px. Drawer focus is trapped while open, Escape/overlay close it, and body/content never sit beneath it. | Playwright screenshots at 1440 x 900 and 644 px for open/closed navigation, plus DOM scroll-width/overlap checks and keyboard focus-return assertions. |
-| 6 | Define local CSS tokens and reusable controls for UI-013: neutral ruled surfaces, square controls, compact density, red command accent, teal/blue/amber/red semantic states, icons, and visible hover/focus/disabled states. | Screenshot assertions for populated, empty, dependency, and refresh-error desktop states and narrow drawer state; automated focus/contrast/overflow checks. |
+| 1 | Separate eight `PRIMARY_DESTINATIONS` from deep-route metadata. Keep `/workbench/evaluation-run` as a child of Evaluation Dataset, but remove it from primary sidebar/drawer navigation. Build both nav instances from one descriptor list, preserve validated `workspace` in every route, and mark the parent destination current for child routes. | CDP asserts exactly eight primary links in desktop and drawer nav, unique expected paths, `aria-current`, child-route parent selection, workspace propagation, keyboard activation, and focus order. |
+| 2 | Load the existing `workbench-overview/v1` projection once per page through a shared snapshot controller and render four independently labelled shell groups: core, optional external capability, Plugin runnable count, and active Runs. Render complete core/capability/Plugin detail again in the Overview dependency band using only server-owned statuses and safe codes. | Fixtures independently vary core, optional capability, and Plugin readiness. DOM assertions prove no aggregate offline claim, no external probing, safe labels/codes, stale/error distinction, and correct Registry/refresh actions. |
+| 3 | Replace the one-line Overview with the adopted command row, dependency band, dense recent-Run table, failed-Run queue, and recent-comparison list. Consume every relevant existing API field; commands remain navigation, and recovery links lead to owner-authoritative Run diagnosis rather than issuing a generic retry. | Populated fixture asserts four commands/routes, all Runs, durations/statuses/digests, failure code and retryability-dependent recovery link, comparison summaries, and no synthetic profile/input/metric values. |
+| 4 | Give shell context and each Overview region explicit loading, first-use empty, dependency-unavailable, and recoverable refresh-error renderers with fixed structural slots. A failed refresh preserves and marks the last successful snapshot stale; a first-load failure retains commands and section geometry with bounded error copy. | Deterministic fixture sequences cover loading-to-success, empty, independent dependency loss, first-load error, and success-then-refresh-error. CDP checks `aria-live`/`role`, stale retention, retry recovery, disabled state, and stable section bounds. |
+| 5 | Rebuild shell geometry around a sticky 220 px desktop sidebar and compact sticky context bar. Below 900 px, remove the sidebar from layout and expose a modal 220 px drawer with backdrop, inert background, focus loop, Escape/backdrop/link close, and focus return. | Geometry assertions and screenshots at 1440 x 900 and 644 x 900 prove sidebar width, menu visibility, drawer open/closed bounds, no overlap, no page horizontal overflow, and focus restoration. |
+| 6 | Establish local UI-013 tokens plus S-022-only reusable primitives for icons, command links, status tags, section headers, dense tables, notices, empty states, and skeleton rows. Use self-hosted Archivo, a documented Lucide subset, zero radius, strong rules, restrained red commands, and teal/blue/amber/red state roles with complete hover/active/focus/disabled styling. | Token/component checks plus accepted golden-image comparison for desktop Overview states and narrow shell/drawer states; CDP also checks computed radius, focus outline, stable sizes, and absence of prototype controls/locale UI. |
 
 ## Current Code Findings
 
-- `src/kb2_runtime/api.py` currently exposes only the S-001 health endpoints;
-  there is no browser application, static asset serving, overview API, or
-  client build toolchain. Python/FastAPI is the only current web dependency.
-- `HealthService.report(..., probe_external=False)` already provides the
-  required core/optional distinction. `/health/ready` deliberately does not
-  probe DeepSeek, while `/health/capabilities` only probes it when explicitly
-  required. The overview must use the non-probing path on load and refresh.
-- S-002 persists authoritative Runs, stages, safe errors, Artifact manifests,
-  timestamps, and plan digests in PostgreSQL. It can read one `RunTrace`, but
-  has no bounded chronological run-list query suitable for a workbench.
-- S-003's `bootstrap_registry()` and `PluginRegistry.inspect()` provide the
-  repository-owned allowlist and `runnable`/safe reason view. They must be
-  projected from actual capability/runner readiness, not copied into browser
-  fixtures.
-- S-021 persists immutable `evaluation.comparison/v1` Artifacts and associated
-  Evaluation Runs. Those Artifact contents are the source for comparison
-  summaries; there is no API/list projection yet.
+- `workbench.js` uses one route array for dispatch and primary navigation. It
+  contains nine entries because `evaluation-run` was added as a primary
+  destination, while UI-001 and S-022 require eight. The evaluation route is
+  valid S-026 behavior and must remain reachable as a child route.
+- `shell()` renders the brand, duplicated links, one breadcrumb, and a text
+  hamburger. It does not render workspace, core, optional capability, Plugin,
+  or active-Run context.
+- `overview()` fetches the correct endpoint but collapses the entire projection
+  to `coreStatus` and `activeRunCount`. Recent Runs, failures, comparisons,
+  dependency details, commands, empty state, and refresh recovery are absent.
+- `workbench-overview/v1` already exposes the bounded safe fields required for
+  the repair: checked time; core aggregate/components; optional capabilities;
+  Plugin runnable state/reason; active count; eight Runs; and four verified
+  comparison summaries. No API, repository, database, or migration change is
+  required.
+- The CSS has the 220 px grid and zero radius, but uses Arial, a small token
+  set, no shared semantic status primitives, incomplete interaction states,
+  and little of UI-002's ruled composition. The same assets serve S-023 through
+  S-027, so repair selectors must be scoped and legacy token aliases retained.
+- The S-022 browser matrix directly launches Chrome with a fixed port/delay and
+  only checks that a PNG larger than 1 KB exists. It neither compares with a
+  reference nor waits for explicit UI state. The current run gives two passing
+  cases and a loading/644 px capture/termination failure; this is not visual
+  parity evidence.
 
 ## Proposed Approach
 
-### Thin Delivery Shape
+### Route And Shell Model
 
-Add a dependency-free static application served by FastAPI under `/workbench/`
-and a single versioned read-only API at `GET /api/workbench/overview`. Use
-standard ES modules, CSS, and browser History API routing rather than adding a
-Node build chain or a second server. FastAPI owns bootstrap HTML and static
-asset caching; the browser owns only current route, drawer visibility, focus,
-and fetch state. It does not compile Profiles, invoke Plugins, calculate
-metrics, infer recovery eligibility, or retain a browser-side engine model.
+Use this immutable primary descriptor set:
 
-The shell's eight destinations and paths are fixed for this Story:
+| Destination | Path | Icon | Child route handling |
+|---|---|---|---|
+| Overview | `/workbench/overview` | grid | None |
+| Documents | `/workbench/documents` | file-text | Ingestion diagnosis remains in Runs |
+| Profile Studio | `/workbench/studio` | sliders-horizontal | None |
+| Query Lab | `/workbench/query` | search | None |
+| Evaluation Dataset | `/workbench/evaluation-dataset` | list-checks | `/workbench/evaluation-run` selects this parent |
+| Compare | `/workbench/compare` | git-compare | None |
+| Runs | `/workbench/runs` | layers | Run-detail query context remains here |
+| Plugin Registry | `/workbench/plugins` | plug | None |
 
-| Destination | Path | S-022 behavior |
-|---|---|---|
-| Overview | `/workbench/overview` | Implemented overview. |
-| Documents | `/workbench/documents` | Shell route placeholder for S-024. |
-| Profile Studio | `/workbench/studio` | Shell route placeholder for S-023. |
-| Query Lab | `/workbench/query` | Shell route placeholder for S-025. |
-| Evaluation Dataset | `/workbench/evaluation-dataset` | Shell route placeholder for S-026. |
-| Compare | `/workbench/compare` | Shell route placeholder for S-027. |
-| Runs | `/workbench/runs` | Shell route placeholder for S-027. |
-| Plugin Registry | `/workbench/plugins` | Shell route placeholder for S-023. |
+Keep `ROUTE_META` separate so dispatch and breadcrumbs can describe
+`evaluation-run` without adding a ninth primary link. Continue the strict
+workspace validator. Workspace is presentation context only: show the
+validated value as plain context, show `本地运行时` when absent, and never offer
+prototype workspace demo choices or infer tenancy.
 
-Placeholder routes state that their workflow is not yet available; they do not
-invent controls, data, or destination-specific state. The URL query parameter
-`workspace` is optional, bounded, and presentation-only. Its selected value
-is preserved through navigation and appears in breadcrumb/context copy, but
-does not select database data or imply tenancy. When absent, display the local
-runtime context rather than a synthetic workspace name.
+`shell(content)` becomes a stable three-part structure: primary sidebar,
+compact context header, and route content. Sidebar and drawer consume the same
+nav builder. On narrow screens the drawer owns a labelled close icon, modal
+focus loop, inert shell background, backdrop click, Escape/link close, and
+focus return. It never contains prototype runtime/demo footer facts.
 
-### Overview API And Read Model
+Create one page-local `OverviewSnapshotController` around
+`GET /api/workbench/overview`. It may cache the last successful response and
+fetch promise for presentation consistency only; it does not persist or derive
+engine state. Shell context and Overview subscribe to the same controller, so
+the Overview route does not make duplicate requests. Other routes request the
+projection once to populate shell context. Refresh starts one new request and
+updates both subscribers.
 
-Create frozen, extra-forbidden Pydantic models in a focused `workbench`
-package. The response has `contractVersion: "workbench-overview/v1"` and
-contains only bounded safe fields:
+The context bar presents compact, separately labelled facts:
 
-```text
-core: { status, checkedAt, components[] }
-optionalCapabilities: [{ id, status, code, provider?, model?, latencyMs }]
-plugins: [{ pluginId, runnable, reason? }]
-activeRunCount: non-negative integer
-recentRuns: [{ id, engineKind, state, terminalState?, createdAt, startedAt?, endedAt?,
-              planDigest, failure?: { code, retryable } }]
-recentComparisons: [{ artifactId, runId, createdAt, mode, axis?, recommendation }]
-```
+- `核心` uses server-owned `coreStatus` directly;
+- `外部能力` summarizes returned capability statuses and exposes every safe
+  status/code in accessible detail;
+- `Plugin` reports runnable/total from the returned boolean projection without
+  claiming that core is unavailable;
+- `活动 Run` displays `activeRunCount` and links to Runs.
 
-`WorkbenchOverviewService` performs one bounded request (maximum eight recent
-Runs, four comparisons) through read-only repository methods. The run-list SQL
-orders by `created_at DESC, id DESC`, derives active count from `PENDING` and
-`RUNNING`, and returns only engine kind, lifecycle/timing, plan digest, and
-the latest safe failed-stage code/retryability. It does not return stage
-summaries, Artifact locators, source text, provider bodies, credentials, or
-raw configuration. A comparison query selects successful
-`evaluation.comparison/v1` Artifacts in newest order, verifies its safe
-canonical content against the manifest digest before extracting only mode,
-axis, and recommendation, and skips malformed/ineligible records rather than
-publishing partial invented values.
+Count formatting and semantic colors are presentation only. They never change
+command eligibility or manufacture a global readiness state. During load each
+group holds a fixed-width skeleton. On first failure each says `状态不可用`;
+after refresh failure the last values remain with `数据可能已过期`.
 
-For every overview request, call `HealthService.report(probe_external=False)`
-once. Components populate `core`; capabilities populate
-`optionalCapabilities`, never an aggregate "offline" label. Build the Plugin
-projection with the shared registry and readiness functions based on this
-same health snapshot. A non-ready container runner or declared capability
-makes the relevant Plugin non-runnable without converting a healthy core into
-a failed core. The endpoint returns a safe 503 problem projection only when
-the overview dependencies themselves cannot be read; the client continues to
-show its last successful snapshot and offers a refresh. It never asks the
-browser to call provider health endpoints directly.
+### Overview Composition And State
 
-The four commands only navigate: document submission to Documents, Profile
-creation to Studio, Query Lab to Query, and evaluation execution to Evaluation
-Dataset. A failed Run "inspect" action routes to Runs with its opaque `runId`.
-Retry is rendered only when API `failure.retryable` is true, and S-022 routes
-it to the destination inspection context because no generic retry command is
-in the S-002 Run API. It must not issue an invented retry request.
+Keep the archive's stable document order without copying its markup:
 
-### UI And Interaction
+1. A ruled title/command row with four links: `提交文档`, `新建 Profile`,
+   `打开 Query Lab`, and `运行评估`, targeting Documents, Studio, Query Lab,
+   and Evaluation Dataset while preserving workspace.
+2. A dependency band grouped as core components, optional capabilities, and
+   Plugins. Each shows identifier, localized status, and safe code/reason.
+   Unavailable items add one notice with `重新检查` and `打开插件注册表`;
+   optional `not_configured` remains distinct from core outage.
+3. A ruled split with recent Runs on the wider side and failure/comparison
+   sections on the narrower side at desktop width. Narrow layouts stack; only
+   the table wrapper may scroll horizontally.
 
-Use semantic landmarks (`nav`, `header`, `main`, labelled sections), native
-links/buttons, Lucide-style inline icon components, `aria-current="page"`,
-and `aria-live` for refresh/loading/result notices. At desktop width the
-sidebar is `220px` fixed in the grid and the compact context bar is sticky.
-Below 900 px the sidebar is removed from layout and becomes an inert-backed
-dialog drawer; it has an accessible name, modal focus loop, Escape/overlay
-close, and focus return to the menu button. No locale UI is included.
+The Run table renders only API-owned facts: shortened ID with full UUID in
+accessible text/title, engine kind, shortened plan digest, lifecycle state,
+elapsed duration when both endpoints exist, and created time. Each row has an
+explicit Runs inspection link rather than a clickable pseudo-row. Missing
+timestamps display a neutral placeholder and never become zero duration.
 
-Overview keeps its title/command row, dependency band, recent-Run section,
-failed-Run triage, and comparison section in stable document order. Dense
-tables may horizontally scroll within their own region at narrow widths; the
-page itself must not horizontally overflow. Loading uses fixed-height table
-rows/skeletons. First use shows no records and routes through the actual
-document command. Dependency-unavailable shows the health-derived components,
-not a fake outage. A refresh error leaves the last snapshot visible; before a
-first successful load it presents a bounded error region plus retry.
+The failure queue filters the returned recent Runs. It shows Run identity,
+engine kind, safe failure code, inspection, and a recovery navigation link only
+when `failure.retryable` is true. The link opens owner-authoritative Run
+diagnosis; it does not call retry. Comparison rows show mode, optional axis,
+recommendation, and time and route to Compare without inventing selection.
 
-CSS variables encode the adopted light palette, borders, spacing, compact
-Archivo/system fallback typography, and semantic statuses. Controls have zero
-corner radius; rules divide sections; the red accent is reserved for primary
-commands. Avoid cards, gradients, prototype toolbar, local/offline claims,
-or any synthetic values.
+Loading uses fixed-height skeleton rows. With no Runs/comparisons, each section
+owns a concise first-use empty state; the Run state repeats the real document
+command. Dependency unavailability does not replace persisted activity. A
+first fetch error keeps commands and stable section frames, adds a bounded
+alert/retry, and labels context unavailable. A later refresh error preserves
+data, labels it stale, and offers retry. Success clears the stale state without
+reconstructing the shell.
+
+### Visual Tokens And Reusable Primitives
+
+Expand `workbench.css` with UI-013 variables for ground/surface, ink, neutral
+and accent ramps, 4/8/12/16/24/32 px spacing, zero radii, rule weights, compact
+type, and healthy/running/warning/failure roles. Retain `--ink`, `--muted`,
+`--rule`, `--panel`, `--accent`, `--blue`, `--teal`, and `--red` as aliases so
+later Story screens do not change accidentally.
+
+Self-host Archivo 400/600/800 Latin files rather than depending on the
+prototype's Google Fonts import or a workstation. Include the upstream license
+and pinned source/checksum. Simplified Chinese uses a declared system CJK
+fallback. Vendor only required Lucide icon definitions from one pinned release
+with its license; do not copy prototype paths or hand-draw replacements.
+
+Add native-DOM factories for `icon`, `iconButton`, `commandLink`, `statusTag`,
+`sectionHeader`, `notice`, `emptyState`, `skeletonRows`, and `denseTable`. They
+return semantic native elements and contain no engine decisions. Use them for
+S-022 only. Existing S-023 through S-027 renderers retain behavior/selectors;
+page-specific conversion belongs to their repairs.
+
+Every S-022 interactive class defines hover, active, focus-visible, and
+disabled states. Focus is a 2 px red outline; semantic color is paired with
+text/icon. Controls/tags have stable height and zero radius. Major sections are
+unframed ruled regions, not cards; add no gradients, shadows, decorative
+imagery, toolbar, locale selector, or offline claim.
 
 ## Relevant Impacts
 
-- **API:** Add the overview read model/endpoint and HTML/static routes. Health
-  endpoint contracts remain unchanged; API response bodies use safe IDs,
-  lifecycle state, code, and bounded aggregates only.
-- **Data and migration:** Add read-only repository queries/index-friendly
-  ordering over existing `runs`/Artifacts. No database schema, Artifact type,
-  Profile, Registry, or Run lifecycle migration is needed.
-- **Security:** The UI receives no secret, provider request/response, Artifact
-  location/content, arbitrary error text, filesystem path, command, or
-  executable configuration. Query params are presentation-only and validated.
-- **Observability:** Every overview refresh maps health codes and persisted
-  lifecycle fields to visible diagnostics. Client fetch failure is distinct
-  from core/capability/Plugin status and is never stored as an engine outcome.
-- **Compatibility:** Future S-023 through S-027 replace route placeholders
-  while retaining the shell, paths, context semantics, and overview endpoint.
+- **UI modules:** Update `static/workbench.js` for route separation, shared
+  snapshot state, shell, drawer, and Overview. Add small
+  `static/workbench-ui.js` and pinned icon module only if needed to keep native
+  DOM factories independently testable; no framework/build chain is added.
+- **Styles/assets:** Retune `static/workbench.css` with compatible aliases and
+  scoped Shell/Overview primitives. Add locally served pinned Archivo/Lucide
+  assets and license notices. `artifact.css` and other page compositions remain
+  unchanged.
+- **API/data:** Keep `workbench-overview/v1`, persistence queries, and routes
+  unchanged. Add no migration, Artifact, or client-owned domain state.
+- **Security:** Continue text-only DOM construction and strict workspace/UUID
+  routing. Display only bounded identifiers, enums, and safe codes. Add no raw
+  errors, Artifact content, credentials, paths, commands, or prototype data.
+- **Compatibility:** Preserve every URL and downstream dispatch.
+  `evaluation-run` remains addressable and selects Evaluation Dataset in
+  primary navigation. Later Story browser scenarios are required regressions.
+
+## Deterministic Visual Comparison Evidence
+
+Keep the FastAPI fixture app and Chrome/CDP helpers, but replace the S-022
+direct `--screenshot` loop with a CDP-controlled scenario runner:
+
+1. Allocate server/debug ports with `_free_local_port()` and launch/close via
+   `_launch_isolated_chrome()` and `_close_isolated_chrome()` so failure cannot
+   strand Chrome.
+2. Add test-only deterministic fixture controls for `populated`, `empty`,
+   `dependency`, `first-error`, and request sequences. Loading uses a release
+   endpoint/event instead of sleep; refresh-error uses one success followed by
+   controlled 503. Production never sees these controls.
+3. Wait through CDP for explicit `data-overview-state` and `document.fonts.ready`
+   rather than delay. Set exactly 1440 x 900 or 644 x 900 at DPR 1; disable
+   animations, transitions, and caret; keep fixture values deterministic.
+4. Commit accepted PNGs under `tests/visual/baselines/s022/` with a manifest
+   recording viewport, scenario, UI anchor, prototype SHA, fixture revision,
+   exclusions, and baseline SHA. Generate them from production plus fixtures
+   only after side-by-side review against exact adopted prototype regions; do
+   not import prototype markup, styles, or demo facts.
+5. Use Chrome as the PNG decoder: load baseline/current into canvas through
+   CDP, compare RGBA, and return differing-pixel ratio/bounds. On failure write
+   baseline/current/high-contrast-diff PNGs to pytest artifacts. This adds no
+   platform imaging tool or Python image dependency.
+6. Gate stable regions at no more than 0.5% differing pixels with per-channel
+   tolerance 12. Separately assert geometry within 1 px for sidebar, context
+   bar, main boundaries, drawer, and scoped overflow. Do not mask text/status
+   regions because fixtures and local fonts are deterministic. Never update a
+   baseline automatically.
+
+Required golden scenarios:
+
+| Viewport | Scenario | Evidence |
+|---|---|---|
+| 1440 x 900 | Populated | Complete shell/context, commands, dependencies, Run table, failure queue, comparisons |
+| 1440 x 900 | Empty | Stable commands and first-use Run/comparison states |
+| 1440 x 900 | Dependency unavailable | Independent core/capability/Plugin states and actionable notice |
+| 1440 x 900 | Loading | Fixed skeleton geometry before controlled release |
+| 1440 x 900 | Refresh error after success | Last snapshot retained and visibly stale with retry |
+| 644 x 900 | Populated, drawer closed | Menu replaces sidebar, stacked Overview, no page overflow |
+| 644 x 900 | Populated, drawer open | 220 px modal drawer/backdrop with coherent bounds |
+
+First-load error and retry-to-success require semantic/geometry assertions even
+though refresh-error is the primary error golden. Every image check is paired
+with DOM assertions; screenshot existence is never sufficient.
 
 ## Alternatives And Risks
 
-- Adding React/Vite was rejected: this repository has no frontend package
-  baseline, and a small static shell needs no build/runtime dependency. Native
-  modules remain sufficient until a later Story has a demonstrated shared UI
-  complexity need.
-- Reusing `/health/ready` plus browser assembly was rejected: it cannot supply
-  runs/comparisons and would invite duplicated readiness inference. The server
-  projection has one explicit safe contract.
-- Eagerly probing DeepSeek on each overview refresh was rejected because it
-  violates S-001's optional-capability boundary and makes ordinary workbench
-  availability dependent on an external provider.
-- The initial runtime may have no persisted Runs/comparisons. The empty state
-  is intentional and must not be filled with prototype sample values.
-- Browser visual tests introduce a browser-runtime dependency. Keep them
-  isolated from current Python contract tests, use pinned Playwright tooling in
-  the test environment, and make their screenshots deterministic from fixture
-  API responses rather than live provider/Docker availability.
+- React/Vite remains unjustified for a native-DOM repair. Small factories and
+  scoped classes provide reuse without a second build/runtime.
+- Copying prototype HTML/CSS would violate UI governance and carry demo facts
+  and network imports. Implement independently from adopted evidence.
+- A single aggregate readiness badge was rejected because it conceals
+  core/optional/Plugin distinction. Presentation counts remain independently
+  labelled and never govern engine behavior.
+- Pixel-only comparison can approve semantic breakage; DOM-only tests miss
+  visual drift. Require controlled pixel and semantic/geometry evidence.
+- Shared CSS can regress later pages. Preserve token aliases, scope new classes,
+  and run representative Studio, Documents, Query, Evaluation, Compare, Runs,
+  Registry, and Artifact inspector scenarios at both viewports.
+- Rasterization updates can add antialiasing noise. Self-hosted fonts, DPR 1,
+  channel tolerance, and bounded pixel ratio absorb noise without masking
+  layout/component changes.
 
 ## Test Strategy
 
-- Add FastAPI/API contract tests for static entry routing, response schema,
-  response bounds/order, safe serialization, no external health probe, core
-  versus optional/Plugin separation, unknown/bad query rejection, empty
-  persistence, comparison filtering, and dependency failure translation.
-- Add repository/service tests with fake health, registry, trace, and Artifact
-  adapters for failed/retryable/non-retryable Runs, active count, chronological
-  tie-breaking, malformed comparison content, and no duplicate state logic.
-- Add browser component/end-to-end coverage using fixture-backed overview API:
-  all eight keyboard routes, breadcrumbs/workspace preservation, commands,
-  populated/empty/dependency/loading/error states, refresh recovery, semantic
-  labels, drawer keyboard operation, and focus return.
-- Add deterministic screenshot/overflow checks at 1440 x 900 for populated,
-  empty, dependency, and refresh-error states, and at 644 px for drawer
-  closed/open. Assert `document.documentElement.scrollWidth <= innerWidth` and
-  that drawer/content bounding boxes do not overlap in the closed state.
-- Run existing health, trace, and Plugin contract/integration tests unchanged
-  to protect the S-001--S-003 boundaries.
+- Keep current Overview service/API tests to prove the bounded server contract;
+  add no API field only for display convenience.
+- Replace source-string link counting with DOM assertions for exactly eight
+  destinations, expected hrefs, workspace retention, child parent selection,
+  no locale/prototype controls, and no complete-offline copy.
+- Add CDP tests for separated context states, four commands, Run/comparison
+  navigation, retryability-dependent recovery, empty, controlled loading,
+  first error, stale refresh failure, and recovery.
+- Cover drawer focus entry/loop, Escape/backdrop/link close, inert removal,
+  focus return, geometry, and page/scoped overflow.
+- Run the seven golden scenarios and retain current/diff artifacts on failure.
+- Run focused S-022 API/browser checks and a representative browser scenario
+  for every later workbench Story. Docker lifecycle is not required for this
+  static fixture-backed correction.
 
 ## Implementation Checklist
 
-- [ ] Add `kb2_runtime.workbench` contracts, read-only service, and repository
-  projections with bounded/sanitized output.
-- [ ] Wire FastAPI overview/static routes without changing existing health
-  endpoint semantics.
-- [ ] Add dependency-free shell modules/styles and all eight route states.
-- [ ] Implement overview states, health/capability/Plugin distinction, and
-  contract-permitted navigation actions.
-- [ ] Add API/service, browser accessibility, responsive/overflow, and visual
-  regression coverage; run focused and existing regression suites.
+- [ ] Separate eight primary destinations from deep route metadata without
+  changing URLs or downstream dispatch.
+- [ ] Implement shared snapshot controller and complete context bar.
+- [ ] Implement all Overview regions, commands, bounded formatters, and state
+  transitions.
+- [ ] Establish scoped UI-013 tokens/primitives, self-hosted typography, and a
+  pinned licensed Lucide subset while retaining legacy aliases.
+- [ ] Repair narrow drawer semantics, focus, inert handling, geometry, and
+  overflow containment.
+- [ ] Replace brittle screenshot-existence checks with controlled CDP golden,
+  diff, semantic, and geometry evidence.
+- [ ] Run focused and later-Story shell/CSS regressions; record artifacts and
+  environment residuals in the run log.
 
 ## Open Questions
 
-None. The pipeline may proceed directly to development.
+None.
 
 ## Approval
 
-Approved by the S-022 `story-pipeline` invocation on 2026-09-12; no separate
-product decision is required.
+Approved by the S-022 repair `story-pipeline` invocation on 2026-09-13. The
+pipeline may proceed directly to development without separate design approval.
 
 ## Change History
 
-- **2026-09-12:** Created just-in-time implementation design from confirmed
-  S-022 and its exact REQ/DES/UI/Feature anchors and current delivered code.
+- **2026-09-12:** Created the initial just-in-time implementation design.
+- **2026-09-13:** Replaced the pre-implementation plan with an approved repair
+  design grounded in delivered code, exact UI-001/UI-002/UI-013 regions, the
+  complete Overview projection, eight-destination shell correction, scoped
+  visual primitives, and deterministic Chrome/CDP comparison evidence.

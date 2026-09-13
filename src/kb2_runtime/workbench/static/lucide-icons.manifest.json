@@ -1,0 +1,179 @@
+{
+  "family": "Lucide Icons",
+  "version": "0.468.0",
+  "tag": "0.468.0",
+  "commit": "f12b0de177fbc2a6795e99be065887e72b237123",
+  "upstream": "https://github.com/lucide-icons/lucide",
+  "sourceTemplate": "https://api.github.com/repos/lucide-icons/lucide/contents/{sourcePath}?ref=f12b0de177fbc2a6795e99be065887e72b237123",
+  "license": "ISC",
+  "licenseFile": "LICENSE.lucide-icons.txt",
+  "licenseSource": "https://api.github.com/repos/lucide-icons/lucide/contents/LICENSE?ref=f12b0de177fbc2a6795e99be065887e72b237123",
+  "licenseGitBlobSha1": "325e8ff0aae2dde3134c1ceed780a11d7bd8f544",
+  "licenseSha256": "1e7290b35280a048667bbf0ebabac1c7fd52a75300e8b2946ac165715997f2bc",
+  "embeddedSource": "workbench.js#LUCIDE",
+  "embeddedHashNormalization": "SHA-256 of the UTF-8 trimmed declaration line, including its trailing comma",
+  "icons": [
+    {
+      "key": "grid",
+      "sourceIcon": "layout-grid",
+      "sourcePath": "icons/layout-grid.svg",
+      "sourceGitBlobSha1": "f8eca3a721201b652dbbc3b76c15e92fd271c9f9",
+      "sourceSha256": "b8903f61d09b1d75e55c71158277d26570962f69c2099446a251871e0a2d6678",
+      "embeddedLineSha256": "9d82c626de7b80e6a5d0bb0a55445dc6a45a6415d229b63299e0285bc62b9446",
+      "relationship": "adapted: corner radii omitted"
+    },
+    {
+      "key": "file",
+      "sourceIcon": "file-text",
+      "sourcePath": "icons/file-text.svg",
+      "sourceGitBlobSha1": "5227939068ebaf76768cf348c04dd6c3db281a7d",
+      "sourceSha256": "486fab70d8ad3cdc69b5ff9b6c356a58d41fcc4c885359cbf9d6e088a7c47f70",
+      "embeddedLineSha256": "58ff7d938bbaa57fec633a47ab25babb3250c59bb32b75b2c51ff0c48c05b767",
+      "relationship": "adapted subset"
+    },
+    {
+      "key": "sliders",
+      "sourceIcon": "sliders-horizontal",
+      "sourcePath": "icons/sliders-horizontal.svg",
+      "sourceGitBlobSha1": "deece798db0cc023eeb032309f4d1b71d9eca1a0",
+      "sourceSha256": "4a6b5404724a439227964670bf9eb71bcebd98384178441e50093f2620169b1a",
+      "embeddedLineSha256": "fb168e2d9a19eb7f18e36253b39db710ae92b4008e75a989212e1149c2039d72",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "search",
+      "sourceIcon": "search",
+      "sourcePath": "icons/search.svg",
+      "sourceGitBlobSha1": "64bcc7250adaf8c2f39621237d6e10b56114fbc7",
+      "sourceSha256": "9322d964b61cf729b3a81210568d5a97eaf4a1f3239f25a056fda3013bf35611",
+      "embeddedLineSha256": "ddfca19abeb2c9ba30a29e31e918e91a6a45b11ff86385f3a3612b8096285cd8",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "checklist",
+      "sourceIcon": "list-checks",
+      "sourcePath": "icons/list-checks.svg",
+      "sourceGitBlobSha1": "5119b0284673659ffe11d3a853c9a58f5aec84d7",
+      "sourceSha256": "01516400eab1492cf7abe94a0a58d3809f8d3c59f24116a74658f49bbaf740e4",
+      "embeddedLineSha256": "b5607a93f3deb541982932cb1132dbe9c06a0cca530795e59d2b6713ed6b64bc",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "compare",
+      "sourceIcon": "git-compare",
+      "sourcePath": "icons/git-compare.svg",
+      "sourceGitBlobSha1": "38c3296bc448955fc45b781c30b146de3b82b92c",
+      "sourceSha256": "de8b659f5abc7f2ea88a4569744a788fe085ddc407cf3235a15d261e1dda4647",
+      "embeddedLineSha256": "48ab10a751e94d21ea23f0d51dc35c57dc0257e9d38dd0dfd234f0be64ecdb58",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "layers",
+      "sourceIcon": "layers",
+      "sourcePath": "icons/layers.svg",
+      "sourceGitBlobSha1": "a3b69ae319a8d3036bb5b26f92195bfe337e17bf",
+      "sourceSha256": "ce16d0a955e3581cda17f6b2fd5c5bc2034b405f9cecc31c8ebb8495b4afc1bb",
+      "embeddedLineSha256": "cd0f6ccc9be591beec64ee79e12c9df92aa495db49c33c8d7f0fe8a41f16ae2f",
+      "relationship": "adapted lower layers"
+    },
+    {
+      "key": "plug",
+      "sourceIcon": "plug",
+      "sourcePath": "icons/plug.svg",
+      "sourceGitBlobSha1": "0b92aeee850228d9acc158a9903ecf397e01439b",
+      "sourceSha256": "2797d68c45c73c7b0befc312bb5d9a8b90f16c86c7f8b31b8afe57b39b97718a",
+      "embeddedLineSha256": "62e5259f3615777bb5f400757ead8d56e26cdb8b7f94af6d54e109aabf968b1d",
+      "relationship": "adapted body radius"
+    },
+    {
+      "key": "menu",
+      "sourceIcon": "menu",
+      "sourcePath": "icons/menu.svg",
+      "sourceGitBlobSha1": "c68f00db909e51cd878299755d0884b1b202fdb4",
+      "sourceSha256": "90a31b3ab1cf6c796b6024560324daf425233ae3c11f30818b182ce557bafa99",
+      "embeddedLineSha256": "b868482e028cf7d2f7c9852fcd5b8cae5a2c39fde21779ed9a8835ca0e1aec06",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "close",
+      "sourceIcon": "x",
+      "sourcePath": "icons/x.svg",
+      "sourceGitBlobSha1": "e31794349d3eecea1b3ae8e974b68bb8f4becda7",
+      "sourceSha256": "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117",
+      "embeddedLineSha256": "a6845f7628a84231855c90af02ce50a967209572c5b3e3a0eeb30cf7e9c6add6",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "upload",
+      "sourceIcon": "upload",
+      "sourcePath": "icons/upload.svg",
+      "sourceGitBlobSha1": "2252494a29f1351ec58ce90f7d49f8fff418aa42",
+      "sourceSha256": "04b9443355c959b3477b7856ee40dffa79438e5bfdb4e9dbf5159341ace26408",
+      "embeddedLineSha256": "920d356fa1e51dddd0352089d5d09ddfd50b8fc2e19a0933970c8347b1967983",
+      "relationship": "adapted upload mark"
+    },
+    {
+      "key": "plus",
+      "sourceIcon": "plus",
+      "sourcePath": "icons/plus.svg",
+      "sourceGitBlobSha1": "41f92bb93eb6626368d71c9884127bbcf7d3ccdf",
+      "sourceSha256": "7f6af73bf1ff6c4bca3f18351c8d1bdec6749c0c2530c4de5da85d520c21df17",
+      "embeddedLineSha256": "3b6ad71178a7fd5d813d727b722745762a3098e4c217b5a34f20212ecddbb1a8",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "play",
+      "sourceIcon": "play",
+      "sourcePath": "icons/play.svg",
+      "sourceGitBlobSha1": "5bd511c14a4890c5f9ae630ce4c21508bc917f38",
+      "sourceSha256": "e646902a5a8ba055ce573c6f51d10bb6eb9d230e7d6e84a9e6c81f599778ffc1",
+      "embeddedLineSha256": "a185fc9ee50ad417a98dbadabb4b96cc2cdf651225ddcf984d9573a3fc37b710",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "refresh",
+      "sourceIcon": "refresh-cw",
+      "sourcePath": "icons/refresh-cw.svg",
+      "sourceGitBlobSha1": "c27b3a9677e35fb2353167b01553d3d4cc4e3091",
+      "sourceSha256": "2e10dd403c85a24f163d59fc6151aa21147fe9402e1305dfc8979208caee8944",
+      "embeddedLineSha256": "3365bcbc76140cc7327b3c5be86912e0a5747d3c75391942ef6f59ff55805796",
+      "relationship": "adapted subset"
+    },
+    {
+      "key": "alert",
+      "sourceIcon": "circle-alert",
+      "sourcePath": "icons/circle-alert.svg",
+      "sourceGitBlobSha1": "578d25c022d9dd30b851d4ad72d9ec7640408a21",
+      "sourceSha256": "ce3e98b7a03b78c0071131df42466e4e1ff5187fccad30e739ec9ce951cf685a",
+      "embeddedLineSha256": "23bedaeb22a15f4293231785e88e139e3aa9e292ee58771cd4653d8eae7537d3",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "check",
+      "sourceIcon": "check",
+      "sourcePath": "icons/check.svg",
+      "sourceGitBlobSha1": "5abe1527434e7b251bde0661f99af96178976d8c",
+      "sourceSha256": "7f33acc9a77a61659531044525fc008edebe215bf4dcf1c789c8674ad3277db0",
+      "embeddedLineSha256": "7c2c5d48b875b05b281d8cad90aa54e85e729ba8dfefb95180d1bc07db199ab8",
+      "relationship": "same geometry with normalized path syntax"
+    },
+    {
+      "key": "clock",
+      "sourceIcon": "clock",
+      "sourcePath": "icons/clock.svg",
+      "sourceGitBlobSha1": "8ce25b2aef4c020276ed705fb2701b2434c5b4bd",
+      "sourceSha256": "ede96d40554848eaa512664b11e73def3960cd60c260efa59ca9ccc1bbe8ec9c",
+      "embeddedLineSha256": "916600f646fc38d215139171e65bdc590b09f293e3ffeeb75acc38c9db4cc059",
+      "relationship": "same geometry"
+    },
+    {
+      "key": "arrow",
+      "sourceIcon": "arrow-right",
+      "sourcePath": "icons/arrow-right.svg",
+      "sourceGitBlobSha1": "433ded3fcc5f7bd2b6a59356c6ffe8eceac6b7e3",
+      "sourceSha256": "288397fdb73bb4f783cf9eabb726ff47357df1d4e3f1201dd748090579f108b9",
+      "embeddedLineSha256": "3cab77bec09b1a77d50ccda187e90b6aa951ffe6b70766bc965270fa440dbb89",
+      "relationship": "adapted arrow head"
+    }
+  ]
+}

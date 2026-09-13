@@ -1,0 +1,29 @@
+{
+  "family": "Archivo",
+  "upstream": "https://github.com/Omnibus-Type/Archivo",
+  "commit": "b5d63988ce19d044d3e10362de730af00526b672",
+  "license": "SIL Open Font License 1.1",
+  "licenseFile": "LICENSE.archivo.txt",
+  "licenseSource": "https://api.github.com/repos/Omnibus-Type/Archivo/contents/OFL.txt?ref=b5d63988ce19d044d3e10362de730af00526b672",
+  "licenseSha256": "1778201b7bd33e8c08a2eda32a4ad2f69bc38ced9731b01cc3fc47f268c8ef3c",
+  "assets": [
+    {
+      "file": "archivo-400.woff2",
+      "weight": 400,
+      "source": "https://api.github.com/repos/Omnibus-Type/Archivo/contents/fonts/webfonts/Archivo-Regular.woff2?ref=b5d63988ce19d044d3e10362de730af00526b672",
+      "sha256": "b315af549bc79d980abe0bca0a648ecfa0106be1bf205bf9ed809e6381f24d0a"
+    },
+    {
+      "file": "archivo-600.woff2",
+      "weight": 600,
+      "source": "https://api.github.com/repos/Omnibus-Type/Archivo/contents/fonts/webfonts/Archivo-SemiBold.woff2?ref=b5d63988ce19d044d3e10362de730af00526b672",
+      "sha256": "5eb4dd14550d2c8771c20a8907fb17f0e9bcf57aa017fbc2cf571897b23a4135"
+    },
+    {
+      "file": "archivo-800.woff2",
+      "weight": 800,
+      "source": "https://api.github.com/repos/Omnibus-Type/Archivo/contents/fonts/webfonts/Archivo-ExtraBold.woff2?ref=b5d63988ce19d044d3e10362de730af00526b672",
+      "sha256": "8cc0e60eef220aac8cbd4835928eb7bb89514f2e1458d130004a9f0283ad1c79"
+    }
+  ]
+}

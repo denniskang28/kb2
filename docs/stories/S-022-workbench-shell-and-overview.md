@@ -94,3 +94,6 @@ None. Component framework belongs to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-005 and UI Reference sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-13:** Reconciled the implemented shell and Overview with the adopted
+  UI reference, including deterministic desktop/narrow visual regression,
+  responsive breakpoint transitions, and pinned local visual assets.
