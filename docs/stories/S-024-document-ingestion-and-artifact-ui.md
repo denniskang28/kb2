@@ -94,3 +94,8 @@ None. Renderer and upload implementation belong to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-005 and UI Reference sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-13:** UI-reference parity repair aligned Documents preflight,
+  Ingestion Run inspection, and Artifact/source navigation with UI-003 through
+  UI-005 and UI-013; candidate-specific disclosure, stale-token protection,
+  responsive visual baselines, and focused regression coverage passed final
+  independent review.

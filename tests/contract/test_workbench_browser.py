@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import asyncio
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,8 @@ CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 STATIC_ROOT = Path(__file__).parents[2] / "src" / "kb2_runtime" / "workbench" / "static"
 S022_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s022"
 S022_CAPTURE = json.loads((S022_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))["captureConditions"]
+S024_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s024"
+S024_MANIFEST = json.loads((S024_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))
 S022_CHROME_FLAGS = (
     f"--headless={S022_CAPTURE['browser']['headlessMode']}",
     "--no-sandbox",
@@ -30,6 +33,8 @@ S022_CHROME_FLAGS = (
     f"--lang={S022_CAPTURE['locale']['browser']}",
     "--remote-allow-origins=*",
 )
+_CAPTURE_CONNECTIONS: dict[int, websocket.WebSocket] = {}
+_CDP_REQUEST_ID = 100
 
 _PROFILE = {
     "profileId": "browser-query",
@@ -102,9 +107,15 @@ fixture_app = FastAPI()
 compatible_requests: list[dict[str, object]] = []
 _overview_request_count = 0
 _overview_release = asyncio.Event()
+_retry_preflight_attempts = 0
+_preflight_serial = 0
+_fixture_preflights: dict[str, dict[str, object]] = {}
+_fixture_preflight_receipts: list[dict[str, object]] = []
+_ingestion_stop_requests: list[str] = []
 _INGESTION_RUN = "12345678-1234-5678-1234-567812345680"
 _ARTIFACT = "12345678-1234-5678-1234-567812345681"
 _VISUAL_RUN = "12345678-1234-5678-1234-567812345682"
+_CHUNK_ARTIFACT = "12345678-1234-5678-1234-567812345684"
 _EVALUATION_DATASET = "12345678-1234-5678-1234-567812345690"
 _EVALUATION_RUN = "12345678-1234-5678-1234-567812345691"
 _COMPARISON = "12345678-1234-5678-1234-567812345693"
@@ -113,26 +124,83 @@ _COMPARISON_CANDIDATE = "12345678-1234-5678-1234-567812345695"
 _HISTORY_QUERY = "12345678-1234-5678-1234-567812345696"
 
 
+def _fixture_preview(profile: str, *, selected: str | None = None, tier: str = "preflight") -> dict[str, object]:
+    global _preflight_serial
+    automatic_selected = "switch-local-profile" if profile == "switch-local" else "switch-external-profile" if profile == "switch-external" else profile
+    candidates = {
+        "fixture-ingestion": ["fixture-default", "fixture-ingestion"],
+        "switch-local": ["switch-local-profile", "switch-external-profile", "switch-delayed", "switch-error"],
+        "switch-external": ["switch-external-profile", "switch-local-profile"],
+    }.get(profile, [profile])
+    selected = selected or automatic_selected
+    external = selected in {"external-ingestion", "switch-external-profile"}
+    plugin_id = "parser.external@1" if external else "parser.default@1" if selected == "fixture-default" else "parser.fixture@1"
+    _preflight_serial += 1
+    token = f"fixture-token-{_preflight_serial}-{selected}"
+    payload: dict[str, object] = {
+        "contractVersion": "workbench-document-preflight/v1", "token": token, "workspaceProfileId": profile,
+        "detected": {"media_type": "application/pdf", "extension": "pdf", "byte_size": 12},
+        "automatic": {"candidateProfileIds": candidates, "evaluatedRules": [{"rule_id": "pdf", "matched": True}], "selectedProfileId": automatic_selected, "selectionTier": "preflight"},
+        "selection": {"profileId": selected, "selectionTier": tier},
+        "planDigest": (("e" if external else "d") * 64),
+        "stages": [{"key": "extraction.parse", "candidates": [{"pluginId": plugin_id, "capabilities": (["external.fixture"] if external else [])}]}],
+        "disclosure": {"externalStages": ([{"stage": "extraction.parse", "pluginId": plugin_id, "capability": "external.fixture", "message": "文档内容可能发送到该外部提供方。"}] if external else []), "localPersistence": "提交后内容作为本地 Artifact 持久化。"},
+    }
+    _fixture_preflights[token] = {"profileId": selected, "workspaceProfile": profile, "external": external, "planDigest": payload["planDigest"]}
+    return payload
+
+
 @fixture_app.put("/api/workbench/documents/preflight")
 async def fixture_document_preflight(request: Request) -> JSONResponse:
+    global _retry_preflight_attempts
     profile = request.headers["x-profile-id"]
-    assert profile in {"fixture-ingestion", "external-ingestion"}
+    assert profile in {"fixture-ingestion", "external-ingestion", "retry-ingestion", "delayed-ingestion", "switch-local", "switch-external"}
     assert request.headers["x-filename"] == "fixture.pdf"
     assert await request.body() == b"%PDF-fixture"
-    return JSONResponse({
-        "contractVersion": "workbench-document-preflight/v1", "token": "fixture-token", "workspaceProfileId": profile,
-        "detected": {"media_type": "application/pdf", "extension": "pdf", "byte_size": 12},
-        "automatic": {"candidateProfileIds": (["fixture-default", "fixture-ingestion"] if profile == "fixture-ingestion" else [profile]), "evaluatedRules": [{"rule_id": "pdf", "matched": True}], "selectedProfileId": profile, "selectionTier": "preflight"},
-        "planDigest": "d" * 64, "stages": [{"key": "extraction.parse", "candidates": [{"pluginId": "parser.fixture@1", "capabilities": []}]}],
-        "disclosure": {"externalStages": ([{"stage": "extraction.parse", "pluginId": "parser.external@1", "capability": "external.fixture", "message": "文档内容可能发送到该外部提供方。"}] if profile == "external-ingestion" else []), "localPersistence": "提交后内容作为本地 Artifact 持久化。"},
-    })
+    replaced = request.headers.get("x-replaces-preflight-token")
+    if replaced:
+        _fixture_preflights.pop(replaced, None)
+    if profile == "retry-ingestion":
+        _retry_preflight_attempts += 1
+        await asyncio.sleep(0.2)
+        if _retry_preflight_attempts == 1:
+            return JSONResponse({"code": "PREFLIGHT_UNAVAILABLE"}, status_code=503)
+    if profile == "delayed-ingestion":
+        await asyncio.sleep(0.2)
+    return JSONResponse(_fixture_preview(profile))
 
 
-@fixture_app.post("/api/workbench/documents/preflights/fixture-token/runs")
-async def fixture_document_submit(request: Request) -> JSONResponse:
+@fixture_app.post("/api/workbench/documents/preflights/{token}/selection")
+async def fixture_document_selection(token: str, request: Request) -> JSONResponse:
+    claimed = _fixture_preflights.pop(token, None)
+    if claimed is None:
+        return JSONResponse({"code": "PREFLIGHT_UNAVAILABLE"}, status_code=404)
     value = await request.json()
-    assert value in ({"profileId": "fixture-default", "acknowledgeExternal": False}, {"profileId": "external-ingestion", "acknowledgeExternal": True})
-    return JSONResponse({"contractVersion": "workbench-ingestion-receipt/v1", "runId": _VISUAL_RUN, "profileId": value["profileId"], "planDigest": "d" * 64}, status_code=202)
+    profile_id = value["profileId"]
+    if profile_id == "switch-error":
+        await asyncio.sleep(0.2)
+        return JSONResponse({"code": "PREFLIGHT_SELECTION_UNAVAILABLE"}, status_code=503)
+    if profile_id == "switch-delayed":
+        await asyncio.sleep(0.2)
+    workspace_profile = str(claimed["workspaceProfile"])
+    return JSONResponse(_fixture_preview(workspace_profile, selected=profile_id, tier="explicit"))
+
+
+@fixture_app.post("/api/workbench/documents/preflights/{token}/runs")
+async def fixture_document_submit(token: str, request: Request) -> JSONResponse:
+    claimed = _fixture_preflights.pop(token, None)
+    if claimed is None:
+        return JSONResponse({"code": "PREFLIGHT_UNAVAILABLE"}, status_code=404)
+    value = await request.json()
+    assert value["profileId"] == claimed["profileId"]
+    assert value["acknowledgeExternal"] is claimed["external"]
+    _fixture_preflight_receipts.append({"token": token, **value})
+    return JSONResponse({"contractVersion": "workbench-ingestion-receipt/v1", "runId": _VISUAL_RUN, "profileId": value["profileId"], "planDigest": claimed["planDigest"]}, status_code=202)
+
+
+@fixture_app.get("/api/fixture/document-preflights")
+async def fixture_document_preflights() -> JSONResponse:
+    return JSONResponse({"tokens": list(_fixture_preflights), "receipts": _fixture_preflight_receipts})
 
 
 @fixture_app.get("/api/workbench/overview")
@@ -210,9 +278,15 @@ async def fixture_ingestion_run(run_id: str) -> JSONResponse:
         return JSONResponse({
             "id": run_id, "state": "RUNNING", "planDigest": "d" * 64,
             "actions": {"stop": True, "rerun": True, "artifact": True},
+            "resolution": {"selected_profile_id": "fixture-ingestion", "selection_tier": "preflight",
+                           "observables": {"extension": "pdf", "media_type": "application/pdf"},
+                           "candidate_profile_ids": ["fixture-default", "fixture-ingestion"],
+                           "evaluated_rules": [{"rule_id": "pdf", "matched": True}]},
+            "metrics": [{"name": "total_stages", "value": 4}],
+            "quality": [{"name": "ingestion_quality", "status": "PASS"}],
             "stages": [
-                {"stageKey": "extraction.parse", "attempt": 1, "state": "FAILED", "result": "FAILED", "selection": "rejected", "pluginId": "parser.fixture@1", "failure": {"code": "PLUGIN_TIMEOUT"}, "outputs": []},
-                {"stageKey": "extraction.parse", "attempt": 2, "state": "SUCCEEDED", "result": "SUCCEEDED", "selection": "accepted", "pluginId": "parser.fixture@1", "inputs": [{"id": "12345678-1234-5678-1234-567812345683", "artifactType": "opaque.bytes"}], "startedAt": "2026-09-13T01:02:03Z", "endedAt": "2026-09-13T01:02:04Z", "metrics": [{"name": "latency_ms", "value": 12}], "quality": [{"name": "parse_quality", "status": "PASS", "value": "native"}], "failure": None, "outputs": [{"id": _ARTIFACT, "artifactType": "canonical.document"}]},
+                {"stageKey": "extraction.parse", "attempt": 1, "state": "FAILED", "result": "FAILED", "selection": "rejected", "pluginId": "parser.primary@1", "failure": {"code": "PLUGIN_TIMEOUT"}, "outputs": []},
+                {"stageKey": "extraction.parse", "attempt": 2, "state": "SUCCEEDED", "result": "SUCCEEDED", "selection": "accepted", "pluginId": "parser.fallback@1", "inputs": [{"id": "12345678-1234-5678-1234-567812345683", "artifactType": "opaque.bytes"}], "startedAt": "2026-09-13T01:02:03Z", "endedAt": "2026-09-13T01:02:04Z", "metrics": [{"name": "latency_ms", "value": 12}], "quality": [{"name": "parse_quality", "status": "PASS", "value": "native"}], "failure": None, "outputs": [{"id": _ARTIFACT, "artifactType": "canonical.document"}]},
                 {"stageKey": "structure.main", "attempt": 1, "state": "SKIPPED", "result": "SKIPPED", "selection": "rejected", "pluginId": "structure.fixture@1", "failure": None, "outputs": []},
                 {"stageKey": "chunking.main", "attempt": 1, "state": "RUNNING", "result": None, "selection": None, "pluginId": "chunker.fixture@1", "failure": None, "outputs": []},
             ],
@@ -225,8 +299,20 @@ async def fixture_ingestion_run(run_id: str) -> JSONResponse:
                     "state": "SUCCEEDED", "result": "SUCCEEDED",
                     "selection": None, "failure": None, "outputs": [{
                         "id": _ARTIFACT, "artifactType": "canonical.document",
-                    }]}],
+                    }, {"id": _CHUNK_ARTIFACT, "artifactType": "chunk.set"}]}],
     })
+
+
+@fixture_app.post("/api/workbench/ingestion-runs/{run_id}/stop")
+async def fixture_stop_ingestion_run(run_id: str) -> JSONResponse:
+    assert run_id == _VISUAL_RUN
+    _ingestion_stop_requests.append(run_id)
+    return JSONResponse({"stopped": True})
+
+
+@fixture_app.get("/api/fixture/ingestion-stop-requests")
+async def fixture_ingestion_stop_requests() -> JSONResponse:
+    return JSONResponse(_ingestion_stop_requests)
 
 
 @fixture_app.post("/api/workbench/ingestion-runs/{run_id}/rerun-preflight")
@@ -240,16 +326,28 @@ async def fixture_rerun_preflight(run_id: str, request: Request) -> JSONResponse
 
 @fixture_app.get("/api/workbench/artifacts/{artifact_id}")
 async def fixture_artifact(artifact_id: str) -> JSONResponse:
-    assert artifact_id == _ARTIFACT
     locator_a = {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5}
     locator_b = {"kind": "pdf", "page_number": 1, "x0": .5, "y0": .5, "x1": 1, "y1": 1}
+    if artifact_id == _CHUNK_ARTIFACT:
+        return JSONResponse({
+            "artifactType": "chunk.set", "schemaRevision": "v1", "summary": "fixture chunks",
+            "metrics": [], "quality": [], "parents": [_ARTIFACT],
+            "producer": {"runId": _INGESTION_RUN, "pluginId": "chunker.fixture@1"},
+            "view": {"available": True, "tabs": ["chunks", "metadata", "lineage"], "chunks": [{
+                "id": "chk_fixture", "text": "Chunk fixture", "sourceElementIds": ["elm_a", "elm_b"],
+                "citations": [{"elementId": "elm_a", "locator": locator_a}, {"elementId": "elm_b", "locator": locator_b}],
+            }]},
+        })
+    assert artifact_id == _ARTIFACT
     return JSONResponse({
         "artifactType": "canonical.document", "schemaRevision": "v1",
         "summary": "fixture canonical", "metrics": [], "quality": [], "parents": [],
+        "producer": {"runId": _INGESTION_RUN, "pluginId": "parser.fixture@1"},
         "view": {"available": True, "tabs": ["canonical", "tree", "table", "metadata", "lineage"],
                  "elements": [{"id": "elm_a", "text": "First", "locator": locator_a},
                               {"id": "elm_b", "text": "Second", "locator": locator_b}],
-                 "tables": []},
+                 "tables": [{"id": "tbl_fixture", "elementId": "elm_b", "locator": locator_b,
+                             "cells": [{"row_index": 0, "column_index": 0, "text": "Cell fixture", "row_span": 1, "column_span": 1}]}]},
     })
 
 
@@ -423,6 +521,11 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url:
     else:
         pytest.fail("Chrome DevTools endpoint did not start")
     page = next(page for page in reversed(pages) if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
+    if port in _CAPTURE_CONNECTIONS:
+        result = _send_cdp(_CAPTURE_CONNECTIONS[port], "Runtime.evaluate", {"expression": expression, "awaitPromise": await_promise, "returnByValue": True})
+        if "exceptionDetails" in result:
+            pytest.fail(result["exceptionDetails"]["exception"]["description"])
+        return result["result"].get("value")
     protocol_error: object = None
     for attempt in range(3):
         connection = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
@@ -448,28 +551,84 @@ def _cdp(port: int, expression: str, *, await_promise: bool = False, target_url:
 def _capture_cdp(port: int, target: Path, *, target_url: str | None = None) -> None:
     pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=1).json()
     page = next(page for page in reversed(pages) if page.get("type") == "page" and (page.get("url") == target_url if target_url else "/workbench/" in page.get("url", "")))
-    socket = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
+    socket = _CAPTURE_CONNECTIONS.get(port) or websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
+    owned = port not in _CAPTURE_CONNECTIONS
     try:
-        socket.send(json.dumps({"id": 2, "method": "Page.captureScreenshot", "params": {"format": S022_CAPTURE["screenshotFormat"]}}))
-        while True:
-            message = json.loads(socket.recv())
-            if message.get("id") == 2:
-                target.write_bytes(base64.b64decode(message["result"]["data"]))
-                return
+        result = _send_cdp(socket, "Page.captureScreenshot", {"format": S022_CAPTURE["screenshotFormat"]})
+        target.write_bytes(base64.b64decode(result["data"]))
     finally:
-        socket.close()
+        if owned:
+            socket.close()
 
 
-def _assert_s022_visual(
+def _assert_root_scroll_locked(port: int, *, target_url: str) -> None:
+    """Wait for modal layout to settle and reject captures with a root scrollbar."""
+    state = _cdp(
+        port,
+        "(async()=>{await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const root=document.documentElement;return {rootClass:root.classList.contains('modal-open'),bodyClass:document.body.classList.contains('modal-open'),rootOverflow:getComputedStyle(root).overflowY,bodyOverflow:getComputedStyle(document.body).overflowY,viewportWidth:innerWidth,rootClientWidth:root.clientWidth,rootScrollbarWidth:innerWidth-root.clientWidth}})()",
+        await_promise=True,
+        target_url=target_url,
+    )
+    assert isinstance(state, dict)
+    assert state["viewportWidth"] in {1440, 644}
+    assert state == {
+        "rootClass": True,
+        "bodyClass": True,
+        "rootOverflow": "hidden",
+        "bodyOverflow": "hidden",
+        "viewportWidth": state["viewportWidth"],
+        "rootClientWidth": state["viewportWidth"],
+        "rootScrollbarWidth": 0,
+    }
+
+
+def _assert_root_scroll_unlocked(port: int, *, target_url: str) -> None:
+    """Settle a non-modal capture and reject leaked modal scroll state."""
+    state = _cdp(
+        port,
+        "(async()=>{await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const root=document.documentElement;return {rootClass:root.classList.contains('modal-open'),bodyClass:document.body.classList.contains('modal-open'),rootOverflow:getComputedStyle(root).overflowY,bodyOverflow:getComputedStyle(document.body).overflowY,viewportWidth:innerWidth,rootClientWidth:root.clientWidth,rootScrollbarWidth:innerWidth-root.clientWidth}})()",
+        await_promise=True,
+        target_url=target_url,
+    )
+    assert isinstance(state, dict)
+    assert state["viewportWidth"] in {1440, 644}
+    assert state == {
+        "rootClass": False,
+        "bodyClass": False,
+        "rootOverflow": "auto",
+        "bodyOverflow": "auto",
+        "viewportWidth": state["viewportWidth"],
+        "rootClientWidth": state["viewportWidth"],
+        "rootScrollbarWidth": 0,
+    }
+
+
+def _send_cdp(connection: websocket.WebSocket, method: str, params: dict[str, object] | None = None) -> dict[str, object]:
+    global _CDP_REQUEST_ID
+    _CDP_REQUEST_ID += 1
+    request_id = _CDP_REQUEST_ID
+    connection.send(json.dumps({"id": request_id, "method": method, "params": params or {}}))
+    while True:
+        message = json.loads(connection.recv())
+        if message.get("id") != request_id:
+            continue
+        if "error" in message:
+            pytest.fail(f"Chrome DevTools command failed: {message['error']}")
+        return message.get("result", {})
+
+
+def _assert_manifest_visual(
     port: int,
     current: Path,
     baseline_name: str,
     *,
     target_url: str,
+    baseline_root: Path = S022_BASELINE_ROOT,
+    story: str = "S-022",
 ) -> None:
     """Decode through Chrome and compare RGBA pixels without mutating baselines."""
-    baseline = S022_BASELINE_ROOT / baseline_name
-    assert baseline.is_file(), f"missing reviewed S-022 baseline: {baseline}"
+    baseline = baseline_root / baseline_name
+    assert baseline.is_file(), f"missing reviewed {story} baseline: {baseline}"
     current_url = "data:image/png;base64," + base64.b64encode(current.read_bytes()).decode("ascii")
     baseline_url = "data:image/png;base64," + base64.b64encode(baseline.read_bytes()).decode("ascii")
     expression = f"""(async()=>{{
@@ -493,7 +652,7 @@ def _assert_s022_visual(
         if result["diffPng"]:
             diff_diagnostic.write_bytes(base64.b64decode(result["diffPng"]))
         pytest.fail(
-            f"S-022 visual difference {result['ratio']:.4%} exceeds 0.5% "
+            f"{story} visual difference {result['ratio']:.4%} exceeds 0.5% "
             f"(channel tolerance 12, dimensions {result['dimensions']}, bounds {result['bounds']}); "
             f"current={current_diagnostic}, diff={diff_diagnostic}"
         )
@@ -506,6 +665,8 @@ def _cdp_command(
     *,
     target_url: str | None = None,
 ) -> dict[str, object]:
+    if connection := _CAPTURE_CONNECTIONS.get(port):
+        return _send_cdp(connection, method, params)
     for _ in range(60):
         try:
             pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=0.2).json()
@@ -540,12 +701,27 @@ def _cdp_command(
         connection.close()
 
 
+def _assert_s022_visual(port: int, current: Path, baseline_name: str, *, target_url: str) -> None:
+    _assert_manifest_visual(port, current, baseline_name, target_url=target_url)
+
+
 def _prepare_s022_capture_environment(port: int, target_url: str, width: int) -> None:
     """Apply and verify every rendering condition recorded with the goldens."""
     device = S022_CAPTURE["device"]
     media = S022_CAPTURE["media"]
-    _cdp_command(
-        port,
+    for _ in range(60):
+        try:
+            pages = httpx.get(f"http://127.0.0.1:{port}/json", timeout=0.2).json()
+            page = next(page for page in pages if page.get("type") == "page" and page.get("url") == target_url)
+            break
+        except (httpx.HTTPError, StopIteration):
+            time.sleep(0.1)
+    else:
+        pytest.fail("Chrome DevTools endpoint did not start")
+    connection = websocket.create_connection(page["webSocketDebuggerUrl"], origin="http://localhost")
+    _CAPTURE_CONNECTIONS[port] = connection
+    _send_cdp(
+        connection,
         "Emulation.setDeviceMetricsOverride",
         {
             "width": width,
@@ -553,10 +729,9 @@ def _prepare_s022_capture_environment(port: int, target_url: str, width: int) ->
             "deviceScaleFactor": device["deviceScaleFactor"],
             "mobile": device["mobile"],
         },
-        target_url=target_url,
     )
-    _cdp_command(
-        port,
+    _send_cdp(
+        connection,
         "Emulation.setEmulatedMedia",
         {
             "media": media["type"],
@@ -566,13 +741,11 @@ def _prepare_s022_capture_environment(port: int, target_url: str, width: int) ->
                 {"name": "prefers-reduced-motion", "value": media["reducedMotion"]},
             ],
         },
-        target_url=target_url,
     )
-    _cdp_command(
-        port,
+    _send_cdp(
+        connection,
         "Emulation.setLocaleOverride",
         {"locale": S022_CAPTURE["locale"]["browser"]},
-        target_url=target_url,
     )
 
     version = httpx.get(f"http://127.0.0.1:{port}/json/version", timeout=1).json()
@@ -628,14 +801,14 @@ def _wait_for_fixture(url: str) -> None:
 
 def _launch_isolated_chrome(arguments: list[str]) -> subprocess.Popen[str]:
     """Start an isolated Chrome instance rather than handing off to macOS's app singleton."""
-    command = [str(CHROME), *arguments]
-    if sys.platform == "darwin":
-        command = ["open", "-na", "Google Chrome", "--args", *arguments]
-    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return subprocess.Popen([str(CHROME), *arguments], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
 
 
-def _close_isolated_chrome(port: int, browser: subprocess.Popen[str]) -> tuple[str, str]:
+def _close_isolated_chrome(port: int, browser: subprocess.Popen[str]) -> tuple[str | None, str | None]:
     """Close the CDP-owned app on macOS; the launcher process may already have exited."""
+    capture_connection = _CAPTURE_CONNECTIONS.pop(port, None)
+    if capture_connection is not None:
+        capture_connection.close()
     try:
         version = httpx.get(f"http://127.0.0.1:{port}/json/version", timeout=1).json()
         socket = websocket.create_connection(version["webSocketDebuggerUrl"], origin="http://localhost")
@@ -653,6 +826,19 @@ def _close_isolated_chrome(port: int, browser: subprocess.Popen[str]) -> tuple[s
     except subprocess.TimeoutExpired:
         browser.kill()
         return browser.communicate(timeout=10)
+
+
+def test_s024_visual_manifest_is_pinned_and_baselines_are_reviewed_assets() -> None:
+    assert S024_MANIFEST["captureConditions"] == S022_CAPTURE
+    assert S024_MANIFEST["comparison"] == {
+        "colorSpace": "RGBA", "channelTolerance": 12,
+        "maximumDifferingPixelRatio": 0.005, "baselineUpdatesAutomatic": False,
+    }
+    assert len(S024_MANIFEST["baselines"]) == 6
+    for record in S024_MANIFEST["baselines"]:
+        baseline = S024_BASELINE_ROOT / record["file"]
+        assert baseline.is_file()
+        assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
 
 
 @pytest.mark.skipif(
@@ -926,6 +1112,7 @@ def test_fixture_backed_navigation_survives_both_breakpoint_resize_directions(tm
             {"width": 644, "height": 900, "deviceScaleFactor": device["deviceScaleFactor"], "mobile": device["mobile"]},
             target_url=url,
         )
+        assert _cdp(debug_port, "(async()=>{for(let i=0;i<160;i++){if(innerWidth===644){window.dispatchEvent(new Event('resize'));return true}await new Promise(resolve=>setTimeout(resolve,25))}return false})()", await_promise=True, target_url=url) is True
         narrow = _cdp(
             debug_port,
             """(async()=>{for(let i=0;i<160;i++){const menu=document.querySelector('.menu');if(innerWidth===644&&getComputedStyle(menu).display!=='none'&&document.activeElement===menu)return {viewport:[innerWidth,innerHeight,devicePixelRatio],sidebar:getComputedStyle(document.querySelector('.sidebar')).display==='none',menu:true,close:!!document.querySelector('[aria-label="关闭导航"]'),drawerOpen:document.querySelector('#drawer').classList.contains('open'),inert:document.querySelector('#workbench-shell').hasAttribute('inert'),focus:'menu'};await new Promise(resolve=>setTimeout(resolve,25))}return null})()""",
@@ -947,6 +1134,7 @@ def test_fixture_backed_navigation_survives_both_breakpoint_resize_directions(tm
             {"width": 1440, "height": 900, "deviceScaleFactor": device["deviceScaleFactor"], "mobile": device["mobile"]},
             target_url=url,
         )
+        assert _cdp(debug_port, "(async()=>{for(let i=0;i<160;i++){if(innerWidth===1440){window.dispatchEvent(new Event('resize'));return true}await new Promise(resolve=>setTimeout(resolve,25))}return false})()", await_promise=True, target_url=url) is True
         desktop = _cdp(
             debug_port,
             """(async()=>{for(let i=0;i<160;i++){const drawer=document.querySelector('#drawer'),current=document.querySelector('.sidebar .nav-link[aria-current=page]');if(innerWidth===1440&&!drawer.classList.contains('open')&&!document.querySelector('#workbench-shell').hasAttribute('inert')&&document.activeElement===current)return {viewport:[innerWidth,innerHeight,devicePixelRatio],sidebar:getComputedStyle(document.querySelector('.sidebar')).display!=='none',menu:getComputedStyle(document.querySelector('.menu')).display==='none',closed:drawer.getAttribute('aria-hidden')==='true',inert:false,focus:'current-desktop-route'};await new Promise(resolve=>setTimeout(resolve,25))}return null})()""",
@@ -971,7 +1159,7 @@ def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflo
     port, debug_port = "8895", "9226"
     environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
     server = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port],
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
     browser = subprocess.Popen(
@@ -1000,7 +1188,7 @@ def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflo
         server.wait(timeout=10)
 
     server = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port],
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
     browser = subprocess.Popen(
@@ -1022,26 +1210,111 @@ def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflo
 
 @pytest.mark.skipif(
     not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for document preflight state evidence",
+)
+def test_fixture_backed_document_preflight_loading_error_retry_and_modal_keyboard(tmp_path: Path) -> None:
+    """Keep a selected upload recoverable while exposing deterministic request state."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'preflight-states'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        modal = """(async()=>{const wait=async p=>{for(let i=0;i<100;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Documents modal did not render')};const opener=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')));opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog'));const enabled=[...dialog.querySelectorAll('button,input')].filter(x=>!x.disabled);enabled.at(-1).focus();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));const trapped=document.activeElement===enabled[0];document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,20));const escaped=!document.querySelector('.upload-dialog')&&document.activeElement===opener,rootUnlocked=!document.documentElement.classList.contains('modal-open')&&!document.body.classList.contains('modal-open');opener.click();await wait(()=>document.querySelector('.upload-dialog'));const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='fixture-ingestion';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检');action.click();await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run'));const old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));const fileChanged=file.files===changed.files;profile.value='retry-ingestion';profile.dispatchEvent(new Event('input',{bubbles:true}));const invalidated=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run')&&!document.body.innerText.includes('Profile 解析依据');action.click();const status=document.querySelector('[role=status]');return {trapped,escaped,rootUnlocked,fileChanged,invalidated,loading:status?.textContent.includes('正在预检'),live:status?.getAttribute('aria-live')==='polite',disabled:action.disabled,old};})()"""
+        state = _cdp(debug_port, modal, await_promise=True, target_url=url)
+        old_token = state.pop("old")
+        assert state == {"trapped": True, "escaped": True, "rootUnlocked": True, "fileChanged": True, "invalidated": True, "loading": True, "live": True, "disabled": True}
+        _assert_root_scroll_locked(debug_port, target_url=url)
+        failure = """(async()=>{for(let i=0;i<100;i++){const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'),profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]'),status=document.querySelector('[role=status]');if(document.body.innerText.includes('请检查 Profile Set 和文档后重试。'))return {error:status?.textContent==='预检失败，可重试',enabled:!action.disabled,profile:profile.value,file:file.files?.[0]?.name,noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),previewGone:!document.body.innerText.includes('Profile 解析依据')};await new Promise(r=>setTimeout(r,25))}throw new Error('Preflight failure did not render')})()"""
+        assert _cdp(debug_port, failure, await_promise=True, target_url=url) == {"error": True, "enabled": True, "profile": "retry-ingestion", "file": "fixture.pdf", "noSubmit": True, "previewGone": True}
+        assert old_token not in httpx.get(f"http://127.0.0.1:{port}/api/fixture/document-preflights").json()["tokens"]
+        assert _cdp(debug_port, "(()=>{const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检');action.click();return {loading:document.querySelector('[role=status]').textContent.includes('正在预检'),disabled:action.disabled}})()", target_url=url) == {"loading": True, "disabled": True}
+        success = """(async()=>{for(let i=0;i<100;i++){const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'),status=document.querySelector('[role=status]');if(document.body.innerText.includes('Profile 解析依据'))return {complete:status?.textContent==='预检完成',enabled:!action.disabled,profile:document.querySelector('input[aria-label="Ingestion Profile Set ID"]').value,file:document.querySelector('input[type=file]').files?.[0]?.name};await new Promise(r=>setTimeout(r,25))}throw new Error('Preflight retry did not complete')})()"""
+        assert _cdp(debug_port, success, await_promise=True, target_url=url) == {"complete": True, "enabled": True, "profile": "retry-ingestion", "file": "fixture.pdf"}
+        delayed_guard = """(async()=>{const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]'),action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检');profile.value='delayed-ingestion';profile.dispatchEvent(new Event('input',{bubbles:true}));action.click();const pending=action.disabled&&document.querySelector('[role=status]')?.textContent.includes('正在预检')&&![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,350));return {pending,fileChanged:file.files===changed.files,previewGone:!document.body.innerText.includes('Profile 解析依据'),noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),notCompleted:document.querySelector('[role=status]')?.textContent!=='预检完成'};})()"""
+        assert _cdp(debug_port, delayed_guard, await_promise=True, target_url=url) == {"pending": True, "fileChanged": True, "previewGone": True, "noSubmit": True, "notCompleted": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for candidate selection evidence",
+)
+def test_fixture_backed_document_candidate_selection_rotates_preview_and_submit_binding(tmp_path: Path) -> None:
+    """Bind every displayed plan and disclosure to the server-selected candidate."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'candidate-selection'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        local_to_external = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const profile=await wait(()=>document.querySelector('input[aria-label="Ingestion Profile Set ID"]')),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='switch-local';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-external-profile"]'));const before=await (await fetch('/api/fixture/document-preflights')).json(),old=before.tokens.at(-1),choice=document.querySelector('input[value="switch-external-profile"]');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run')&&!document.body.innerText.includes('parser.fixture@1');await wait(()=>document.body.innerText.includes('parser.external@1')&&document.querySelector('input[aria-label="确认外部阶段披露"]'));const after=await (await fetch('/api/fixture/document-preflights')).json(),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run'),ack=document.querySelector('input[aria-label="确认外部阶段披露"]'),blocked=submit.disabled;ack.click();const enabled=!submit.disabled,rotated=after.tokens.at(-1);submit.click();return {pending,blocked,enabled,checked:choice.checked,oldInvalid:!after.tokens.includes(old),rotated:rotated!==old,disclosed:document.body.innerText.includes('外部阶段披露')};})()"""
+        assert _cdp(debug_port, local_to_external, await_promise=True, target_url=url) == {"pending": True, "blocked": True, "enabled": True, "checked": True, "oldInvalid": True, "rotated": True, "disclosed": True}
+        for _ in range(100):
+            receipts = httpx.get(f"http://127.0.0.1:{port}/api/fixture/document-preflights").json()["receipts"]
+            if receipts:
+                break
+            time.sleep(.025)
+        assert receipts[-1]["profileId"] == "switch-external-profile"
+        assert receipts[-1]["acknowledgeExternal"] is True
+
+        assert _cdp(debug_port, "location.href='/workbench/documents'; true", target_url=f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}") is True
+        external_to_local = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('reverse candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const profile=await wait(()=>document.querySelector('input[aria-label="Ingestion Profile Set ID"]')),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='switch-external';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-local-profile"]'));const initiallyExternal=document.body.innerText.includes('parser.external@1')&&!!document.querySelector('input[aria-label="确认外部阶段披露"]'),choice=document.querySelector('input[value="switch-local-profile"]');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run');await wait(()=>document.body.innerText.includes('parser.fixture@1')&&[...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'));const automaticLabel=document.querySelector('input[value="switch-external-profile"]')?.closest('label')?.innerText.includes('自动选中');return {initiallyExternal,pending,checked:document.querySelector('input[value="switch-local-profile"]')?.checked,local:!document.querySelector('input[aria-label="确认外部阶段披露"]'),enabled:![...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run').disabled,automaticLabel};})()"""
+        assert _cdp(debug_port, external_to_local, await_promise=True, target_url=url) == {"initiallyExternal": True, "pending": True, "checked": True, "local": True, "enabled": True, "automaticLabel": True}
+
+        delayed_selection_guard = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('delayed selection timeout')};const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]');profile.value='switch-local';profile.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-delayed"]'));document.querySelector('input[value="switch-delayed"]').click();const pending=document.querySelector('[role=status]')?.textContent.includes('正在切换 Profile 预览')&&![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,350));return {pending,fileChanged:file.files===changed.files,previewGone:!document.body.innerText.includes('Profile 解析依据'),noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),notUpdated:document.querySelector('[role=status]')?.textContent!=='Profile 预览已更新'};})()"""
+        assert _cdp(debug_port, delayed_selection_guard, await_promise=True, target_url=url) == {"pending": True, "fileChanged": True, "previewGone": True, "noSubmit": True, "notUpdated": True}
+
+        selection_failure = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('selection failure timeout')};const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]');profile.value='switch-local';profile.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-error"]'));document.querySelector('input[value="switch-error"]').click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run');await wait(()=>document.body.innerText.includes('旧预检已失效'));return {pending,failed:document.querySelector('[role=status]')?.textContent.includes('切换失败'),noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),selectionGone:!document.body.innerText.includes('Profile 解析依据')};})()"""
+        assert _cdp(debug_port, selection_failure, await_promise=True, target_url=url) == {"pending": True, "failed": True, "noSubmit": True, "selectionGone": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
     reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser shell evidence",
 )
 @pytest.mark.parametrize("width", (1440, 644))
 def test_fixture_backed_ingestion_artifact_inspector_sync_and_escape(tmp_path: Path, width: int) -> None:
     """Validate S-024 stable object/source selection and narrow drawer closure."""
-    port, debug_port = "8896", "9227"
+    port, debug_port = _free_local_port(), _free_local_port()
     environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
     server = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port],
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
-    browser = subprocess.Popen(
-        [str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'artifact'}", f"http://127.0.0.1:{port}/workbench/runs?run={_INGESTION_RUN}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    url = f"http://127.0.0.1:{port}/workbench/runs?run={_INGESTION_RUN}"
+    _wait_for_fixture(f"http://127.0.0.1:{port}/workbench/runs")
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'artifact'}", url])
     try:
-        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 25)); } throw new Error('Artifact fixture did not become ready'); }; const action = await wait(() => [...document.querySelectorAll('button')].find(x => x.textContent.includes('Artifact canonical.document'))); action.click(); const sourcePane = await wait(() => document.querySelector('.artifact-inspector .source-view')); const drawer = sourcePane.closest('.artifact-inspector'); const source = sourcePane.querySelector('button'); const object = drawer.querySelector('.inspector-list button'); source.click(); const sourceSync = drawer.querySelectorAll('[data-stable-id].source-selected').length === 2; object.click(); const objectSync = drawer.querySelectorAll('[data-stable-id].source-selected').length === 2; return {sourceSync, objectSync, panes: !!drawer.querySelector('.inspector-list') && !!drawer.querySelector('.source-view'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: innerWidth >= 900 || document.querySelector('.artifact-inspector').getAttribute('role') === 'dialog'}; })()"""
-        assert _cdp(int(debug_port), expression, await_promise=True) == {"sourceSync": True, "objectSync": True, "panes": True, "overflow": True, "modal": True}
-        _capture_cdp(int(debug_port), tmp_path / f"ingestion-artifact-{width}.png")
-        assert _cdp(int(debug_port), "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); await new Promise(r => setTimeout(r, 30)); return {closed: !document.querySelector('.artifact-inspector'), focusReturned: document.activeElement.textContent.includes('Artifact canonical.document')}; })()", await_promise=True) == {"closed": True, "focusReturned": True}
+        _prepare_s022_capture_environment(debug_port, url, width)
+        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 25)); } throw new Error('Artifact fixture did not become ready'); }; await wait(()=>document.querySelector('.run-tabs'));const runTabs=[...document.querySelectorAll('.run-tabs button')];runTabs.find(x=>x.textContent==='Run 指标').click();const emptyRunSignals=[...document.querySelectorAll('.run-tab-panel dd')].map(x=>x.textContent);runTabs.find(x=>x.textContent==='Profile 解析').click();const action = [...document.querySelectorAll('button')].find(x => x.textContent.includes('Artifact canonical.document')); action.click(); const sourcePane = await wait(() => document.querySelector('.artifact-inspector .source-view')); const drawer = sourcePane.closest('.artifact-inspector'); const source = sourcePane.querySelector('button'); const object = drawer.querySelector('.inspector-list button'); source.click(); const sourceSync = drawer.querySelectorAll('[data-stable-id].source-selected').length === 2; object.click(); const objectSync = drawer.querySelectorAll('[data-stable-id].source-selected').length === 2; [...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='表格').click();const tableSource=drawer.querySelector('.source-view button'),tableObject=drawer.querySelector('.artifact-table > button');tableSource.click();const tableSourceSync=drawer.querySelectorAll('[data-stable-id].source-selected').length===2;tableObject.click();const tableObjectSync=drawer.querySelectorAll('[data-stable-id].source-selected').length===2,summary=drawer.querySelector('.locator-summary'),tableSummary=summary?.textContent.includes('tbl_fixture / pdf / 第 1 页'),tableSummaryLive=summary?.getAttribute('aria-live')==='polite';[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='Lineage').click();const lineage=drawer.innerText.includes('生产者 Run ID：12345678-1234-5678-1234-567812345680')&&drawer.innerText.includes('生产者 Plugin ID：parser.fixture@1')&&!drawer.innerText.includes('[object Object]');[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='Canonical').click();drawer.querySelector('.source-view button').click(); return {sourceSync, objectSync, tableSourceSync, tableObjectSync, tableSummary, tableSummaryLive, lineage, emptyRunSignals:emptyRunSignals.length===2&&emptyRunSignals.every(x=>x==='不可用'), rawArrayAbsent:!document.body.innerText.includes('[]'), panes: !!drawer.querySelector('.inspector-list') && !!drawer.querySelector('.source-view'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: innerWidth >= 900 || document.querySelector('.artifact-inspector').getAttribute('role') === 'dialog'}; })()"""
+        result = _cdp(int(debug_port), expression, await_promise=True)
+        assert result == {"sourceSync": True, "objectSync": True, "tableSourceSync": True, "tableObjectSync": True, "tableSummary": True, "tableSummaryLive": True, "lineage": True, "emptyRunSignals": True, "rawArrayAbsent": True, "panes": True, "overflow": True, "modal": True}
+        geometry = _cdp(debug_port, f"(()=>{{const drawer=document.querySelector('.artifact-inspector'),first=drawer.querySelector('[role=tab]');first.focus();first.dispatchEvent(new KeyboardEvent('keydown',{{key:'ArrowRight',bubbles:true}}));const selected=drawer.querySelector('[role=tab][aria-selected=true]');drawer.querySelector('[role=tablist]').dispatchEvent(new KeyboardEvent('keydown',{{key:'Home',bubbles:true}}));drawer.querySelector('.source-view button').click();drawer.focus();return {{width:Math.round(drawer.getBoundingClientRect().width),inert:document.querySelector('#workbench-shell').hasAttribute('inert'),tabs:drawer.querySelectorAll('[role=tab]').length,keyboard:selected?.textContent==='结构树',rawAbsent:![...drawer.querySelectorAll('[role=tab]')].some(x=>x.textContent==='原始文本'),url:location.pathname+location.search}}}})()", target_url=url)
+        assert geometry == {"width": 1080 if width >= 900 else 644, "inert": True, "tabs": 5, "keyboard": True, "rawAbsent": True, "url": f"/workbench/runs?run={_INGESTION_RUN}"}
+        _assert_root_scroll_locked(debug_port, target_url=url)
+        _capture_cdp(debug_port, tmp_path / f"artifact-canonical-source-{width}.png", target_url=url)
+        _assert_manifest_visual(debug_port, tmp_path / f"artifact-canonical-source-{width}.png", f"artifact-canonical-source-{width}.png", target_url=url, baseline_root=S024_BASELINE_ROOT, story="S-024")
+        assert _cdp(int(debug_port), "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); await new Promise(r => setTimeout(r, 30)); return {closed: !document.querySelector('.artifact-inspector'), focusReturned: document.activeElement.textContent.includes('Artifact canonical.document'),rootUnlocked:!document.documentElement.classList.contains('modal-open')&&!document.body.classList.contains('modal-open')}; })()", await_promise=True) == {"closed": True, "focusReturned": True, "rootUnlocked": True}
+        chunks = """(async()=>{const wait=async p=>{for(let i=0;i<100;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Chunk inspector did not render')};const action=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Artifact chunk.set'));action.click();const drawer=await wait(()=>document.querySelector('.artifact-inspector .source-view')?.closest('.artifact-inspector'));const citations=drawer.querySelectorAll('.inspector-list button').length===2&&drawer.querySelectorAll('.source-view button').length===2,source=drawer.querySelector('.source-view button'),object=drawer.querySelector('.inspector-list button');source.click();const sourceSync=drawer.querySelectorAll('[data-stable-id].source-selected').length===2;object.click();const objectSync=drawer.querySelectorAll('[data-stable-id].source-selected').length===2;[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='元数据').click();const metadata=[...drawer.querySelectorAll('.metadata-grid dd')].map(x=>x.textContent);document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,20));return {sourceSync,objectSync,citations,metadataUnavailable:metadata.slice(-2).every(x=>x==='不可用'),closed:!document.querySelector('.artifact-inspector'),focusReturned:document.activeElement===action}})()"""
+        assert _cdp(debug_port, chunks, await_promise=True, target_url=url) == {"sourceSync": True, "objectSync": True, "citations": True, "metadataUnavailable": True, "closed": True, "focusReturned": True}
         assert _cdp(int(debug_port), "window.prompt = () => 'fixture-ingestion'; [...document.querySelectorAll('button')].find(x => x.textContent === '重新运行').click(); true") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
@@ -1050,10 +1323,9 @@ def test_fixture_backed_ingestion_artifact_inspector_sync_and_escape(tmp_path: P
             time.sleep(.025)
         else:
             pytest.fail("Rerun handoff did not navigate to Documents")
-        assert _cdp(int(debug_port), "({ready:document.body.innerText.includes('rerun-token'),source:document.body.innerText.includes('12345678-1234-5678-1234-567812345681'),profile:document.querySelector('input[aria-label=\"Ingestion Profile Set ID\"]')?.value === 'fixture-ingestion',confirmable:[...document.querySelectorAll('button')].some(x => x.textContent === '创建新 Run'),overflow:document.documentElement.scrollWidth <= innerWidth})") == {"ready": True, "source": True, "profile": True, "confirmable": True, "overflow": True}
+        assert _cdp(int(debug_port), "({dialog:document.querySelector('.upload-dialog')?.getAttribute('aria-modal')==='true',source:document.body.innerText.includes('12345678-1234-5678-1234-567812345681'),profile:document.querySelector('input[aria-label=\"Ingestion Profile Set ID\"]')?.value === 'fixture-ingestion',confirmable:[...document.querySelectorAll('button')].some(x => x.textContent === '创建新 Run'),overflow:document.documentElement.scrollWidth <= innerWidth})") == {"dialog": True, "source": True, "profile": True, "confirmable": True, "overflow": True}
     finally:
-        browser.terminate()
-        browser.wait(timeout=10)
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)
 
@@ -1065,21 +1337,25 @@ def test_fixture_backed_ingestion_artifact_inspector_sync_and_escape(tmp_path: P
 @pytest.mark.parametrize("width", (1440, 644))
 def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: Path, width: int) -> None:
     """Capture the shipped Documents and Runs workflows against API projections."""
-    port, debug_port = "8897", "9228"
+    port, debug_port = _free_local_port(), _free_local_port()
     environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
     server = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", port],
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
-    browser = subprocess.Popen(
-        [str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'documents'}", f"http://127.0.0.1:{port}/workbench/documents"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'documents'}", url])
     try:
-        preflight = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 25)); } throw new Error('Documents fixture did not become ready'); }; await wait(() => document.querySelector('input[aria-label="Ingestion Profile Set ID"]') && document.querySelector('input[type=file]')); const profile = document.querySelector('input[aria-label="Ingestion Profile Set ID"]'); profile.value = 'fixture-ingestion'; const file = document.querySelector('input[type=file]'); const transfer = new DataTransfer(); transfer.items.add(new File(['%PDF-fixture'], 'fixture.pdf', {type:'application/pdf'})); Object.defineProperty(file, 'files', {value: transfer.files, configurable: true}); [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); await wait(() => document.body.innerText.includes('预检与自动选择')); let choice=document.querySelector('select[aria-label="显式 Ingestion Profile"]'); const automatic=choice.value==='fixture-ingestion' && [...choice.options].some(x=>x.value==='fixture-default'); choice.value='fixture-default'; [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); await wait(() => document.querySelector('select[aria-label="显式 Ingestion Profile"]')?.value === 'fixture-ingestion'); choice=document.querySelector('select[aria-label="显式 Ingestion Profile"]'); choice.value='fixture-default'; return {automatic, explicit:choice.value==='fixture-default', preserved:profile.value==='fixture-ingestion' && document.body.innerText.includes('Profile Set: fixture-ingestion'), submit: !![...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run'), overflow: document.documentElement.scrollWidth <= innerWidth}; })()"""
-        assert _cdp(int(debug_port), preflight, await_promise=True) == {"automatic": True, "explicit": True, "preserved": True, "submit": True, "overflow": True}
-        _capture_cdp(int(debug_port), tmp_path / f"document-preflight-automatic-{width}.png")
-
+        _prepare_s022_capture_environment(debug_port, url, width)
+        preflight = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 25)); } throw new Error('Documents fixture did not become ready'); }; const opener=await wait(() => [...document.querySelectorAll('button')].find(x => x.textContent.includes('上传并预检'))); opener.click(); await wait(() => document.querySelector('input[aria-label="Ingestion Profile Set ID"]') && document.querySelector('input[type=file]')); const profile = document.querySelector('input[aria-label="Ingestion Profile Set ID"]'); profile.value = 'fixture-ingestion'; const file = document.querySelector('input[type=file]'); const transfer = new DataTransfer(); transfer.items.add(new File(['%PDF-fixture'], 'fixture.pdf', {type:'application/pdf'})); Object.defineProperty(file, 'files', {value: transfer.files, configurable: true}); [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); await wait(() => document.body.innerText.includes('Profile 解析依据')); const choices=[...document.querySelectorAll('input[name="ingestion-profile"]')]; return {automatic:choices.find(x=>x.value==='fixture-ingestion')?.checked && choices.some(x=>x.value==='fixture-default'), preserved:profile.value==='fixture-ingestion' && document.body.innerText.includes('fixture-ingestion'), matched:document.body.innerText.includes('pdf：匹配'), submit: !![...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run'), modal:document.querySelector('.upload-dialog')?.getAttribute('aria-modal')==='true', overflow: document.documentElement.scrollWidth <= innerWidth}; })()"""
+        assert _cdp(debug_port, preflight, await_promise=True, target_url=url) == {"automatic": True, "preserved": True, "matched": True, "submit": True, "modal": True, "overflow": True}
+        assert _cdp(debug_port, "(()=>{const dialog=document.querySelector('.upload-dialog'),body=dialog.querySelector('.upload-dialog-body');return {inert:document.querySelector('#workbench-shell').hasAttribute('inert'),fit:dialog.getBoundingClientRect().height<=innerHeight-16,focus:dialog.contains(document.activeElement),bodyOverflow:['auto','scroll'].includes(getComputedStyle(body).overflowY)}})()", target_url=url) == {"inert": True, "fit": True, "focus": True, "bodyOverflow": True}
+        _assert_root_scroll_locked(debug_port, target_url=url)
+        _capture_cdp(debug_port, tmp_path / f"documents-preflight-automatic-{width}.png", target_url=url)
+        _assert_manifest_visual(debug_port, tmp_path / f"documents-preflight-automatic-{width}.png", f"documents-preflight-automatic-{width}.png", target_url=url, baseline_root=S024_BASELINE_ROOT, story="S-024")
+        explicit = """(async()=>{const old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1),choice=[...document.querySelectorAll('input[name="ingestion-profile"]')].find(x=>x.value==='fixture-default');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run')&&!document.body.innerText.includes('解析后的阶段');for(let i=0;i<100;i++){const submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run');if(submit){const state=await (await fetch('/api/fixture/document-preflights')).json();return {pending,checked:document.querySelector('input[value="fixture-default"]')?.checked,plugin:document.body.innerText.includes('parser.default@1'),oldInvalid:!state.tokens.includes(old),submit:!!submit}}await new Promise(r=>setTimeout(r,25))}throw new Error('Explicit candidate preview did not render')})()"""
+        assert _cdp(debug_port, explicit, await_promise=True, target_url=url) == {"pending": True, "checked": True, "plugin": True, "oldInvalid": True, "submit": True}
         assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run').click(); true") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
@@ -1097,7 +1373,7 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
         else:
             pytest.fail("Documents did not reopen after explicit Profile submission")
 
-        external = """(async () => { const profile = document.querySelector('input[aria-label="Ingestion Profile Set ID"]'), file=document.querySelector('input[type=file]'), transfer=new DataTransfer(); transfer.items.add(new File(['%PDF-fixture'], 'fixture.pdf', {type:'application/pdf'})); Object.defineProperty(file, 'files', {value: transfer.files, configurable: true}); profile.value = 'external-ingestion'; [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); for (let i = 0; i < 100; i++) { const checkbox = document.querySelector('input[aria-label="确认外部阶段披露"]'); const submit = [...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run'); if (checkbox && submit) { const blocked = submit.disabled; checkbox.click(); return {external: document.body.innerText.includes('parser.external@1'), blocked, enabled: !submit.disabled}; } await new Promise(r => setTimeout(r, 25)); } throw new Error('External disclosure did not render'); })()"""
+        external = """(async () => { [...document.querySelectorAll('button')].find(x => x.textContent.includes('上传并预检')).click(); const profile = document.querySelector('input[aria-label="Ingestion Profile Set ID"]'), file=document.querySelector('input[type=file]'), transfer=new DataTransfer(); transfer.items.add(new File(['%PDF-fixture'], 'fixture.pdf', {type:'application/pdf'})); Object.defineProperty(file, 'files', {value: transfer.files, configurable: true}); profile.value = 'external-ingestion'; [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); for (let i = 0; i < 100; i++) { const checkbox = document.querySelector('input[aria-label="确认外部阶段披露"]'); const submit = [...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run'); if (checkbox && submit) { const blocked = submit.disabled; checkbox.click(); return {external: document.body.innerText.includes('parser.external@1'), blocked, enabled: !submit.disabled}; } await new Promise(r => setTimeout(r, 25)); } throw new Error('External disclosure did not render'); })()"""
         assert _cdp(int(debug_port), external, await_promise=True) == {"external": True, "blocked": True, "enabled": True}
 
         assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run').click(); true") is True
@@ -1108,12 +1384,16 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
             time.sleep(.025)
         else:
             pytest.fail("Run receipt navigation did not occur")
-        states = """(async () => { for (let i = 0; i < 100; i++) { const text = document.body.innerText, buttons = [...document.querySelectorAll('button')].map(x => x.textContent); if (text.includes('Run RUNNING') && text.includes('FAILED') && text.includes('SKIPPED') && text.includes('accepted') && text.includes('rejected') && text.includes('parser.fixture@1') && text.includes('structure.fixture@1') && text.includes('chunker.fixture@1') && text.includes('latency_ms') && text.includes('parse_quality') && text.includes('2026-09-13T01:02:03Z')) return {matrix:true, actions:buttons.includes('停止') && buttons.includes('重新运行') && buttons.some(x => x.includes('Artifact canonical.document')) && !buttons.includes('重试'), overflow:document.documentElement.scrollWidth <= innerWidth}; await new Promise(r => setTimeout(r, 25)); } throw new Error('Run-state matrix did not render'); })()"""
-        assert _cdp(int(debug_port), states, await_promise=True) == {"matrix": True, "actions": True, "overflow": True}
-        _capture_cdp(int(debug_port), tmp_path / f"ingestion-running-failed-skipped-fallback-retry-{width}.png")
+        states = """(async () => { for (let i = 0; i < 100; i++) { const text = document.body.innerText, buttons = [...document.querySelectorAll('button')].map(x => x.textContent); if (text.includes('Ingestion Run') && text.includes('失败') && text.includes('已跳过') && text.includes('accepted') && text.includes('rejected') && text.includes('parser.primary@1') && text.includes('PLUGIN_TIMEOUT')) {const cards=[...document.querySelectorAll('.stage-card')],emptySignals=[...document.querySelectorAll('.stage-signal-grid dd')].map(x=>x.textContent);cards[1].click();const fallback=document.querySelector('.stage-inspector').innerText.includes('parser.fallback@1')&&document.querySelector('.stage-inspector').innerText.includes('accepted')&&document.querySelector('.stage-inspector').innerText.includes('latency_ms');cards[0].click();const root=document.documentElement;return {matrix:true, fallback, emptySignals:emptySignals.length===2&&emptySignals.every(x=>x==='不可用'), rawArrayAbsent:!document.querySelector('.stage-inspector').innerText.includes('[]'), actions:buttons.includes('停止') && buttons.includes('重新运行') && !buttons.includes('重试'), rail:cards.length===4, selected:document.querySelector('.stage-card[aria-pressed="true"]')?.innerText.includes('失败'), overflow:root.scrollWidth <= innerWidth,rootClass:root.classList.contains('modal-open'),bodyClass:document.body.classList.contains('modal-open'),rootOverflow:getComputedStyle(root).overflowY,bodyOverflow:getComputedStyle(document.body).overflowY,rootScrollbarWidth:innerWidth-root.clientWidth}; } await new Promise(r => setTimeout(r, 25)); } throw new Error('Run-state matrix did not render'); })()"""
+        assert _cdp(int(debug_port), states, await_promise=True) == {"matrix": True, "fallback": True, "emptySignals": True, "rawArrayAbsent": True, "actions": True, "rail": True, "selected": True, "overflow": True, "rootClass": False, "bodyClass": False, "rootOverflow": "auto", "bodyOverflow": "auto", "rootScrollbarWidth": 0}
+        run_url = f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}"
+        _assert_root_scroll_unlocked(debug_port, target_url=run_url)
+        _capture_cdp(int(debug_port), tmp_path / f"ingestion-state-matrix-{width}.png", target_url=run_url)
+        _assert_manifest_visual(debug_port, tmp_path / f"ingestion-state-matrix-{width}.png", f"ingestion-state-matrix-{width}.png", target_url=run_url, baseline_root=S024_BASELINE_ROOT, story="S-024")
+        stop = """(async()=>{[...document.querySelectorAll('button')].find(x=>x.textContent==='停止').click();for(let i=0;i<100;i++){const requests=await fetch('/api/fixture/ingestion-stop-requests').then(r=>r.json());if(requests.length)return requests;await new Promise(r=>setTimeout(r,25))}return []})()"""
+        assert _cdp(debug_port, stop, await_promise=True, target_url=run_url) == [_VISUAL_RUN]
     finally:
-        browser.terminate()
-        browser.wait(timeout=10)
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)
 

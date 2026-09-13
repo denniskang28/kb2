@@ -1,0 +1,48 @@
+{
+  "story": "S-024",
+  "uiAnchors": ["UI-003", "UI-004", "UI-005", "UI-013"],
+  "prototypeSha256": "a07df450d231d777cb814d3a6695d67553748beda5491ce12e529ec2dca32ea7",
+  "fixtureRevision": "s024-ingestion-artifact-fixture-v2",
+  "captureConditions": {
+    "browser": {
+      "product": "Chrome/152.0.7977.83",
+      "protocolVersion": "1.3",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+      "javascriptRuntime": "V8 15.2.124.21",
+      "renderingEngine": "537.36 (@79460ebecaa5625e57a5fb679a735659e73dc687)",
+      "headlessMode": "new",
+      "gpu": "disabled"
+    },
+    "device": {"deviceScaleFactor": 1, "mobile": false},
+    "media": {
+      "type": "screen",
+      "colorScheme": "light",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference"
+    },
+    "locale": {"browser": "zh-CN", "document": "zh-CN"},
+    "readiness": {
+      "document": "complete",
+      "fontsPromise": "document.fonts.ready",
+      "archivoWeights": [400, 600, 800],
+      "archivoFaceStatus": "loaded",
+      "assetResourceTimingRequired": true
+    },
+    "stabilization": {"animations": "none", "transitions": "none", "caretColor": "transparent"},
+    "screenshotFormat": "png"
+  },
+  "comparison": {
+    "colorSpace": "RGBA",
+    "channelTolerance": 12,
+    "maximumDifferingPixelRatio": 0.005,
+    "baselineUpdatesAutomatic": false
+  },
+  "baselines": [
+    {"file": "documents-preflight-automatic-1440.png", "scenario": "preflight-automatic", "viewport": [1440, 900], "sha256": "635ff72a9bca26b36799d16c07d1f5a9abacb07fc528b26b49d039f3fe96f0cb"},
+    {"file": "documents-preflight-automatic-644.png", "scenario": "preflight-automatic", "viewport": [644, 900], "sha256": "80248b0268893ce9fc5f772cc9dcbf971fd32a2bc8fa58b96ba59c65608311dd"},
+    {"file": "ingestion-state-matrix-1440.png", "scenario": "ingestion-state-matrix", "viewport": [1440, 900], "sha256": "48068e26127a171035e21370d64a7552d89b88d920572a6ac47b0f984ab1e119"},
+    {"file": "ingestion-state-matrix-644.png", "scenario": "ingestion-state-matrix", "viewport": [644, 900], "sha256": "506fb4a9bb72f8ad6be0f4ecbada54c812ad807dddd6aa846cbed0e563c56ff7"},
+    {"file": "artifact-canonical-source-1440.png", "scenario": "artifact-canonical-source", "viewport": [1440, 900], "sha256": "604b9ca749ab6c8a156f70e185141a40a23f456a426d2167d20675db79a9a9d2"},
+    {"file": "artifact-canonical-source-644.png", "scenario": "artifact-canonical-source", "viewport": [644, 900], "sha256": "f12969cd92bbf8c1f33b17552d7704540f3dfdfad1b7e9c52c97120c9a929626"}
+  ]
+}

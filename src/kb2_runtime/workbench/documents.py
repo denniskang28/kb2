@@ -32,6 +32,9 @@ class _Preflight:
     workspace_profile_id: str
     expires_at: float
     automatic: dict[str, Any]
+    selected_profile_id: str
+    plan_digest: str
+    disclosure: dict[str, Any]
 
 
 class DocumentWorkbenchService:
@@ -46,34 +49,80 @@ class DocumentWorkbenchService:
         self._jobs: dict[UUID, asyncio.Event] = {}
         self._external_capabilities = external_capabilities
 
-    async def preflight(self, content: bytes, filename: str, media_type: str, profile_id: str) -> dict[str, Any]:
+    async def preflight(self, content: bytes, filename: str, media_type: str, profile_id: str,
+                        replaces_token: str | None = None) -> dict[str, Any]:
+        self.discard_preflight(replaces_token)
         if not content or len(content) > 16 * 1024 * 1024 or len(filename) > 255 or len(media_type) > 128:
             raise ValueError("PREFLIGHT_INVALID")
-        compiled, request, record = await self._resolve(profile_id, content, filename, media_type)
-        token = uuid4().hex
+        _, request, record = await self._resolve(profile_id, content, filename, media_type)
         automatic = self._resolution(record)
-        self._preflights[token] = _Preflight(content, filename, media_type, profile_id, time.monotonic() + self._ttl, automatic)
+        return self._preview(content, filename, media_type, profile_id, request, record, automatic,
+                             time.monotonic() + self._ttl)
+
+    def discard_preflight(self, token: str | None) -> None:
+        if token:
+            self._preflights.pop(token, None)
+
+    async def select_candidate(self, token: str, profile_id: str) -> dict[str, Any]:
+        item = self._claim_preflight(token)
+        if profile_id not in item.automatic["candidateProfileIds"]:
+            raise ValueError("PREFLIGHT_SELECTION_INVALID")
+        _, request, record = await self._resolve(
+            item.workspace_profile_id, item.content, item.filename, item.media_type,
+            explicit_profile_id=profile_id,
+        )
+        return self._preview(
+            item.content, item.filename, item.media_type, item.workspace_profile_id,
+            request, record, item.automatic, item.expires_at,
+        )
+
+    def _preview(self, content: bytes, filename: str, media_type: str, workspace_profile_id: str,
+                 request: ResolutionRequest, record: Any, automatic: dict[str, Any],
+                 expires_at: float) -> dict[str, Any]:
+        token = uuid4().hex
         stages = self._stages(record.plan.canonical_payload)
+        disclosure = self._disclosure(stages)
+        self._preflights[token] = _Preflight(
+            content, filename, media_type, workspace_profile_id, expires_at, automatic,
+            record.selected_profile_id, record.plan.digest, disclosure,
+        )
         return {"contractVersion": "workbench-document-preflight/v1", "token": token,
-                "workspaceProfileId": profile_id,
+                "workspaceProfileId": workspace_profile_id,
                 "detected": request.observables(), "automatic": automatic,
+                "selection": {"profileId": record.selected_profile_id, "selectionTier": record.selection_tier},
                 "planDigest": record.plan.digest, "stages": stages,
-                "disclosure": self._disclosure(stages)}
+                "disclosure": disclosure}
+
+    def _claim_preflight(self, token: str) -> _Preflight:
+        item = self._preflights.pop(token, None)
+        if item is None or item.expires_at < time.monotonic():
+            raise LookupError("PREFLIGHT_UNAVAILABLE")
+        return item
 
     async def submit(self, token: str, profile_id: str | None, acknowledge_external: bool) -> dict[str, Any]:
         item = self._preflights.get(token)
         if item is None or item.expires_at < time.monotonic():
             self._preflights.pop(token, None)
             raise LookupError("PREFLIGHT_UNAVAILABLE")
-        selected = profile_id or item.automatic["selectedProfileId"]
-        compiled, request, record = await self._resolve(item.workspace_profile_id, item.content, item.filename, item.media_type, explicit_profile_id=selected)
+        selected = profile_id or item.selected_profile_id
+        if selected != item.selected_profile_id:
+            raise PermissionError("PREFLIGHT_SELECTION_MISMATCH")
+        try:
+            compiled, request, record = await self._resolve(item.workspace_profile_id, item.content, item.filename, item.media_type, explicit_profile_id=selected)
+        except (LookupError, ValueError, ProfileError):
+            self._preflights.pop(token, None)
+            raise PermissionError("PREFLIGHT_STALE") from None
         stages = self._stages(record.plan.canonical_payload)
         disclosure = self._disclosure(stages)
+        if record.plan.digest != item.plan_digest or disclosure != item.disclosure:
+            self._preflights.pop(token, None)
+            raise PermissionError("PREFLIGHT_STALE")
         if disclosure["externalStages"] and not acknowledge_external:
             raise PermissionError("EXTERNAL_DISCLOSURE_REQUIRED")
         # A rejected disclosure acknowledgement does not consume a preflight;
         # successful confirmation consumes it before a new immutable Run starts.
-        self._preflights.pop(token, None)
+        if self._preflights.pop(token, None) is not item:
+            raise LookupError("PREFLIGHT_UNAVAILABLE")
         cancellation = asyncio.Event()
 
         created: asyncio.Future[UUID] = asyncio.get_running_loop().create_future()

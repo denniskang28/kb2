@@ -221,3 +221,9 @@ before starting another delivery run.
   acceptance and repaired final review passed; delivery commit `1ec5813` was
   integrated into local `main` by merge commit `16b0c29` after the existing
   worktree changes were committed as `a9e1a2a`.
+- **2026-09-13:** S-024 UI-reference parity repair aligned Documents preflight,
+  Ingestion Run stage inspection, and schema-conditional Artifact/source views
+  with UI-003 through UI-005 and UI-013. Candidate-specific external disclosure,
+  rotating preflight tokens, stale-submit prevention, structured lineage,
+  deterministic desktop/narrow baselines, independent acceptance, and final
+  review passed.

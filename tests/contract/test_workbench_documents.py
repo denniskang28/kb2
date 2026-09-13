@@ -4,13 +4,18 @@ import asyncio
 import json
 from types import SimpleNamespace
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
+from kb2_runtime.api import create_app
+from kb2_runtime.config import CapabilityCatalog, Settings
 from kb2_runtime.workbench.documents import DocumentWorkbenchService
 from kb2_runtime.plugins.registry import PluginRegistration
 from kb2_runtime.canonical.contracts import ProviderFixture
 from kb2_runtime.canonical.normalizer import normalize_fixture
+from kb2_runtime.trace.contracts import ArtifactManifest
 from tests.contract.test_ingestion_engine import profile, registry
 from tests.contract.test_canonical_document import fixture as canonical_fixture
 
@@ -26,6 +31,32 @@ def _service() -> DocumentWorkbenchService:
     return DocumentWorkbenchService(_Profiles(), registry(), object(), object(), object())  # type: ignore[arg-type]
 
 
+class _CandidateProfiles:
+    def __init__(self, default: str = "local") -> None:
+        document = profile(profile_id="local", strategy="local")
+        external = profile(profile_id="external", strategy="external", extraction_plugin="transform.external@1")
+        document["profiles"].append(external["profiles"][0])
+        document["default_profile_id"] = default
+        self.document = document
+
+    async def get_profile(self, profile_id: str):
+        return SimpleNamespace(kind="ingestion", document=self.document) if profile_id == "workspace-set" else None
+
+
+def _candidate_service(default: str = "local") -> tuple[DocumentWorkbenchService, _CandidateProfiles]:
+    current = registry()
+    registration = current.get("transform.outcome@1")
+    current._items["transform.external@1"] = PluginRegistration(  # type: ignore[attr-defined]
+        registration.descriptor.model_copy(update={"plugin_id": "transform.external@1", "capabilities": ("external.fixture",)}),
+        registration.factory, registration.configuration_model,
+    )
+    profiles = _CandidateProfiles(default)
+    return DocumentWorkbenchService(
+        profiles, current, object(), object(), object(),  # type: ignore[arg-type]
+        external_capabilities=frozenset({"external.fixture"}),
+    ), profiles
+
+
 def test_preflight_returns_detector_facts_automatic_resolution_stages_and_local_disclosure() -> None:
     async def exercise() -> None:
         result = await _service().preflight(b"%PDF-1.7 fixture", "sample.PDF", "application/pdf", "complete")
@@ -34,9 +65,85 @@ def test_preflight_returns_detector_facts_automatic_resolution_stages_and_local_
                                       "is_scanned": False, "document_class": None}
         assert result["automatic"]["selectedProfileId"] == "complete"
         assert result["automatic"]["selectionTier"] == "default"
+        assert result["selection"] == {"profileId": "complete", "selectionTier": "default"}
         assert result["stages"][0]["key"] == "extraction.parse"
         assert result["disclosure"] == {"externalStages": [], "localPersistence": "提交后内容作为本地 Artifact 持久化。"}
     asyncio.run(exercise())
+
+
+def test_candidate_selection_rotates_token_and_binds_candidate_specific_preview() -> None:
+    async def exercise() -> None:
+        service, _ = _candidate_service()
+        automatic = await service.preflight(b"fixture", "fixture.txt", "text/plain", "workspace-set")
+        assert automatic["selection"] == {"profileId": "local", "selectionTier": "default"}
+        assert automatic["disclosure"]["externalStages"] == []
+        selected = await service.select_candidate(automatic["token"], "external")
+        assert selected["token"] != automatic["token"]
+        assert selected["automatic"] == automatic["automatic"]
+        assert selected["selection"] == {"profileId": "external", "selectionTier": "explicit"}
+        assert selected["planDigest"] != automatic["planDigest"]
+        assert selected["stages"][0]["candidates"][0]["pluginId"] == "transform.external@1"
+        assert selected["disclosure"]["externalStages"]
+        with pytest.raises(LookupError, match="PREFLIGHT_UNAVAILABLE"):
+            await service.select_candidate(automatic["token"], "local")
+        with pytest.raises(PermissionError, match="PREFLIGHT_SELECTION_MISMATCH"):
+            await service.submit(selected["token"], "local", True)
+        assert selected["token"] in service._preflights
+    asyncio.run(exercise())
+
+
+def test_external_to_local_selection_removes_disclosure_and_invalid_selection_consumes_token() -> None:
+    async def exercise() -> None:
+        service, _ = _candidate_service("external")
+        automatic = await service.preflight(b"fixture", "fixture.txt", "text/plain", "workspace-set")
+        assert automatic["disclosure"]["externalStages"]
+        selected = await service.select_candidate(automatic["token"], "local")
+        assert selected["selection"]["profileId"] == "local"
+        assert selected["disclosure"]["externalStages"] == []
+        with pytest.raises(ValueError, match="PREFLIGHT_SELECTION_INVALID"):
+            await service.select_candidate(selected["token"], "unknown")
+        assert selected["token"] not in service._preflights
+    asyncio.run(exercise())
+
+
+def test_replacement_and_stale_preview_consume_old_token_without_creating_a_run() -> None:
+    async def exercise() -> None:
+        service, profiles = _candidate_service()
+        first = await service.preflight(b"fixture", "fixture.txt", "text/plain", "workspace-set")
+        with pytest.raises(ValueError, match="PREFLIGHT_INVALID"):
+            await service.preflight(b"", "fixture.txt", "text/plain", "workspace-set", first["token"])
+        assert first["token"] not in service._preflights
+
+        current = await service.preflight(b"fixture", "fixture.txt", "text/plain", "workspace-set")
+        profiles.document["profiles"][0]["axes"]["extraction"]["sub_stages"][0]["candidates"][0]["configuration"]["strategy"] = "changed"
+        with pytest.raises(PermissionError, match="PREFLIGHT_STALE"):
+            await service.submit(current["token"], None, False)
+        assert current["token"] not in service._preflights
+    asyncio.run(exercise())
+
+
+def test_candidate_selection_api_rotates_and_replacement_header_revokes(
+    settings: Settings, catalog: CapabilityCatalog,
+) -> None:
+    app = create_app(settings, catalog)
+    service = _service()
+    app.state.workbench_documents = service
+    client = TestClient(app)
+    headers = {"X-Profile-Id": "complete", "X-Filename": "fixture.txt", "Content-Type": "text/plain"}
+    initial = client.put("/api/workbench/documents/preflight", headers=headers, content=b"fixture").json()
+    selected_response = client.post(
+        f"/api/workbench/documents/preflights/{initial['token']}/selection", json={"profileId": "complete"},
+    )
+    assert selected_response.status_code == 200
+    selected = selected_response.json()
+    assert selected["token"] != initial["token"] and selected["selection"]["selectionTier"] == "explicit"
+    assert client.post(f"/api/workbench/documents/preflights/{initial['token']}/selection", json={"profileId": "complete"}).status_code == 404
+    replaced = client.put(
+        "/api/workbench/documents/preflight",
+        headers={**headers, "X-Replaces-Preflight-Token": selected["token"]}, content=b"",
+    )
+    assert replaced.status_code == 422
+    assert client.post(f"/api/workbench/documents/preflights/{selected['token']}/runs", json={}).status_code == 404
 
 
 def test_preflight_is_bounded_and_requires_a_saved_ingestion_profile() -> None:
@@ -116,6 +223,32 @@ def test_artifact_view_preserves_canonical_table_identity_and_locator() -> None:
     }]
 
 
+def test_artifact_projects_structured_producer_identity_from_manifest() -> None:
+    async def exercise() -> None:
+        artifact_id, run_id = uuid4(), uuid4()
+        manifest = ArtifactManifest(
+            id=artifact_id, artifact_type="opaque.fixture", schema_revision="v1",
+            content_digest="a" * 64, byte_size=7, summary="fixture", storage_locator="fixture",
+            producing_run_id=run_id, producing_stage_attempt_id=uuid4(),
+            producing_plugin_id="parser.fixture@1", configuration_digest="b" * 64,
+        )
+
+        class Artifacts:
+            async def get_artifact_manifest(self, identifier):
+                return manifest if identifier == artifact_id else None
+
+            async def read_content(self, identifier):
+                assert identifier == artifact_id
+                return b"fixture"
+
+        service = DocumentWorkbenchService(_Profiles(), registry(), object(), object(), Artifacts())  # type: ignore[arg-type]
+        projection = await service.artifact(artifact_id)
+        assert projection is not None
+        assert projection["producer"] == {"runId": str(run_id), "pluginId": "parser.fixture@1"}
+
+    asyncio.run(exercise())
+
+
 def test_artifact_view_preserves_chunk_citation_locator() -> None:
     content = json.dumps({
         "chunks": [{
@@ -152,9 +285,15 @@ def test_static_workbench_has_artifact_actions_schema_tabs_locator_sync_and_narr
     # A Chunk can cite more than one source element; a first-citation-only
     # source pane would silently make the remaining real locators unreachable.
     assert "row.citations?.[0]?.locator" not in source
-    assert "row.citations.map" in source
+    assert "(row.citations||[]).map" in source
+    assert "resolution.selected_profile_id" in source
+    assert "Boolean(x.actions?.artifact)" in source
+    assert "signalValue(stage.metrics)" in source and "signalValue(stage.quality)" in source
+    assert "signalValue(x.metrics)" in source and "signalValue(x.quality)" in source
+    assert "role:'status'" in source and "正在预检" in source and "预检失败，可重试" in source
+    assert "表格源定位" in source
     assert ".inspector-drawer.open" in source
-    assert "inspector.remove();origin?.focus()" in source
+    assert "overlay.remove()" in source and "returnFocus?.focus()" in source
     assert "e.key==='Escape'" in source and "e.key==='Tab'" in source
     assert "button('重新运行'" in source and "button('停止'" in source
     assert "button('重试'" not in source

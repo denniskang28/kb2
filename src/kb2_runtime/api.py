@@ -328,8 +328,10 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         return JSONResponse({"stopped": True}) if await (await query_lab()).stop(run_id) else problem("QUERY_STOP_UNAVAILABLE", 409)
 
     @app.put("/api/workbench/documents/preflight")
-    async def document_preflight(request: Request, profile_id: str = Header(alias="X-Profile-Id"), filename: str = Header(alias="X-Filename"), media_type: str = Header(default="application/octet-stream", alias="Content-Type")) -> JSONResponse:
+    async def document_preflight(request: Request, profile_id: str = Header(alias="X-Profile-Id"), filename: str = Header(alias="X-Filename"), media_type: str = Header(default="application/octet-stream", alias="Content-Type"), replaces_token: str | None = Header(default=None, alias="X-Replaces-Preflight-Token")) -> JSONResponse:
         try:
+            document_service = await documents()
+            document_service.discard_preflight(replaces_token)
             chunks: list[bytes] = []
             size = 0
             async for chunk in request.stream():
@@ -337,11 +339,23 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
                 if size > 16 * 1024 * 1024:
                     raise ValueError("PREFLIGHT_INVALID")
                 chunks.append(chunk)
-            return JSONResponse(await (await documents()).preflight(b"".join(chunks), filename, media_type, profile_id))
+            return JSONResponse(await document_service.preflight(b"".join(chunks), filename, media_type, profile_id))
         except LookupError as exc:
             return problem(str(exc), 404)
         except (ValueError, ProfileError):
             return problem("PREFLIGHT_INVALID", 422)
+
+    @app.post("/api/workbench/documents/preflights/{token}/selection")
+    async def document_preflight_selection(token: str, payload: dict[str, object]) -> JSONResponse:
+        profile_id = payload.get("profileId")
+        if not isinstance(profile_id, str):
+            return problem("PREFLIGHT_SELECTION_INVALID", 422)
+        try:
+            return JSONResponse(await (await documents()).select_candidate(token, profile_id))
+        except LookupError as exc:
+            return problem(str(exc), 404)
+        except (ValueError, ProfileError):
+            return problem("PREFLIGHT_SELECTION_INVALID", 422)
 
     @app.post("/api/workbench/documents/preflights/{token}/runs")
     async def document_submit(token: str, payload: dict[str, object]) -> JSONResponse:
