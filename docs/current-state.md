@@ -218,6 +218,6 @@ before starting another delivery run.
   Overview with UI-001, UI-002, and UI-013; added deterministic desktop/narrow
   visual baselines, pinned local Archivo and Lucide provenance, stable failure
   regions, and bidirectional responsive breakpoint coverage. Independent
-  acceptance and repaired final review passed; delivery commit `1ec5813` is
-  ready, while the local-main fast-forward is pending because the existing main
-  worktree contains user-owned uncommitted changes.
+  acceptance and repaired final review passed; delivery commit `1ec5813` was
+  integrated into local `main` by merge commit `16b0c29` after the existing
+  worktree changes were committed as `a9e1a2a`.
