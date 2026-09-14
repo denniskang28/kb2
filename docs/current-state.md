@@ -10,7 +10,7 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-028 Implemented
+- **Stories:** S-001 through S-028 Implemented; S-029 Confirmed
 - **Active Story:** None
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
@@ -63,8 +63,7 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-No confirmed undelivered Story remains. Use the next approved planning workflow
-when another product change is confirmed.
+Deliver S-029 through the Story Pipeline.
 
 ## Change History
 
@@ -277,3 +276,7 @@ when another product change is confirmed.
   states, supported actions, and 30 px accessible controls. Eight refreshed
   desktop/narrow baselines, focused regression verification, and final review
   passed.
+- **2026-09-15:** Compiled and confirmed S-029 under FEAT-005 for a two-step
+  server-owned upload/preflight/Profile flow and a unified document Inspector
+  with real source preview, applicable Canonical/table views, related RAG
+  Chunks, and synchronized source locators.

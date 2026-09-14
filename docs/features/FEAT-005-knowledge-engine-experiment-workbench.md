@@ -52,6 +52,7 @@ queries, maintaining reviewed evaluation cases, and comparing experiments.
 | S-026 | Evaluation Dataset and Evaluation Run | UI-009, UI-010, UI-013 | Confirmed |
 | S-027 | Comparison and cross-Run diagnosis | UI-011, UI-012, UI-013 | Confirmed |
 | S-028 | Persisted document list | UI-003, UI-005, UI-013 | Implemented |
+| S-029 | Two-step document intake and unified document inspector | UI-003, UI-005, UI-013 | Confirmed |
 
 All adopted UI-001 through UI-013 items are compiled into at least one Story.
 Demo-only and not-adopted prototype items remain excluded from every Story.
@@ -76,3 +77,6 @@ adoption boundary and consume engine schemas instead of prototype data models.
 - **2026-09-14:** S-028 implemented the persisted API-backed document list,
   deterministic paging, Run/Artifact diagnosis actions, and responsive state
   coverage; independent verification and final review passed.
+- **2026-09-15:** Compiled and confirmed S-029 for a reference-aligned two-step
+  upload flow and one document-centered Inspector with real source preview,
+  Canonical/table views, related RAG Chunks, and synchronized source locators.
