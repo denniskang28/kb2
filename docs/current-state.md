@@ -10,7 +10,7 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-027 Implemented
+- **Stories:** S-001 through S-027 Implemented; S-028 Confirmed
 - **Active Story:** None
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
@@ -58,8 +58,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-All currently mapped Stories are implemented. Confirm or map the next Story
-before starting another delivery run.
+Deliver S-028 through the Story Pipeline, beginning with just-in-time technical
+design against the confirmed Story contract and current code.
 
 ## Change History
 
@@ -242,3 +242,9 @@ before starting another delivery run.
   Digest-bound manifests, real paired quality facts, exact deep links,
   owner-scoped recovery, stable responsive focus, six dual-viewport baselines,
   independent acceptance, and final review passed.
+- **2026-09-14:** Compiled S-028 under FEAT-005 for a persisted, API-backed
+  document list that restores UI-003's confirmed populated-list behavior
+  without adding document lifecycle or version-management scope; its Story
+  boundary awaits explicit confirmation.
+- **2026-09-14:** User explicitly confirmed the S-028 Story boundary; it is
+  eligible for just-in-time technical design and delivery.
