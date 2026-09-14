@@ -94,3 +94,7 @@ None. Table/chart implementation belongs to Story design.
 
 - **2026-09-11:** Compiled from confirmed FEAT-005 and UI Reference sources.
 - **2026-09-11:** Story boundary confirmed by the user.
+- **2026-09-14:** Completed a UI-reference parity repair with digest-bound
+  comparison authority, real paired quality facts, exact cross-Run diagnosis,
+  owner-scoped recovery, stable responsive focus, and six reviewed
+  desktop/narrow visual baselines.

@@ -2,179 +2,333 @@
 
 ## Status
 
-Approved for Story Pipeline development.
+Approved for Story Pipeline parity repair.
 
 ## Story Contract Snapshot
 
-- Story: `S-027`, confirmed 2026-09-11.
-- Sources checked: S-027; REQ-017; DES-008 and DES-015; FD-011; UI-011 through
-  UI-013; delivered S-021, S-022, S-024, S-025, and S-026 designs, workbench
-  code, evaluation comparison contracts, trace repository, and workbench tests.
-- Material decisions requiring approval: None. The `story-pipeline` invocation
-  authorizes the bounded server projections, comparison submission endpoint,
-  and native-DOM UI described below.
+- Story: `S-027`, confirmed 2026-09-11 and implemented 2026-09-13.
+- Repair target: UI-reference parity with `docs/ui/kb_ui.zip` at UI-011,
+  UI-012, and UI-013 without changing S-021 comparison policy or any owning
+  Run workflow.
+- Sources checked: S-027; exact adopted prototype regions; current comparison,
+  history, repository, API, client, fixtures, and tests; S-021 comparison
+  contracts; S-024 inspector/recovery; and repaired S-025/S-026 projections.
+- Material decisions requiring approval: None. The Story Pipeline invocation
+  authorizes the bounded additive projections and tests below. There is no
+  durable schema, product behavior, or comparison-policy change.
 
 ## AC To Design Mapping
 
 | AC | Implementation | Planned Verification |
 |---|---|---|
-| 1 | Server returns only digest-verified `evaluation.report/v1` candidates and calls S-021's `EvaluationService.compare` for a submitted baseline/candidate pair. Its existing pinned-equivalence validation is authoritative; rejected pairs return one safe engine-derived compatibility code/reason and no fabricated rows or comparison Artifact. | Service/API fixtures cover eligible reports, every incompatible pin category, corrupt/missing report Artifact, and successful immutable comparison publication. |
-| 2 | Parse a digest-verified `evaluation.comparison/v1` Artifact into a read-only comparison projection. Render manifest identity, separate quality/slice rows, deltas and relative-delta state, confidence/sample context, gate outcomes, failed cases, latency, and local-resource bands without browser aggregation. | Projection/UI tests cover `VALUE`, `NOT_APPLICABLE`, `INSUFFICIENT_LABELS`, undefined zero-baseline relative delta, confidence unavailable, failed gates, and unavailable supporting Artifacts. |
-| 3 | Display the stored `SINGLE_AXIS` axis/before-after changes only when supplied by the comparison Artifact. Display `MULTI_AXIS_NON_CAUSAL` prominently with its changed-axis list and without a component-attribution or causal recommendation. | Contract and browser fixtures assert single-axis labelling, multi-axis non-causal labelling, no causal text/field for the latter, and no client-side axis diff. |
-| 4 | Add a bounded mixed Run-history projection that classifies persisted Run plans as ingestion, query, evaluation, comparison, or contract-test only from stored engine/plan facts. Server filters and paginates by safe type/state/text inputs. The client keeps the validated filters and selected Run ID in the workbench URL context while navigating to Compare, Runs, and existing inspection routes. | Repository/service/API/browser tests cover all five types, state/type/text filtering, unknown plan kind, empty result, selected row, back/forward, and cross-route context preservation. |
-| 5 | Return actual ordered trace-stage and Artifact links plus owner-authorized action capabilities. Drilldowns delegate to S-024's Artifact inspector and S-025/S-026 views; recovery routes only to existing ingestion/query actions when their service says they are currently permitted. Evaluation/comparison and unowned/restarted Runs expose no synthetic retry/stop control. | Tests cover stage/Artifact/Evidence/failed-case links, locator handoff, active versus unowned cancellation, ingestion rerun preflight routing, terminal evaluation/comparison read-only state, and safe missing lineage. |
-| 6 | Replace the Compare and Runs placeholders in the shared native-DOM shell with dense ruled tables and scoped scroll containers. At desktop retain manifest/filter/action columns; below 900 px preserve labels and reachable actions through stacked controls and table horizontal scrolling. | Fixture-backed Chrome screenshots at 1440x900 and 644x900 for single-axis, multi-axis, filtered mixed history, selection and unavailable states; assert focus behavior, no page overflow, and no overlapping boxes. |
+| 1 | Keep S-021 as compatibility authority. Add a server-owned baseline-relative compatibility projection by reusing one shared S-021 fixed-pin check. Disable known-incompatible candidates, show its bounded reason, and recheck on create. | Unit/API tests cover compatible, same-report, fixed-pin mismatch, corrupt/missing Artifact, stale eligibility, and create-time recheck. Browser tests prove safe reasons, retained retry state, and no failed comparison result. |
+| 2 | Typed/digest-validate the complete `EvaluationComparison/v1`; render identity, quality, both statuses/values, deltas, samples/confidence, gates, failed cases, latency, resources, and recommendation as separate ruled regions. | Projection/browser tests cover `VALUE`, missing statuses, missing-side values, zero-baseline relative state, all Gate/confidence/operation states, navigation, and absence of raw JSON or an overall score. |
+| 3 | Render `SINGLE_AXIS` only from stored mode/axis/changes. Render `MULTI_AXIS_NON_CAUSAL` with stored changes and no component attribution. Recommendation stays read-only. | Both modes have contract/browser fixtures; incomplete/unknown modes are unavailable. Multi-axis contains no causal or activation text/control. |
+| 4 | Add safe stored Profile/Plugin/input identity and duration to bounded mixed history. Implement five-type filters, clear, stable selection/detail, request-version guards, and validated URL state preserved through routes, reload, and history navigation. | Tests cover five types plus `UNKNOWN`, filters/search/clear/empty, selection outside a filter, stale responses, refresh/back/forward, and cross-route context. |
+| 5 | Render exact attempts, safe failures, typed Artifact outputs, Evidence/failed-case links, and returned destinations. Reuse S-024 Inspector and S-025/S-026 routes. Only owning live services supply Stop/rerun authority. | Tests verify locator/focus/Escape/return context, Artifact/Evidence/case navigation, active ingestion/query authority, owner loss, terminal read-only states, and explicit unavailable lineage. |
+| 6 | Recompose Compare into selector/manifest plus dense independent bands, and Runs into filter plus table/detail split using UI-013. Narrow views stack with labelled table overflow only. | Six reviewed goldens cover single-axis, multi-axis, and mixed selected history at 1440x900 and 644x900. Geometry/accessibility checks cover exceptional states. |
 
 ## Current Code Findings
 
-- S-021 already publishes immutable `evaluation.comparison/v1` Artifacts. Its
-  `compare()` method proves pinned input equivalence, supplies independent
-  quality/gate/case/latency/resource values, derives the axis classification,
-  and only returns a recommendation. It is the comparison policy boundary.
-- S-026 reads verified evaluation manifests/reports/navigation Artifacts, but
-  it has no comparison catalog/detail projection. `EvaluationWorkbenchService`
-  currently exposes only evaluation Runs.
-- `TraceRepository` has bounded overview and evaluation-only reads. It has no
-  mixed Run-history query or plan-kind projection. Persisted `engine_kind` is
-  ingestion/query/evaluation; comparison is represented by an evaluation Run
-  with a stored `kind: evaluation_comparison` plan fact.
-- S-024 owns the generic Artifact inspector and ingestion stop/rerun semantics;
-  S-025 owns query stop semantics; neither permits a generic Run retry API.
-- The workbench already supplies the native-DOM shell, URL workspace context,
-  inspector drawer, responsive tokens, evaluation Run route, and fixture-backed
-  browser test harness. `/workbench/compare` is still a placeholder and
-  `/workbench/runs` currently accepts one ingestion UUID only.
+- S-021 already publishes immutable comparison Artifacts with paired quality,
+  deltas, confidence, gates, failed cases, latency, resources, axis mode, and a
+  bounded recommendation. `EvaluationService.compare()` owns fixed-pin and
+  axis policy.
+- `ComparisonWorkbenchService.eligible()` validates reports/manifests but
+  exposes only IDs and two digests. `detail()` checks a small key subset then
+  passes an arbitrary dictionary to the browser. There is no baseline-relative
+  compatibility or complete manifest projection.
+- Compare structurally renders only metric delta numbers. Confidence, gates,
+  latency, and resources are raw `<pre>` JSON. It omits quality owner/subject/
+  case/slice/status/sample facts, paired manifest identity, gate drilldown, and
+  stable loading/error/empty states.
+- History correctly classifies comparison/contract test only from allowlisted
+  plan `kind` and delegates actions to ingestion/query owners. Its rows omit
+  available Profile/Plugin/input/duration and typed destinations.
+- Runs displays only type, state, ID, creation time, and Trace. Filters reach
+  the URL only after detail loads; requests have no stale guard; selection,
+  empty/error/loading, safe failures, and filtered-out states are unstable;
+  rerun uses `window.prompt`; rows lack accessible selection.
+- Existing S-027 screenshots are temporary and cover one multi-axis result and
+  one Query Run. There is no manifest-backed S-027 baseline or single-axis
+  visual, and fixtures omit much of the production shape.
+- S-024 owns inspector focus/locator behavior, S-025 owns Query/Evidence, and
+  S-026 owns typed evaluation/gate/Judge/case diagnosis. S-027 must hand off to
+  them, not fork them.
 
 ## Proposed Approach
 
-Add `ComparisonWorkbenchService` and `RunHistoryWorkbenchService` under
-`kb2_runtime.workbench`, composed in `api.py` with the existing trace,
-Artifact, Run, document, query, and evaluation dependencies. They are
-presentation facades: all Artifact reads are through `ArtifactService`, every
-typed payload is SHA-256 checked against its manifest before parsing, and no
-metric, confidence interval, gate, delta, plan diff, or lineage is recalculated
-in the browser.
+### Comparison Authority And API
 
-The comparison API has three bounded operations:
+Keep the three endpoints. `GET /api/workbench/comparisons/eligible` remains
+backward compatible and accepts optional `baselineReportId`. Every report and
+manifest is type/revision/digest checked and parsed before projection.
 
-1. `GET /api/workbench/comparisons/eligible` returns up to a fixed limit of
-   terminal evaluation-report summaries with their immutable manifest/dataset
-   identity, never raw plans, storage locators, or metric bodies.
-2. `POST /api/workbench/comparisons` accepts two UUID report IDs. The service
-   verifies they are eligible and delegates to `EvaluationService.compare`.
-   Success returns the new immutable comparison Artifact/Run IDs and projection;
-   an incompatibility is a safe `COMPARISON_INCOMPATIBLE` response containing
-   only the engine reason code. It cannot activate a Profile or mutate either
-   report/plan.
-3. `GET /api/workbench/comparisons/{artifact_id}` returns the verified stored
-   comparison projection. Supporting missing/corrupt content is represented as
-   a typed unavailable item, not guessed values.
+Extract the fixed-input predicate embedded in `EvaluationService.compare()` as
+a pure shared S-021 helper used by both create and the catalog. It compares only
+the existing fixed fields: dataset snapshot ID/digest, taxonomy/input-catalog
+digest, cases, metrics, gates, runtime, and confidence policy. Same-report and
+unavailable content are rejected. This prevents a second workbench policy.
 
-The projection retains the stored baseline/candidate report and manifest IDs,
-dataset/input catalog digests, comparison mode, axis/change list, quality rows
-with sample/confidence context, gates, failed-case navigation, latency,
-resources, and recommendation. It deliberately has separate `quality`,
-`latency`, and `resources` sections and no overall score, rank, threshold, or
-activation field. The comparison page selects only entries from `eligible`,
-shows an engine rejection in place, and renders the returned/selected immutable
-comparison detail. A single-axis banner states the one stored changed component.
-The multi-axis banner uses the literal non-causal state and lists stored changes
-without saying any component caused a result.
+Add this safe catalog shape while retaining current top-level fields:
 
-Add one repository query over `runs`, plan snapshots, attempts, and safe error
-facts for a bounded mixed history. Its service classifies type from the stored
-`engine_kind` plus allowlisted plan `kind` values (`evaluation_comparison` and
-`contract_test`); unknown/malformed values remain `UNKNOWN`, rather than being
-misreported as a contract test. Rows contain lifecycle timestamps, plan digest,
-safe status/error, pinned Profile/Plugin identity when present in the actual
-plan, and trace/Artifact/drilldown IDs. Filter predicates are finite type/state
-sets plus a length-bounded identifier search, with stable newest-first ordering
-and a bounded cursor/limit. The detail projection reads the authoritative trace
-and presents its real ordered attempts and available links only.
+```json
+{
+  "reportId": "uuid",
+  "runId": "uuid",
+  "state": "SUCCEEDED",
+  "manifest": {
+    "artifactId": "uuid",
+    "digest": "sha256",
+    "datasetSnapshotId": "uuid",
+    "datasetDigest": "sha256",
+    "taxonomyDigest": "sha256",
+    "inputCatalogDigest": "sha256",
+    "caseCount": 12,
+    "metricCount": 8
+  },
+  "compatibility": {
+    "state": "BASELINE|COMPATIBLE|INCOMPATIBLE",
+    "reason": "PINNED_INPUTS_NOT_EQUIVALENT|null"
+  }
+}
+```
 
-Run recovery is delegated, never unified: an ingestion row can link to the
-existing documents Run and its owner may expose stop/rerun-preflight; a query
-row can expose its owner-authorized stop; evaluation, comparison, contract-test,
-unknown, terminal, and process-unowned rows are read-only. Trace and Artifact
-controls use existing S-024 inspector links. Failed-case links route to the
-S-026 evaluation Run/detail and then invoke the same inspector for the exact
-available Evidence/source/generation/verification Artifact; absent stages stay
-explicitly unavailable.
+Compatibility is omitted without a baseline. Only finite safe codes are
+exposed, never exceptions or mismatched values. `POST /comparisons` always
+revalidates, so catalog state is not create authority.
 
-Extend `workbench.js`/CSS rather than add a frontend framework. Compare uses a
-compact selector, immutable manifest band, separate quality table, independent
-operation bands, gate/case drilldown rows, and an accessible non-causal label.
-Runs uses type/state/search filters, a selected row/detail split, safe stage
-trace and action columns. Add a small shared URL-context helper that validates
-and preserves `workspace`, `run`, `runType`, `runState`, and bounded `q` on
-workbench links. This state is presentation-only, not a persisted workspace,
-tenant selector, or query API; invalid values are ignored. At narrow widths
-filters stack and table wrappers scroll horizontally with fixed headers/actions
-remaining reachable. Preserve existing drawer/inspector focus trap, Escape,
-focus return, native text-node rendering, and UI-013 semantic colors.
+Define strict workbench models for the entire stored comparison: report IDs,
+mode/axis/changes, operation deltas, quality baseline/candidate/deltas,
+confidence, layers/report IDs, gate pair, failed-case pair, latency, resources,
+and recommendation. Validate UUIDs/enums/bounds/numeric-null states after
+digest verification. Malformed content retains its Artifact identity and
+returns `COMPARISON_ARTIFACT_UNAVAILABLE`, with no partial primary table.
+
+Detail and successful create add `reports: {baseline, candidate}` using the
+same safe catalog summaries. The stored comparison payload remains unchanged;
+the browser receives no raw manifests and performs no join or policy inference.
+
+### Compare Work Surface
+
+Use this native-DOM hierarchy:
+
+```text
+main.comparison-page
+  header.title-row
+  section.comparison-controls
+  section.comparison-identity
+  section.comparison-workspace
+    quality table
+    confidence band
+    gate band
+    failed-case band
+    latency band
+    resources band
+    recommendation note
+```
+
+Changing baseline increments a request version, disables create, reloads the
+server compatibility projection, and ignores stale responses. Candidate stays
+selected only if the latest response remains compatible. Create is disabled
+for missing/same/incompatible/pending choices. A 409 shows the returned safe
+reason beside controls, preserves retryable selections, and clears no previous
+authority. Only success installs a new immutable result.
+
+The identity band shows both report/Run/manifest IDs and digests, dataset,
+taxonomy/input-catalog identity and counts. `SINGLE_AXIS` names exactly the
+stored component/change. `MULTI_AXIS_NON_CAUSAL` is a prominent warning with
+the complete stored change list and no cause, winner, or activation claim.
+
+Quality rows use the stored baseline/candidate records and exact stored delta
+key. Show subject, owner, metric, case/slice, both status/value facts,
+sample/labelled/matched counts, absolute delta, and relative value or returned
+missing/zero-baseline state. Missing sides remain `不可用`; no value, row,
+threshold, ordering, or aggregate is synthesized.
+
+Confidence shows state/reason/method/level/numerator/denominator/bounds when
+present. Gates show side, gate, subject, state/reason, sample/value/state counts
+and real drilldown. Failed cases retain side, case, gate, report/aggregate and
+actual Artifact links. Latency and resources are independent paired bands;
+resource availability, CPU, RSS, and I/O remain distinct. The stored
+recommendation is text, never a mutation command. Raw JSON is not primary UI.
+
+### Typed Mixed History
+
+Keep the bounded newest-first repository read. Add only safe facts already in
+typed plans, traces, or manifests:
+
+```json
+{
+  "id": "uuid",
+  "type": "INGESTION|QUERY|EVALUATION|COMPARISON|CONTRACT_TEST|UNKNOWN",
+  "state": "PENDING|RUNNING|SUCCEEDED|FAILED",
+  "terminalState": "SUCCEEDED|FAILED|null",
+  "createdAt": "timestamp",
+  "startedAt": "timestamp|null",
+  "endedAt": "timestamp|null",
+  "durationMs": 1234,
+  "planDigest": "sha256",
+  "profileId": "bounded-id|null",
+  "pluginIds": ["allowlisted-id"],
+  "input": {"kind": "artifact|dataset|reports|unavailable", "summary": "safe text"}
+}
+```
+
+Ingestion/query identity comes only from canonical plan fields. Evaluation uses
+its manifest/dataset reference; comparison uses baseline/candidate report IDs;
+contract test uses only explicitly stored safe identity. Unknown shapes remain
+null/empty/unavailable. Duration is a non-negative persisted timestamp
+difference or null. Exclude question/source bodies, paths, locators, raw plans,
+configuration, credentials, prompts, provider content, and arbitrary errors.
+
+Detail adds ordered attempts: stage, attempt, state/result, stored Plugin,
+start/end/duration, safe failure code, and typed input/output Artifact summaries.
+Return destinations only for actual identities: Documents/Inspector for
+ingestion, Query/Evidence for query, Evaluation/case diagnosis for evaluation,
+comparison Artifact/detail for comparisons, and actual Trace/Artifacts for
+contract-test/unknown.
+
+API composition continues replacing `actions` with the owning live Documents
+or Query response. History never infers action authority from `RUNNING`.
+Ingestion rerun uses an inline labelled Profile handoff to the existing
+rerun-preflight/Documents flow, not `window.prompt`. Stop disables while pending,
+re-reads detail, and disappears on owner loss. Add no generic recovery API.
+
+### Runs State And Navigation
+
+```text
+main.run-history-page
+  header.title-row
+  form.run-filters
+  section.run-history-workspace
+    section.run-table-region
+    aside.run-diagnostic-pane
+```
+
+Table columns are Run, type, Profile/Plugin, input, state, duration, start,
+Trace, and recovery. Selection is keyboard operable and programmatically
+selected; route/Artifact commands are distinct controls.
+
+Parse only valid `runType`, `runState`, bounded `q`, and UUID `run`. Every
+filter change updates the URL immediately, debounces list loading, and advances
+a list request version. Selection updates `run` immediately and advances a
+detail version. Late list/detail/action responses cannot overwrite later state.
+Back/forward rehydrates controls/list/detail.
+
+A selected Run outside the current filter remains addressable and is labelled
+`当前筛选范围外`; Clear removes filters but retains valid selection. Explicit
+detail close removes `run`. `diagnosisHref` preserves validated `workspace`,
+`run`, `runType`, `runState`, and `q` through Compare, Query, Evaluation,
+Documents, inspector, narrow drawer, and return navigation.
+
+Initial/filter/detail loading, full/filtered empty, list/detail failure,
+not-found, action pending/failure, stale retained detail, owner loss, and missing
+Artifact each have stable status/alert/empty regions. Recoverable failure keeps
+filters, selection, and last valid detail but marks it stale.
+
+### Accessibility And Responsive Rules
+
+- Pending states use persistent `role=status`/`aria-live=polite`; failures use
+  `role=alert`. Compatibility, axis mode, Run status, and selection use text
+  plus icon/rule, not color alone.
+- Controls have labels and visible focus/hover/pressed/disabled states. Dense
+  table wrappers are labelled and keyboard-scrollable. Detail focus changes
+  only after explicit row activation.
+- At 1440 px Compare is a full-width dense ruled surface; Runs uses roughly
+  `minmax(680px,1.45fr) minmax(340px,.72fr)`. At 644 px controls and facts
+  stack, table precedes detail, and only table wrappers scroll horizontally.
+- Long IDs wrap in definitions or remain in scoped overflow. Reuse UI-013
+  Archivo, flat neutral panes, zero radius, strong rules, semantic red/teal/
+  blue/amber, and pinned Lucide icons. No cards, gradients, oversized type, or
+  prototype scenario controls.
 
 ## Relevant Impacts
 
-- **API/data:** Add bounded comparison eligibility/create/detail and mixed
-  Run-history/list/detail endpoints, workbench contracts, and repository reads.
-  Reuse S-021 immutable Artifacts and current Run/attempt persistence; no schema
-  migration, backfill, mutable comparison catalog, or new user-facing version
-  model is needed.
-- **Security:** Parse only registered typed schema revisions after digest checks.
-  Validate UUIDs/query filters and return safe codes/identities/timestamps and
-  stored numeric facts only. Exclude Artifact storage locations, paths,
-  credentials, provider bodies, prompts, source content, raw plan payloads,
-  arbitrary errors, and executable configuration. Continue native DOM text-node
-  rendering with no `innerHTML`.
-- **Observability:** Preserve immutable manifest/report/comparison identities,
-  plan digest, recorded attempts, safe errors, axis classification, gates,
-  sample/confidence state, operation availability, and failed-case lineage.
-  Browser load failures remain client errors, never Run outcomes.
-- **Compatibility:** S-021 remains the only comparison/axis/delta policy owner;
-  S-024 inspector and ingestion recovery, S-025 query cancellation, S-026
-  evaluation views, and S-022 shell paths continue unchanged. Existing program
-  APIs remain valid.
+- **API:** Optional baseline query and additive manifest/compatibility report
+  fields; paired report summaries on comparison detail/create; additive safe
+  Run identity/input/duration/navigation. Existing routes/fields remain valid.
+- **Engine:** One pure S-021 compatibility helper reused by compare and catalog;
+  no new rule or public execution capability.
+- **Data:** No migration, backfill, mutable comparison, saved filters, or new
+  version model. Current Artifacts/plans/traces/live owner maps remain authority.
+- **Security:** Validate identifiers, bounds, types, revisions, digests, and
+  schemas. Render text nodes. Exclude raw plans/content/configuration, paths,
+  locators, credentials, prompts, vectors, provider bodies, and unsafe errors.
+- **Compatibility:** Preserve S-021 policy, S-022 shell, S-024 Inspector and
+  recovery, S-025 Query/Evidence/final state, S-026 evaluation/gates/Judge/cases,
+  and all existing routes. Add no metric, Gate state, threshold, causal claim,
+  or recovery command.
+
+## Deterministic Visual Contract
+
+Create `tests/visual/baselines/s027/manifest.json` and six reviewed PNGs:
+
+| File | Fixture state | Required visible evidence | Viewport |
+|---|---|---|---|
+| `comparison-single-axis-1440.png` | compatible `SINGLE_AXIS`, one query component change | compatibility, paired identity, exact axis, quality/status/sample/deltas, confidence, gates/case, latency/resources, read-only recommendation | 1440 x 900 |
+| `comparison-single-axis-644.png` | same | stacked controls/facts, scoped table overflow, no page overflow | 644 x 900 |
+| `comparison-multi-axis-1440.png` | compatible `MULTI_AXIS_NON_CAUSAL` | prominent non-causal changes, independent bands, no attribution/activation | 1440 x 900 |
+| `comparison-multi-axis-644.png` | same | narrow non-causal hierarchy, readable controls, no overlap | 644 x 900 |
+| `run-history-mixed-selected-1440.png` | all five types; active Query selected | filters, dense identity/input/time columns, selection, typed Evidence Artifact, owner Stop | 1440 x 900 |
+| `run-history-mixed-selected-644.png` | same | stacked table/detail, scoped scroll, preserved controls/selection | 644 x 900 |
+
+Fixtures flow through real workbench services, typed S-021 contracts and real
+trace plan shapes, with S-024/S-025/S-026 helpers where applicable. In-memory
+repositories are allowed; impossible flattened browser responses are not.
+Prototype data is not copied as product defaults.
+
+Incompatible pins, loading/errors/empty, stale list/detail/create, selection
+outside filters, owner loss, rerun failure, unavailable Artifact, and URL round
+trips receive deterministic DOM/interaction assertions without more goldens.
+
+The manifest records S-027/UI anchors, prototype SHA-256
+`a07df450d231d777cb814d3a6695d67553748beda5491ce12e529ec2dca32ea7`,
+fixture revision, baseline hashes, and the exact S-022/S-024/S-025/S-026 capture
+conditions: pinned Chrome/protocol/user agent/V8/Blink, headless-new, GPU off,
+DPR 1, `zh-CN`, screen/light/no forced colors/no-preference reduced motion,
+complete document, loaded local Archivo 400/600/800 timing, animations/
+transitions off, transparent caret, and PNG. Use one CDP target/session.
+
+RGBA comparison requires equal dimensions, per-channel tolerance 12, and at
+most `0.005` differing pixels. Tests never update goldens. On mismatch, emit
+current/diff diagnostics; refresh only after manual review and manifest rehash.
 
 ## Alternatives And Risks
 
-- Computing compatibility, deltas, confidence, or axis changes from browser
-  rows is rejected because it could diverge from pinned engine evidence.
-- A generic replay/retry/stop endpoint is rejected because it would violate
-  immutable plans and process-local action ownership. A permitted recovery is
-  an explicit handoff to the existing owner workflow.
-- A composite winner or quality/latency/resource score is rejected by DES-015
-  and FD-011. The stored non-mutating recommendation is shown separately.
-- Treating every evaluation Run as a comparison or inferring a contract test
-  from labels is rejected. The list uses only stored allowlisted plan facts and
-  surfaces unclassifiable records as unknown.
+- Browser compatibility, delta, confidence, gate, axis, or operation
+  computation is rejected because it can diverge from S-021.
+- Raw JSON primary views are rejected because they do not satisfy adopted dense
+  diagnosis or accessible states.
+- Generic retry/stop/replay is rejected: persisted state is not live ownership.
+- Identity/type/recovery inference from labels, errors, or Artifact bodies is
+  rejected; explicit unavailable is safer.
+- Composite winner, overall score, synthetic threshold, or activation is
+  rejected by DES-015 and S-027.
 
 ## Test Strategy
 
-- Add unit/service tests for verified comparison candidate/catalog/detail
-  parsing, compatibility rejection, successful S-021 delegation, independent
-  report bands, zero-baseline delta state, confidence/sample state, single-axis
-  and multi-axis non-causal rendering inputs, and safe unavailable Artifacts.
-- Add repository/API tests for bounded mixed Run history, stored type mapping,
-  filters/cursor order, selected Run detail, safe unknown plans, trace/Artifact
-  links, and authoritative recovery capabilities. Verify no comparison mutation
-  or browser-owned calculation endpoint exists.
-- Extend workbench fixtures and browser tests for comparison creation/detail,
-  compatibility error, filters/selected row URL persistence across routes,
-  failed-case/Evidence/Artifact drilldown, owner-permitted actions, keyboard
-  focus/Escape behavior, and unavailable state.
-- Capture desktop and narrow comparison/history screenshot states and assert
-  semantic labels, scoped table overflow, document width, and box non-overlap.
-  Run focused workbench/evaluation/trace tests and then the full regression
-  suite.
+- Unit/service: typed comparison parsing, shared fixed pins, safe reasons,
+  paired projections, every independent state, corrupt/unavailable content.
+- Repository/API: five types plus unknown, allowlisted identities/input,
+  duration, attempts/failures/navigation, filters, and owner-supplied actions.
+- Browser: compatibility and async guards, both axis modes, independent bands,
+  drilldowns, filters/clear/exceptional states, URL history, and owner loss.
+- Compare six goldens after manifest readiness; at both widths assert no page
+  overflow or incoherent overlap, positive controls, stable order, and scoped
+  overflow only.
+- Run focused S-021/S-027 tests, full workbench Chrome, and non-Docker
+  regression. Explicitly rerun S-022 shell, S-024 inspector/recovery, S-025
+  Query/Evidence/final-state, and S-026 manifest/gate/Judge/case coverage.
+  Reproduce and classify any Docker residual against the S-027 diff.
 
 ## Implementation Checklist
 
-- [ ] Add comparison and mixed-run workbench contracts, repository reads, safe
-  verified projections, and FastAPI composition/routes.
-- [ ] Delegate comparison submission to S-021 and recovery/action decisions to
-  existing owning services; implement URL-context-preserving drilldowns.
-- [ ] Replace Compare/Runs placeholders with responsive native-DOM surfaces and
-  extend service/API/browser/visual regression coverage.
+- [ ] Reuse S-021 fixed-pin authority and add typed comparison projections.
+- [ ] Replace Compare JSON with identity and independent diagnostic bands.
+- [ ] Add safe mixed-history identity/navigation and robust URL/async state.
+- [ ] Preserve S-024/S-025/S-026 inspector, context, and owner boundaries.
+- [ ] Add UI-013 styles, S-027 manifest, six goldens, and regressions.
 
 ## Open Questions
 
@@ -182,11 +336,13 @@ None. The pipeline may proceed directly to development.
 
 ## Approval
 
-Approved by the S-027 `story-pipeline` invocation on 2026-09-13; no separate
-product decision is required.
+Approved by the S-027 `story-pipeline` parity-repair invocation on 2026-09-14;
+no separate product, API, data, architecture, or verification decision is
+required.
 
 ## Change History
 
-- **2026-09-13:** Created just-in-time design from confirmed S-027, its exact
-  evaluation/UI anchors, and delivered workbench/evaluation dependency
-  contracts.
+- **2026-09-13:** Created the initial just-in-time design and delivered S-027.
+- **2026-09-14:** Revised for UI-011/UI-012/UI-013 parity; audited current gaps,
+  defined typed additive projections and URL/async authority, preserved direct
+  dependency boundaries, and established six dual-viewport goldens.

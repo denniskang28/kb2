@@ -24,16 +24,19 @@ from fastapi.responses import FileResponse, JSONResponse
 from kb2_runtime.evaluation.datasets.contracts import DEFAULT_TAXONOMY, DatasetContent
 from kb2_runtime.evaluation.ingestion import MetricReport, MetricStatus, metric_report_bytes
 from kb2_runtime.evaluation.runs.contracts import (
-    ArtifactBinding, EvaluationManifest, EvaluationSubject, FailedCaseLink,
-    GateResult, LayeredReport, NavigationIndex, OperationReport, PlanIdentity,
+    ArtifactBinding, ConfidencePolicy, EvaluationManifest, EvaluationSubject, FailedCaseLink,
+    GateResult, GateState, LayeredReport, NavigationIndex, OperationReport, PlanIdentity,
     QualityGate, RuntimeSummary, canonical_bytes, digest,
 )
+from kb2_runtime.evaluation.runs.service import EvaluationService
 from kb2_runtime.evidence.contracts import ContextDecision, EvidenceShortage
 from kb2_runtime.fusion.contracts import CandidateContribution, FusedCandidate, FusionCandidateSet
 from kb2_runtime.reranking.contracts import RerankDecision, RerankInputCandidate, RerankedCandidateSet
 from kb2_runtime.retrieval.contracts import IndexArtifactBinding, RetrievalCandidate, RetrievalCandidateSet
 from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService
+from kb2_runtime.workbench.diagnosis import RunHistoryWorkbenchService
 from kb2_runtime.workbench.query import QueryWorkbenchService
+from kb2_runtime.trace.contracts import ArtifactInput, ArtifactManifest, ArtifactReference, EngineKind, RunState, RunTrace, StageState, StageTrace
 
 
 CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -44,6 +47,7 @@ S024_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines
 S024_MANIFEST = json.loads((S024_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))
 S025_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s025"
 S026_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s026"
+S027_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s027"
 S022_CHROME_FLAGS = (
     f"--headless={S022_CAPTURE['browser']['headlessMode']}",
     "--no-sandbox",
@@ -162,6 +166,9 @@ _COMPARISON = "12345678-1234-5678-1234-567812345693"
 _COMPARISON_BASELINE = "12345678-1234-5678-1234-567812345694"
 _COMPARISON_CANDIDATE = "12345678-1234-5678-1234-567812345695"
 _HISTORY_QUERY = "12345678-1234-5678-1234-567812345696"
+_COMPARISON_SINGLE = "12345678-1234-5678-1234-567812345697"
+_HISTORY_COMPARISON = "12345678-1234-5678-1234-567812345698"
+_HISTORY_CONTRACT = "12345678-1234-5678-1234-567812345699"
 
 
 def _fixture_preview(profile: str, *, selected: str | None = None, tier: str = "preflight") -> dict[str, object]:
@@ -358,7 +365,10 @@ async def fixture_ingestion_stop_requests() -> JSONResponse:
 @fixture_app.post("/api/workbench/ingestion-runs/{run_id}/rerun-preflight")
 async def fixture_rerun_preflight(run_id: str, request: Request) -> JSONResponse:
     assert run_id == _INGESTION_RUN
-    assert await request.json() == {"workspaceProfileId": "fixture-ingestion"}
+    payload = await request.json()
+    assert payload["workspaceProfileId"] in {"fixture-ingestion", "delayed-ingestion"}
+    if payload["workspaceProfileId"] == "delayed-ingestion":
+        await asyncio.sleep(.3)
     return JSONResponse({"token": "rerun-token", "workspaceProfileId": "fixture-ingestion", "sourceArtifactId": _ARTIFACT,
                          "automatic": {"selectedProfileId": "fixture-ingestion"},
                          "disclosure": {"externalStages": []}, "stages": [], "planDigest": "e" * 64})
@@ -475,7 +485,7 @@ def _query_candidate_contracts(locator: dict[str, object]) -> tuple[RetrievalCan
 @fixture_app.get("/api/workbench/query-runs/{run_id}")
 async def fixture_query_run(run_id: str) -> JSONResponse:
     global _active_query_stopped, _active_query_reads
-    scenario = next(name for name, identifier in _QUERY_RUNS.items() if identifier == run_id)
+    scenario = "answered" if run_id == _HISTORY_QUERY else next(name for name, identifier in _QUERY_RUNS.items() if identifier == run_id)
     locator = {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5}
     finals = {
         "answered": {"state": "ANSWERED", "answer": "Evidence-bound fixture answer", "citationKeys": ["cit_fixture"], "action": None},
@@ -794,65 +804,186 @@ async def fixture_evaluation_run(run_id: str) -> JSONResponse:
     return JSONResponse(projected)
 
 
-def _comparison_fixture() -> dict[str, object]:
-    return {"schema_version": "EvaluationComparison/v1", "baseline_report_id": _COMPARISON_BASELINE,
-            "candidate_report_id": _COMPARISON_CANDIDATE, "mode": "MULTI_AXIS_NON_CAUSAL",
-            "axis": None, "changes": ["ingestion.plugin", "query.plugin"],
-            "quality": {"deltas": [{"key": ["answer", "expected-fact-coverage"],
-                         "delta": {"baseline": 0.0, "candidate": 0.2, "absolute": 0.2,
-                                   "relative": None, "relative_state": "UNDEFINED_BASELINE_ZERO"}}]},
-            "confidence": {"baseline": {"state": "UNAVAILABLE"}, "candidate": {"state": "VALUE", "samples": 12}},
-            "gates": {"baseline": [{"gate_id": "gate.answer", "state": "FAIL"}], "candidate": []},
-            "failed_cases": {"baseline": [{"case_id": "qcase_0123456789abcdef", "evidence_artifact_id": _ARTIFACT}], "candidate": []},
-            "latency": {"baseline": 8, "candidate": 9},
-            "resources": {"baseline": {"availability": "AVAILABLE"}, "candidate": {"availability": "PARTIAL"}},
-            "recommendation": "BASELINE_RETAINED"}
+async def _comparison_fixture(mode: str = "MULTI_AXIS_NON_CAUSAL") -> dict[str, object]:
+    """Exercise S-021 persistence, then validate its real comparison bytes."""
+    from kb2_runtime.workbench.diagnosis import ComparisonWorkbenchService
+    base_manifest, report, _ = _evaluation_contracts(_EVALUATION_RUNS["failed-gates"], "failed-gates")
+    baseline_subject, candidate_subject = base_manifest.subjects
+    candidate_query = dict(candidate_subject.query_plan) | {"plugin": "query.candidate@1"}
+    candidate_ingestion = dict(candidate_subject.ingestion_plan)
+    if mode == "MULTI_AXIS_NON_CAUSAL":
+        candidate_ingestion |= {"plugin": "ingestion.candidate@1"}
+    identities = (*candidate_subject.declared_identities,
+                  PlanIdentity(plugin_id="query.candidate@1", implementation_digest="8" * 64),
+                  *((PlanIdentity(plugin_id="ingestion.candidate@1", implementation_digest="7" * 64),)
+                    if mode == "MULTI_AXIS_NON_CAUSAL" else ()))
+    candidate_subject = candidate_subject.model_copy(update={
+        "query_plan": candidate_query, "query_plan_digest": digest(candidate_query),
+        "ingestion_plan": candidate_ingestion, "ingestion_plan_digest": digest(candidate_ingestion),
+        "declared_identities": identities,
+    })
+    confidence_policy = ConfidencePolicy(kind="wilson", level=.95) if mode == "MULTI_AXIS_NON_CAUSAL" else ConfidencePolicy(kind="none")
+    base_manifest = base_manifest.model_copy(update={"confidence_policy": confidence_policy})
+    candidate_manifest = base_manifest.model_copy(update={"subjects": (baseline_subject, candidate_subject), "experiment_name": "fixture-parity"})
+    metric = next(item for item in _evaluation_metric_reports(_EVALUATION_RUNS["failed-gates"], "failed-gates").values() if item.owner == "citation")
+    baseline_metric = metric.model_copy(update={"status": MetricStatus.VALUE, "value": 0.0, "sample_count": 12, "labelled_count": 12, "matched_count": 0})
+    candidate_metric = metric.model_copy(update={"status": MetricStatus.VALUE, "value": .3, "sample_count": 12, "labelled_count": 12, "matched_count": 8})
+    baseline_metric_id, candidate_metric_id = uuid5(NAMESPACE_URL, f"s027:{mode}:baseline-metric"), uuid5(NAMESPACE_URL, f"s027:{mode}:candidate-metric")
+    baseline_manifest_id, candidate_manifest_id = uuid5(NAMESPACE_URL, f"s027:{mode}:baseline-manifest"), uuid5(NAMESPACE_URL, f"s027:{mode}:candidate-manifest")
+    baseline_report = report.model_copy(update={"manifest_artifact_id": baseline_manifest_id,
+        "manifest_digest": hashlib.sha256(canonical_bytes(base_manifest)).hexdigest(), "report_ids": (baseline_metric_id,),
+        "report_subjects": {baseline_metric_id: "baseline"}, "layers": {key: (baseline_metric_id,) if key == "answer" else () for key in report.layers},
+        "gate_results": tuple(item.model_copy(update={"subject": "baseline"}) for item in report.gate_results),
+        "failed_cases": tuple(item.model_copy(update={"subject": "baseline", "evaluation_run_id": UUID(_EVALUATION_RUN)}) for item in report.failed_cases)})
+    candidate_report = report.model_copy(update={"manifest_artifact_id": candidate_manifest_id,
+        "manifest_digest": hashlib.sha256(canonical_bytes(candidate_manifest)).hexdigest(), "report_ids": (candidate_metric_id,),
+        "report_subjects": {candidate_metric_id: "candidate"}, "layers": {key: (candidate_metric_id,) if key == "answer" else () for key in report.layers},
+        "gate_results": tuple(item.model_copy(update={"subject": "candidate", "state": GateState.PASS, "reason": "THRESHOLD", "value": .8}) for item in report.gate_results),
+        "failed_cases": (), "operation": report.operation.model_copy(update={"elapsed_ms": 54000})})
+    contents = {baseline_manifest_id: canonical_bytes(base_manifest), candidate_manifest_id: canonical_bytes(candidate_manifest),
+                UUID(_COMPARISON_BASELINE): canonical_bytes(baseline_report),
+                UUID(_COMPARISON_SINGLE if mode == "SINGLE_AXIS" else _COMPARISON_CANDIDATE): canonical_bytes(candidate_report),
+                baseline_metric_id: metric_report_bytes(baseline_metric), candidate_metric_id: metric_report_bytes(candidate_metric)}
+    types = {baseline_manifest_id: "evaluation.manifest", candidate_manifest_id: "evaluation.manifest",
+             UUID(_COMPARISON_BASELINE): "evaluation.report", UUID(_COMPARISON_SINGLE if mode == "SINGLE_AXIS" else _COMPARISON_CANDIDATE): "evaluation.report",
+             baseline_metric_id: "metric.report", candidate_metric_id: "metric.report"}
+    class Runs:
+        async def create_run(self, *_args): return UUID(_EVALUATION_RUN)
+        async def start_attempt(self, *_args): return uuid5(NAMESPACE_URL, f"s027:{mode}:attempt"), 1
+        async def finish_run(self, *_args): return None
+    class Artifacts:
+        async def get_artifact_manifest(self, identifier):
+            raw = contents.get(identifier)
+            return (ArtifactManifest(id=identifier, artifact_type=types[identifier], schema_revision="v1", content_digest=hashlib.sha256(raw).hexdigest(), byte_size=len(raw), summary="typed fixture", storage_locator="fixture", producing_run_id=UUID(_EVALUATION_RUN), producing_stage_attempt_id=uuid5(NAMESPACE_URL, f"s027:{mode}:producer"), producing_plugin_id="fixture@1", configuration_digest="a" * 64) if raw else None)
+        async def read_content(self, identifier): return contents[identifier]
+        async def complete_with_outputs(self, _run, _attempt, outputs, **_kwargs):
+            item, raw = outputs[0]; contents[UUID(_COMPARISON)] = raw; types[UUID(_COMPARISON)] = item.artifact_type
+            return (UUID(_COMPARISON),)
+    candidate_id = UUID(_COMPARISON_SINGLE if mode == "SINGLE_AXIS" else _COMPARISON_CANDIDATE)
+    artifacts = Artifacts()
+    await EvaluationService().compare(UUID(_COMPARISON_BASELINE), candidate_id, Runs(), artifacts)
+    return await ComparisonWorkbenchService(object(), artifacts).detail(UUID(_COMPARISON))
+
+
+def _comparison_reports(candidate_id: str) -> dict[str, object]:
+    manifest, report, _ = _evaluation_contracts(_EVALUATION_RUNS["failed-gates"], "failed-gates")
+    summary = lambda report_id, run_id: {"reportId": report_id, "runId": run_id, "manifest": {
+        "artifactId": str(report.manifest_artifact_id), "digest": report.manifest_digest,
+        "datasetSnapshotId": str(manifest.dataset_snapshot_id), "datasetDigest": manifest.dataset_snapshot_digest,
+        "taxonomyDigest": manifest.taxonomy_digest, "inputCatalogDigest": manifest.input_catalog_digest,
+        "caseCount": len(manifest.case_ids), "metricCount": len(manifest.metric_ids)}}
+    return {"baseline": summary(_COMPARISON_BASELINE, _EVALUATION_RUN), "candidate": summary(candidate_id, _EVALUATION_RUNS["passed-gates"])}
 
 
 @fixture_app.get("/api/workbench/comparisons/eligible")
-async def fixture_comparison_eligible() -> JSONResponse:
-    return JSONResponse([{"reportId": _COMPARISON_BASELINE, "runId": _EVALUATION_RUN, "manifestId": _ARTIFACT,
-                          "datasetDigest": "a" * 64, "inputCatalogDigest": "b" * 64, "state": "SUCCEEDED"},
-                         {"reportId": _COMPARISON_CANDIDATE, "runId": _EVALUATION_RUN, "manifestId": _ARTIFACT,
-                          "datasetDigest": "a" * 64, "inputCatalogDigest": "b" * 64, "state": "SUCCEEDED"}])
+async def fixture_comparison_eligible(baselineReportId: str = "") -> JSONResponse:
+    reports = _comparison_reports(_COMPARISON_CANDIDATE)
+    rows = [reports["baseline"], reports["candidate"], _comparison_reports(_COMPARISON_SINGLE)["candidate"]]
+    for row in rows:
+        row["state"] = "SUCCEEDED"
+        if baselineReportId:
+            row["compatibility"] = {"state": "BASELINE" if row["reportId"] == baselineReportId else "COMPATIBLE", "reason": None}
+    return JSONResponse(rows)
 
 
 @fixture_app.post("/api/workbench/comparisons")
 async def fixture_comparison_create(request: Request) -> JSONResponse:
     payload = await request.json()
     if payload == {"baselineReportId": _COMPARISON_BASELINE, "candidateReportId": _COMPARISON_BASELINE}:
-        return JSONResponse({"contractVersion": "workbench-problem/v1", "code": "COMPARISON_INCOMPATIBLE", "reason": "PINNED_INPUTS_NOT_EQUIVALENT"}, status_code=409)
-    assert payload == {"baselineReportId": _COMPARISON_BASELINE, "candidateReportId": _COMPARISON_CANDIDATE}
+        return JSONResponse({"contractVersion": "workbench-problem/v1", "code": "COMPARISON_INCOMPATIBLE", "reason": "SAME_REPORT"}, status_code=409)
+    assert payload["baselineReportId"] == _COMPARISON_BASELINE and payload["candidateReportId"] in {_COMPARISON_CANDIDATE, _COMPARISON_SINGLE}
+    if payload["candidateReportId"] == _COMPARISON_CANDIDATE:
+        await asyncio.sleep(.3)
+    mode = "SINGLE_AXIS" if payload["candidateReportId"] == _COMPARISON_SINGLE else "MULTI_AXIS_NON_CAUSAL"
     return JSONResponse({"valid": True, "runId": _EVALUATION_RUN, "artifactId": _COMPARISON,
-                         "comparison": {"artifactId": _COMPARISON, "comparison": _comparison_fixture()}}, status_code=201)
+                         "comparison": await _comparison_fixture(mode)}, status_code=201)
+
+
+@fixture_app.get("/api/workbench/comparisons/{artifact_id}")
+async def fixture_comparison_detail(artifact_id: str) -> JSONResponse:
+    if artifact_id != _COMPARISON:
+        return JSONResponse({"code": "COMPARISON_ARTIFACT_UNAVAILABLE"}, status_code=404)
+    return JSONResponse(await _comparison_fixture())
 
 
 @fixture_app.get("/api/workbench/runs")
 async def fixture_run_history(runType: str = "", state: str = "", q: str = "") -> JSONResponse:
-    rows = [{"id": _HISTORY_QUERY, "type": "QUERY", "state": "RUNNING", "terminalState": None,
-             "createdAt": "2026-09-13T00:00:00Z", "startedAt": "2026-09-13T00:00:00Z", "endedAt": None,
-             "planDigest": "f" * 64},
-            {"id": _EVALUATION_RUN, "type": "COMPARISON", "state": "SUCCEEDED", "terminalState": "SUCCEEDED",
-             "createdAt": "2026-09-12T00:00:00Z", "startedAt": "2026-09-12T00:00:00Z", "endedAt": "2026-09-12T00:01:00Z",
-             "planDigest": "e" * 64}]
-    return JSONResponse([row for row in rows if (not runType or row["type"] == runType) and (not state or row["state"] == state) and (not q or q.lower() in row["id"] or q.lower() in row["planDigest"])])
+    if q == "slow-query" and not runType:
+        await asyncio.sleep(.3)
+        q = "browser-query"
+    elif q == "slow-query":
+        q = ""
+    return JSONResponse(await _history_fixture_service().list(runType, state, q))
 
 
 @fixture_app.get("/api/workbench/runs/{run_id}")
 async def fixture_run_history_detail(run_id: str) -> JSONResponse:
-    assert run_id == _HISTORY_QUERY
-    return JSONResponse({"id": run_id, "type": "QUERY", "state": "RUNNING", "planDigest": "f" * 64,
-                         "stages": [{"stageKey": "evidence", "attempt": 1, "state": "RUNNING",
-                                     "artifacts": [{"id": _ARTIFACT, "artifactType": "evidence.set"}]}],
-                         "actions": {"stop": True}})
+    if run_id == _INGESTION_RUN:
+        await asyncio.sleep(.25)
+    detail = await _history_fixture_service().detail(UUID(run_id))
+    if detail is None:
+        return JSONResponse({"code": "RUN_NOT_FOUND"}, status_code=404)
+    detail["actions"] = ({"stop": True} if run_id == _HISTORY_QUERY and not _active_query_stopped else
+                         {"rerun": True} if run_id == _INGESTION_RUN else {})
+    return JSONResponse(detail)
+
+
+def _history_fixture_service() -> RunHistoryWorkbenchService:
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    identifiers = {
+        "INGESTION": _INGESTION_RUN, "QUERY": _HISTORY_QUERY, "EVALUATION": _EVALUATION_RUNS["passed-gates"],
+        "COMPARISON": _HISTORY_COMPARISON, "CONTRACT_TEST": _HISTORY_CONTRACT,
+    }
+    plans = {
+        UUID(identifiers["INGESTION"]): {"schema_version": "v1", "profile_id": "fixture-ingestion", "stages": [{"axis": "extraction", "sub_stages": [{"stage_id": "parse", "candidates": [{"plugin_id": "parser.fixture@1"}]}]}]},
+        UUID(identifiers["QUERY"]): {"schema_version": "v1", "profile_id": "browser-query", "search_artifact": {"artifact_id": _ARTIFACT}, "stages": [{"stage_id": "evidence", "plugin_id": "context.fixture@1"}]},
+        UUID(identifiers["EVALUATION"]): {"kind": "evaluation_run", "manifest_id": str(_evaluation_fixture_id(_EVALUATION_RUNS["passed-gates"], "manifest"))},
+        UUID(identifiers["COMPARISON"]): {"kind": "evaluation_comparison", "baseline": _COMPARISON_BASELINE, "candidate": _COMPARISON_CANDIDATE},
+        UUID(identifiers["CONTRACT_TEST"]): {"kind": "contract_test", "contract_id": "fixture.contract.v1", "plugin_id": "retriever.keyword@1"},
+    }
+    engine = {"INGESTION": "ingestion", "QUERY": "query", "EVALUATION": "evaluation", "COMPARISON": "evaluation", "CONTRACT_TEST": "evaluation"}
+    state = {"QUERY": "RUNNING", "INGESTION": "FAILED", "EVALUATION": "SUCCEEDED", "COMPARISON": "SUCCEEDED", "CONTRACT_TEST": "SUCCEEDED"}
+    rows = []
+    for index, (kind, identifier) in enumerate(identifiers.items()):
+        started = now.replace(minute=index)
+        terminal = None if kind == "QUERY" else state[kind]
+        rows.append({"id": UUID(identifier), "engine_kind": engine[kind], "state": state[kind], "terminal_state": terminal,
+                     "created_at": started, "started_at": started, "ended_at": None if kind == "QUERY" else started.replace(second=2 + index),
+                     "plan_digest": str(index + 1) * 64, "plan_json": plans[UUID(identifier)]})
+    traces = {}
+    for index, (kind, identifier) in enumerate(identifiers.items()):
+        running = kind == "QUERY"
+        engine_kind = {"ingestion": EngineKind.INGESTION, "query": EngineKind.QUERY, "evaluation": EngineKind.EVALUATION}[engine[kind]]
+        input_ref = ArtifactReference(id=UUID(_ARTIFACT), artifact_type="fixture.input", schema_revision="v1", content_digest="8" * 64, byte_size=256, summary=f"{kind.lower()} input")
+        output_id, output_type = ((UUID(_COMPARISON), "evaluation.comparison") if kind == "COMPARISON" else
+                                  (UUID(_ARTIFACT), "evidence.set") if kind == "QUERY" else
+                                  (UUID(_ARTIFACT), f"{kind.lower()}.result"))
+        output_ref = ArtifactReference(id=output_id, artifact_type=output_type, schema_revision="v1", content_digest="9" * 64, byte_size=512, summary="citation-ready Evidence" if kind == "QUERY" else f"{kind.lower()} output")
+        traces[UUID(identifier)] = RunTrace(id=UUID(identifier), engine_kind=engine_kind, plan_digest=str(index + 1) * 64,
+            state=RunState.RUNNING if running else RunState(state[kind]), terminal_state=None if running else RunState(state[kind]),
+            created_at=now.replace(minute=index), started_at=now.replace(minute=index), ended_at=None if running else now.replace(minute=index, second=2 + index),
+            stages=(StageTrace(id=_evaluation_fixture_id(identifier, "stage"), stage_key="evidence" if kind == "QUERY" else f"{kind.lower()}.execute", attempt_number=1,
+                state=StageState.RUNNING if running else StageState.SUCCEEDED, result=None, started_at=now.replace(minute=index),
+                ended_at=None if running else now.replace(minute=index, second=2 + index), summary=f"{kind.lower()} trace", safe_error=None,
+                inputs=(input_ref,), outputs=(output_ref,)),))
+    class Traces:
+        async def list_workbench_run_history(self, limit):
+            assert limit == 100
+            return rows
+        async def get_run_trace(self, identifier):
+            return traces.get(identifier)
+        async def get_run_plan(self, identifier):
+            return plans.get(identifier)
+    return RunHistoryWorkbenchService(Traces())
 
 
 @fixture_app.post("/api/workbench/query-runs/{run_id}/stop")
 async def fixture_stop_query_run(run_id: str) -> JSONResponse:
     global _active_query_stopped
     assert run_id in {_HISTORY_QUERY, _QUERY_RUNS["active"]}
-    if run_id == _QUERY_RUNS["active"]:
-        _active_query_stopped = True
+    if run_id == _HISTORY_QUERY:
+        await asyncio.sleep(.3)
+    _active_query_stopped = True
     return JSONResponse({"stopped": True})
 
 
@@ -1208,9 +1339,10 @@ def test_s024_visual_manifest_is_pinned_and_baselines_are_reviewed_assets() -> N
         assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
 
 
-def test_s025_s026_visual_manifests_are_pinned_and_complete() -> None:
+def test_s025_s026_s027_visual_manifests_are_pinned_and_complete() -> None:
     expectations = ((S025_BASELINE_ROOT, "S-025", {"UI-005", "UI-008", "UI-013"}, 8),
-                    (S026_BASELINE_ROOT, "S-026", {"UI-009", "UI-010", "UI-013"}, 10))
+                    (S026_BASELINE_ROOT, "S-026", {"UI-009", "UI-010", "UI-013"}, 10),
+                    (S027_BASELINE_ROOT, "S-027", {"UI-011", "UI-012", "UI-013"}, 6))
     for root, story, anchors, count in expectations:
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["story"] == story
@@ -1526,6 +1658,25 @@ def test_fixture_backed_navigation_survives_both_breakpoint_resize_directions(tm
             target_url=url,
         )
         assert desktop == {"viewport": [1440, 900, 1], "sidebar": True, "menu": True, "closed": True, "inert": False, "focus": "current-desktop-route"}
+
+        assert _cdp(
+            debug_port,
+            "(()=>{const command=document.querySelector('.command-link');command.focus();return document.activeElement===command})()",
+            target_url=url,
+        ) is True
+        _cdp_command(
+            debug_port,
+            "Emulation.setDeviceMetricsOverride",
+            {"width": 644, "height": 900, "deviceScaleFactor": device["deviceScaleFactor"], "mobile": device["mobile"]},
+            target_url=url,
+        )
+        content_focus = _cdp(
+            debug_port,
+            """(async()=>{for(let i=0;i<160;i++){if(innerWidth===644){window.dispatchEvent(new Event('resize'));const command=document.querySelector('.command-link'),menu=document.querySelector('.menu');if(getComputedStyle(menu).display!=='none')return {focused:document.activeElement===command,menu:true}}await new Promise(resolve=>setTimeout(resolve,25))}return null})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert content_focus == {"focused": True, "menu": True}
     finally:
         if browser is not None:
             _close_isolated_chrome(debug_port, browser)
@@ -1655,7 +1806,7 @@ def test_fixture_backed_document_candidate_selection_rotates_preview_and_submit_
         assert receipts[-1]["profileId"] == "switch-external-profile"
         assert receipts[-1]["acknowledgeExternal"] is True
 
-        assert _cdp(debug_port, "location.href='/workbench/documents'; true", target_url=f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}") is True
+        assert _cdp(debug_port, "location.href='/workbench/documents'; true", target_url=f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion") is True
         external_to_local = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('reverse candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const profile=await wait(()=>document.querySelector('input[aria-label="Ingestion Profile Set ID"]')),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='switch-external';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-local-profile"]'));const initiallyExternal=document.body.innerText.includes('parser.external@1')&&!!document.querySelector('input[aria-label="确认外部阶段披露"]'),choice=document.querySelector('input[value="switch-local-profile"]');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run');await wait(()=>document.body.innerText.includes('parser.fixture@1')&&[...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'));const automaticLabel=document.querySelector('input[value="switch-external-profile"]')?.closest('label')?.innerText.includes('自动选中');return {initiallyExternal,pending,checked:document.querySelector('input[value="switch-local-profile"]')?.checked,local:!document.querySelector('input[aria-label="确认外部阶段披露"]'),enabled:![...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run').disabled,automaticLabel};})()"""
         assert _cdp(debug_port, external_to_local, await_promise=True, target_url=url) == {"initiallyExternal": True, "pending": True, "checked": True, "local": True, "enabled": True, "automaticLabel": True}
 
@@ -1683,7 +1834,7 @@ def test_fixture_backed_ingestion_artifact_inspector_sync_and_escape(tmp_path: P
         [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
-    url = f"http://127.0.0.1:{port}/workbench/runs?run={_INGESTION_RUN}"
+    url = f"http://127.0.0.1:{port}/workbench/runs?run={_INGESTION_RUN}&legacy=ingestion"
     _wait_for_fixture(f"http://127.0.0.1:{port}/workbench/runs")
     browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'artifact'}", url])
     try:
@@ -1692,14 +1843,14 @@ def test_fixture_backed_ingestion_artifact_inspector_sync_and_escape(tmp_path: P
         result = _cdp(int(debug_port), expression, await_promise=True)
         assert result == {"sourceSync": True, "objectSync": True, "tableSourceSync": True, "tableObjectSync": True, "tableSummary": True, "tableSummaryLive": True, "lineage": True, "emptyRunSignals": True, "rawArrayAbsent": True, "panes": True, "overflow": True, "modal": True}
         geometry = _cdp(debug_port, f"(()=>{{const drawer=document.querySelector('.artifact-inspector'),first=drawer.querySelector('[role=tab]');first.focus();first.dispatchEvent(new KeyboardEvent('keydown',{{key:'ArrowRight',bubbles:true}}));const selected=drawer.querySelector('[role=tab][aria-selected=true]');drawer.querySelector('[role=tablist]').dispatchEvent(new KeyboardEvent('keydown',{{key:'Home',bubbles:true}}));drawer.querySelector('.source-view button').click();drawer.focus();return {{width:Math.round(drawer.getBoundingClientRect().width),inert:document.querySelector('#workbench-shell').hasAttribute('inert'),tabs:drawer.querySelectorAll('[role=tab]').length,keyboard:selected?.textContent==='结构树',rawAbsent:![...drawer.querySelectorAll('[role=tab]')].some(x=>x.textContent==='原始文本'),url:location.pathname+location.search}}}})()", target_url=url)
-        assert geometry == {"width": 1080 if width >= 900 else 644, "inert": True, "tabs": 5, "keyboard": True, "rawAbsent": True, "url": f"/workbench/runs?run={_INGESTION_RUN}"}
+        assert geometry == {"width": 1080 if width >= 900 else 644, "inert": True, "tabs": 5, "keyboard": True, "rawAbsent": True, "url": f"/workbench/runs?run={_INGESTION_RUN}&legacy=ingestion"}
         _assert_root_scroll_locked(debug_port, target_url=url)
         _capture_cdp(debug_port, tmp_path / f"artifact-canonical-source-{width}.png", target_url=url)
         _assert_manifest_visual(debug_port, tmp_path / f"artifact-canonical-source-{width}.png", f"artifact-canonical-source-{width}.png", target_url=url, baseline_root=S024_BASELINE_ROOT, story="S-024")
         assert _cdp(int(debug_port), "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); await new Promise(r => setTimeout(r, 30)); return {closed: !document.querySelector('.artifact-inspector'), focusReturned: document.activeElement.textContent.includes('Artifact canonical.document'),rootUnlocked:!document.documentElement.classList.contains('modal-open')&&!document.body.classList.contains('modal-open')}; })()", await_promise=True) == {"closed": True, "focusReturned": True, "rootUnlocked": True}
         chunks = """(async()=>{const wait=async p=>{for(let i=0;i<100;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Chunk inspector did not render')};const action=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Artifact chunk.set'));action.click();const drawer=await wait(()=>document.querySelector('.artifact-inspector .source-view')?.closest('.artifact-inspector'));const citations=drawer.querySelectorAll('.inspector-list button').length===2&&drawer.querySelectorAll('.source-view button').length===2,source=drawer.querySelector('.source-view button'),object=drawer.querySelector('.inspector-list button');source.click();const sourceSync=drawer.querySelectorAll('[data-stable-id].source-selected').length===2;object.click();const objectSync=drawer.querySelectorAll('[data-stable-id].source-selected').length===2;[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='元数据').click();const metadata=[...drawer.querySelectorAll('.metadata-grid dd')].map(x=>x.textContent);document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,20));return {sourceSync,objectSync,citations,metadataUnavailable:metadata.slice(-2).every(x=>x==='不可用'),closed:!document.querySelector('.artifact-inspector'),focusReturned:document.activeElement===action}})()"""
         assert _cdp(debug_port, chunks, await_promise=True, target_url=url) == {"sourceSync": True, "objectSync": True, "citations": True, "metadataUnavailable": True, "closed": True, "focusReturned": True}
-        assert _cdp(int(debug_port), "window.prompt = () => 'fixture-ingestion'; [...document.querySelectorAll('button')].find(x => x.textContent === '重新运行').click(); true") is True
+        assert _cdp(int(debug_port), "(()=>{[...document.querySelectorAll('button')].find(x=>x.textContent==='重新运行').click();const profile=document.querySelector('input[aria-label=\"重新运行 Profile Set ID\"]');profile.value='fixture-ingestion';[...document.querySelectorAll('button')].find(x=>x.textContent==='确认重新运行').click();return true})()") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
             if any(page.get("url", "").endswith("/workbench/documents") for page in pages):
@@ -1743,7 +1894,7 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
         assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run').click(); true") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
-            if any(page.get("url", "").endswith(f"/workbench/runs?run={_VISUAL_RUN}") for page in pages):
+            if any(page.get("url", "").endswith(f"/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion") for page in pages):
                 break
             time.sleep(.025)
         else:
@@ -1763,14 +1914,14 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
         assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run').click(); true") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
-            if any(page.get("url", "").endswith(f"/workbench/runs?run={_VISUAL_RUN}") for page in pages):
+            if any(page.get("url", "").endswith(f"/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion") for page in pages):
                 break
             time.sleep(.025)
         else:
             pytest.fail("Run receipt navigation did not occur")
         states = """(async () => { for (let i = 0; i < 100; i++) { const text = document.body.innerText, buttons = [...document.querySelectorAll('button')].map(x => x.textContent); if (text.includes('Ingestion Run') && text.includes('失败') && text.includes('已跳过') && text.includes('accepted') && text.includes('rejected') && text.includes('parser.primary@1') && text.includes('PLUGIN_TIMEOUT')) {const cards=[...document.querySelectorAll('.stage-card')],emptySignals=[...document.querySelectorAll('.stage-signal-grid dd')].map(x=>x.textContent);cards[1].click();const fallback=document.querySelector('.stage-inspector').innerText.includes('parser.fallback@1')&&document.querySelector('.stage-inspector').innerText.includes('accepted')&&document.querySelector('.stage-inspector').innerText.includes('latency_ms');cards[0].click();const root=document.documentElement;return {matrix:true, fallback, emptySignals:emptySignals.length===2&&emptySignals.every(x=>x==='不可用'), rawArrayAbsent:!document.querySelector('.stage-inspector').innerText.includes('[]'), actions:buttons.includes('停止') && buttons.includes('重新运行') && !buttons.includes('重试'), rail:cards.length===4, selected:document.querySelector('.stage-card[aria-pressed="true"]')?.innerText.includes('失败'), overflow:root.scrollWidth <= innerWidth,rootClass:root.classList.contains('modal-open'),bodyClass:document.body.classList.contains('modal-open'),rootOverflow:getComputedStyle(root).overflowY,bodyOverflow:getComputedStyle(document.body).overflowY,rootScrollbarWidth:innerWidth-root.clientWidth}; } await new Promise(r => setTimeout(r, 25)); } throw new Error('Run-state matrix did not render'); })()"""
         assert _cdp(int(debug_port), states, await_promise=True) == {"matrix": True, "fallback": True, "emptySignals": True, "rawArrayAbsent": True, "actions": True, "rail": True, "selected": True, "overflow": True, "rootClass": False, "bodyClass": False, "rootOverflow": "auto", "bodyOverflow": "auto", "rootScrollbarWidth": 0}
-        run_url = f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}"
+        run_url = f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion"
         _assert_root_scroll_unlocked(debug_port, target_url=run_url)
         _capture_cdp(int(debug_port), tmp_path / f"ingestion-state-matrix-{width}.png", target_url=run_url)
         _assert_manifest_visual(debug_port, tmp_path / f"ingestion-state-matrix-{width}.png", f"ingestion-state-matrix-{width}.png", target_url=run_url, baseline_root=S024_BASELINE_ROOT, story="S-024")
@@ -2021,23 +2172,200 @@ def test_fixture_backed_comparison_and_mixed_history_diagnosis_matrix(tmp_path: 
         server.terminate()
         server.wait(timeout=10)
         pytest.fail("S-027 fixture shell did not start")
-    browser = subprocess.Popen([str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 's027'}", compare_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 's027'}", compare_url])
     try:
-        compare = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('comparison did not render: '+document.body.innerText)};const base=await wait(()=>{const x=document.querySelector('select[aria-label="基准 Evaluation Report"]');return x&&x.options.length===3&&x});const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');base.value='12345678-1234-5678-1234-567812345694';candidate.value=base.value;submit.click();await wait(()=>document.body.innerText.includes('PINNED_INPUTS_NOT_EQUIVALENT'));const safeReason=document.body.innerText.includes('COMPARISON_INCOMPATIBLE')&&!document.body.innerText.includes('comparison inputs are not pinned-equivalent');candidate.value='12345678-1234-5678-1234-567812345695';submit.click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));const text=document.body.innerText,table=document.querySelector('.dense-table');return {safeReason,nonCausal:text.includes('MULTI_AXIS_NON_CAUSAL')&&!text.includes('单轴变化'),bands:text.includes('质量门禁')&&text.includes('失败案例')&&text.includes('延迟（独立）')&&text.includes('本地资源（独立）'),confidence:text.includes('UNAVAILABLE')&&text.includes('samples'),zeroBaseline:text.includes('UNDEFINED_BASELINE_ZERO'),tableScrollable:table.parentElement.scrollWidth>table.parentElement.clientWidth,overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('main button,main select,main input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
-        assert _cdp(debug_port, compare, await_promise=True, target_url=compare_url) == {"safeReason": True, "nonCausal": True, "bands": True, "confidence": True, "zeroBaseline": True, "tableScrollable": width < 900, "overflow": True, "controls": True}
-        _capture_cdp(debug_port, tmp_path / f"s027-comparison-{width}.png", target_url=compare_url)
+        _prepare_s022_capture_environment(debug_port, compare_url, width)
+        compare = f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}}throw new Error('comparison did not render: '+document.body.innerText)}};const base=await wait(()=>{{const x=document.querySelector('select[aria-label="基准 Evaluation Report"]');return x&&x.options.length===4&&x}});base.value={json.dumps(_COMPARISON_BASELINE)};base.dispatchEvent(new Event('change',{{bubbles:true}}));const candidate=await wait(()=>{{const x=document.querySelector('select[aria-label="候选 Evaluation Report"]');return x&&x.options.length===4&&!x.disabled&&x}});candidate.value={json.dumps(_COMPARISON_CANDIDATE)};candidate.dispatchEvent(new Event('change',{{bubbles:true}}));const submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');await wait(()=>!submit.disabled);submit.click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));const text=document.body.innerText,wrap=document.querySelector('.comparison-band .table-wrap');return {{nonCausal:text.includes('非因果比较')&&!text.includes('唯一变化'),identity:['Manifest digest','Dataset digest','Taxonomy','Input catalog'].every(x=>text.includes(x)),bands:['质量与变化','样本与置信区间','质量门禁','失败案例','延迟（独立）','本地资源（独立）'].every(x=>text.includes(x)),confidence:text.includes('wilson')&&text.includes('0.95'),qualitySides:['基准主体','基准状态','基准标签','基准匹配','候选主体','候选状态','候选标签','候选匹配'].every(x=>text.includes(x))&&text.includes('baseline')&&text.includes('candidate'),zeroBaseline:text.includes('UNDEFINED_BASELINE_ZERO'),tableScrollable:wrap.scrollWidth>wrap.clientWidth,overflow:document.documentElement.scrollWidth<=innerWidth,raw:!document.querySelector('main pre'),controls:[...document.querySelectorAll('main button,main select,main input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}}}})()"""
+        assert _cdp(debug_port, compare, await_promise=True, target_url=compare_url) == {"nonCausal": True, "identity": True, "bands": True, "confidence": True, "qualitySides": True, "zeroBaseline": True, "tableScrollable": width < 900, "overflow": True, "raw": True, "controls": True}
+        multi_image = tmp_path / f"comparison-multi-axis-{width}.png"
+        _cdp(debug_port, "scrollTo(0,0); true", target_url=compare_url)
+        multi_visibility = _cdp(
+            debug_port,
+            "Object.fromEntries([['controls',document.querySelector('.comparison-controls')],['axis',document.querySelector('.comparison-axis')],['identity',document.querySelector('.comparison-identity')],...['comparison-quality-title','comparison-confidence-title','comparison-gates-title','comparison-cases-title','comparison-latency-title','comparison-resources-title'].flatMap(id=>[[id,document.getElementById(id)],[id+'-rows',document.getElementById(id).closest('.comparison-band').querySelector('tbody')]])].map(([key,node])=>{const r=node.getBoundingClientRect();return [key,{top:Math.round(r.top),bottom:Math.round(r.bottom),visible:r.bottom>0&&r.top<innerHeight}]}))",
+            target_url=compare_url,
+        )
+        if not all(item["visible"] for item in multi_visibility.values()):
+            pytest.fail(f"S-027 multi-axis evidence outside viewport: {json.dumps(multi_visibility, sort_keys=True)}")
+        _capture_cdp(debug_port, multi_image, target_url=compare_url)
+        _assert_manifest_visual(debug_port, multi_image, multi_image.name, target_url=compare_url, baseline_root=S027_BASELINE_ROOT, story="S-027")
+        single = f"""(async()=>{{const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]'),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');candidate.value={json.dumps(_COMPARISON_SINGLE)};candidate.dispatchEvent(new Event('change',{{bubbles:true}}));submit.click();for(let i=0;i<160;i++){{if(document.body.innerText.includes('唯一变化：query.plugin'))return {{single:document.body.innerText.includes('SINGLE_AXIS')&&!document.body.innerText.includes('非因果比较'),recommendation:document.body.innerText.includes('CANDIDATE_ELIGIBLE'),policyNone:document.body.innerText.includes('POLICY_NONE'),overflow:document.documentElement.scrollWidth<=innerWidth}};await new Promise(r=>setTimeout(r,25))}}throw new Error('single axis did not render')}})()"""
+        assert _cdp(debug_port, single, await_promise=True, target_url=compare_url) == {"single": True, "recommendation": True, "policyNone": True, "overflow": True}
+        single_image = tmp_path / f"comparison-single-axis-{width}.png"
+        _cdp(debug_port, "scrollTo(0,0); true", target_url=compare_url)
+        single_visibility = _cdp(
+            debug_port,
+            "Object.fromEntries([['controls',document.querySelector('.comparison-controls')],['axis',document.querySelector('.comparison-axis')],['identity',document.querySelector('.comparison-identity')],...['comparison-quality-title','comparison-confidence-title','comparison-gates-title','comparison-cases-title','comparison-latency-title','comparison-resources-title'].flatMap(id=>[[id,document.getElementById(id)],[id+'-rows',document.getElementById(id).closest('.comparison-band').querySelector('tbody')]]),['recommendation',document.querySelector('.comparison-recommendation')]].map(([key,node])=>{const r=node.getBoundingClientRect();return [key,{top:Math.round(r.top),bottom:Math.round(r.bottom),visible:r.bottom>0&&r.top<innerHeight}]}))",
+            target_url=compare_url,
+        )
+        if not all(item["visible"] for item in single_visibility.values()):
+            pytest.fail(f"S-027 single-axis evidence outside viewport: {json.dumps(single_visibility, sort_keys=True)}")
+        _capture_cdp(debug_port, single_image, target_url=compare_url)
+        _assert_manifest_visual(debug_port, single_image, single_image.name, target_url=compare_url, baseline_root=S027_BASELINE_ROOT, story="S-027")
 
-        history_url = f"http://127.0.0.1:{port}/workbench/runs?runType=QUERY&runState=RUNNING&q=12345678"
+        history_url = f"http://127.0.0.1:{port}/workbench/runs?run={_HISTORY_QUERY}"
         assert _cdp(debug_port, f"location.href={json.dumps(history_url)}", target_url=compare_url) == history_url
-        history = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('history did not render')};const trace=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='Trace'));trace.click();await wait(()=>document.body.innerText.includes('evidence.set'));const stop=[...document.querySelectorAll('button')].find(x=>x.textContent==='停止');const ownerAction=!!stop&&!document.body.innerText.includes('重新运行');stop.click();return {filters:document.querySelector('select[aria-label="Run 类型"]').value==='QUERY'&&document.querySelector('select[aria-label="Run 状态"]').value==='RUNNING',artifact:[...document.querySelectorAll('button')].some(x=>x.textContent.includes('Artifact evidence.set')),ownerAction,selected:location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('runType=QUERY')&&location.search.includes('runState=RUNNING'),overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('main button,main select,main input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
-        assert _cdp(debug_port, history, await_promise=True, target_url=history_url) == {"filters": True, "artifact": True, "ownerAction": True, "selected": True, "overflow": True, "controls": True}
-        context = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('context flow did not render')};const artifact=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Artifact evidence.set'));artifact.click();await wait(()=>document.querySelector('.artifact-inspector'));const drawerPreserves=location.search.includes('run=12345678-1234-5678-1234-567812345696')&&location.search.includes('q=12345678');document.querySelector('.artifact-inspector button').click();[...document.querySelectorAll('a')].find(x=>x.textContent==='比较').click();return drawerPreserves})()"""
+        history = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('history did not render: '+document.body.innerText)};await wait(()=>document.querySelectorAll('.run-select').length===5);await wait(()=>document.body.innerText.includes('citation-ready Evidence'));const stop=[...document.querySelectorAll('button')].find(x=>x.textContent==='停止'),text=document.body.innerText;return {types:['INGESTION','QUERY','EVALUATION','COMPARISON','CONTRACT_TEST'].every(x=>text.includes(x)),identity:text.includes('browser-query')&&text.includes('context.fixture@1')&&text.includes('artifact / 12345678'),artifact:[...document.querySelectorAll('button')].some(x=>x.textContent.includes('evidence.set')),ownerAction:!!stop&&!text.includes('重新运行'),selected:location.search.includes('run=12345678-1234-5678-1234-567812345696'),overflow:document.documentElement.scrollWidth<=innerWidth,controls:[...document.querySelectorAll('main button,main select,main input')].every(x=>x.getBoundingClientRect().width>0&&x.getBoundingClientRect().height>0)}})()"""
+        assert _cdp(debug_port, history, await_promise=True, target_url=history_url) == {"types": True, "identity": True, "artifact": True, "ownerAction": True, "selected": True, "overflow": True, "controls": True}
+        context = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25));}throw new Error('context flow did not render')};const artifact=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('evidence.set'));artifact.click();await wait(()=>document.querySelector('.artifact-inspector'));const drawerPreserves=location.search.includes('run=12345678-1234-5678-1234-567812345696');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await wait(()=>!document.querySelector('.artifact-inspector'));[...document.querySelectorAll('a')].find(x=>x.textContent==='比较').click();return drawerPreserves})()"""
         assert _cdp(debug_port, context, await_promise=True) is True
-        assert _cdp(debug_port, "({compare:location.pathname.endsWith('/compare'),run:new URL(location).searchParams.get('run'),type:new URL(location).searchParams.get('runType'),state:new URL(location).searchParams.get('runState'),q:new URL(location).searchParams.get('q')})") == {"compare": True, "run": _HISTORY_QUERY, "type": "QUERY", "state": "RUNNING", "q": "12345678"}
-        _capture_cdp(debug_port, tmp_path / f"s027-history-{width}.png")
+        assert _cdp(debug_port, "({compare:location.pathname.endsWith('/compare'),run:new URL(location).searchParams.get('run')})") == {"compare": True, "run": _HISTORY_QUERY}
+        assert _cdp(debug_port, f"history.back(); true") is True
+        history_image = tmp_path / f"run-history-mixed-selected-{width}.png"
+        for _ in range(80):
+            if _cdp(debug_port, "location.pathname.endsWith('/runs')&&document.body.innerText.includes('citation-ready Evidence')"):
+                break
+            time.sleep(.025)
+        _cdp(debug_port, "scrollTo(0,0); true")
+        history_visibility = _cdp(debug_port, "(()=>{const nodes=[...document.querySelectorAll('.run-select'),document.querySelector('.run-detail-head'),...document.querySelectorAll('.run-stage > button')];return {count:document.querySelectorAll('.run-select').length,all:nodes.every(node=>{const r=node.getBoundingClientRect();return r.bottom>0&&r.top<innerHeight}),stageButtons:document.querySelectorAll('.run-stage > button').length}})()")
+        assert history_visibility == {"count": 5, "all": True, "stageButtons": 2}
+        _capture_cdp(debug_port, history_image)
+        _assert_manifest_visual(debug_port, history_image, history_image.name, target_url=history_url, baseline_root=S027_BASELINE_ROOT, story="S-027")
     finally:
         browser.terminate()
         browser.wait(timeout=10)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-027 interaction evidence",
+)
+def test_s027_run_filters_retain_selection_and_recovery_tracks_owner(tmp_path: Path) -> None:
+    """Filtered-out detail remains stable and Stop disappears after owner loss."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/runs?run={_HISTORY_QUERY}"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's027-interactions'}", url])
+    try:
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Run interaction did not settle: '+document.body.innerText)};await wait(()=>document.body.innerText.includes('citation-ready Evidence'));const type=document.querySelector('select[aria-label="Run 类型"]');type.value='EVALUATION';type.dispatchEvent(new Event('change',{bubbles:true}));await wait(()=>document.querySelectorAll('.run-select').length===1&&document.body.innerText.includes('当前筛选范围外'));const retained=document.body.innerText.includes('QUERY / RUNNING')&&new URL(location).searchParams.get('runType')==='EVALUATION'&&new URL(location).searchParams.get('run')==='12345678-1234-5678-1234-567812345696';[...document.querySelectorAll('button')].find(x=>x.textContent==='清除筛选').click();await wait(()=>document.querySelectorAll('.run-select').length===5&&!document.body.innerText.includes('当前筛选范围外'));const stop=[...document.querySelectorAll('button')].find(x=>x.textContent==='停止');stop.click();await wait(()=>document.body.innerText.includes('QUERY / RUNNING')&&![...document.querySelectorAll('button')].some(x=>x.textContent==='停止'));return {retained,cleared:new URL(location).searchParams.get('runType')===null,ownerLost:![...document.querySelectorAll('button')].some(x=>x.textContent==='停止'),selected:new URL(location).searchParams.get('run')==='12345678-1234-5678-1234-567812345696'}})()""", await_promise=True, target_url=url)
+        assert result == {"retained": True, "cleared": True, "ownerLost": True, "selected": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 for S-027 stale and destination evidence",
+)
+def test_s027_stale_guards_url_rehydration_and_five_type_destinations(tmp_path: Path) -> None:
+    """Latest requests win and every stored Run type exposes only real destinations."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/runs?run={_HISTORY_QUERY}&runType=QUERY&runState=RUNNING&q=browser-query"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's027-stale'}", url])
+    try:
+        identifiers = {"INGESTION": _INGESTION_RUN, "QUERY": _HISTORY_QUERY, "EVALUATION": _EVALUATION_RUNS["passed-gates"],
+                       "COMPARISON": _HISTORY_COMPARISON, "CONTRACT_TEST": _HISTORY_CONTRACT}
+        script = f"""(async()=>{{const wait=async p=>{{for(let i=0;i<200;i++){{const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}}throw new Error('S027 state did not settle: '+document.body.innerText)}};await wait(()=>document.body.innerText.includes('citation-ready Evidence'));const type=document.querySelector('select[aria-label="Run 类型"]'),state=document.querySelector('select[aria-label="Run 状态"]'),q=document.querySelector('input[aria-label="筛选 Run"]');const rehydrated=type.value==='QUERY'&&state.value==='RUNNING'&&q.value==='browser-query'&&document.querySelectorAll('.run-select').length===1&&location.search.includes('run={_HISTORY_QUERY}');type.value='';state.value='';q.value='slow-query';q.dispatchEvent(new Event('input',{{bubbles:true}}));await new Promise(r=>setTimeout(r,180));type.value='EVALUATION';type.dispatchEvent(new Event('change',{{bubbles:true}}));await wait(()=>document.querySelectorAll('.run-select').length===1&&document.querySelector('.run-select')?.textContent==={json.dumps(_EVALUATION_RUNS['passed-gates'])});await new Promise(r=>setTimeout(r,350));const staleListGuard=document.querySelectorAll('.run-select').length===1&&document.querySelector('.run-select')?.textContent==={json.dumps(_EVALUATION_RUNS['passed-gates'])};[...document.querySelectorAll('button')].find(x=>x.textContent==='清除筛选').click();await wait(()=>document.querySelectorAll('.run-select').length===5);const select=id=>[...document.querySelectorAll('.run-select')].find(x=>x.textContent===id).click();select({json.dumps(_INGESTION_RUN)});select({json.dumps(_HISTORY_QUERY)});await wait(()=>document.querySelector('.run-detail-head')?.textContent.includes('QUERY'));await new Promise(r=>setTimeout(r,350));const staleDetailGuard=document.querySelector('.run-detail-head')?.textContent.includes('QUERY');const ids={json.dumps(identifiers)},matrix={{}};for(const [kind,id] of Object.entries(ids)){{select(id);await wait(()=>document.querySelector('.run-detail-head')?.textContent.includes(kind));const pane=document.querySelector('.run-detail'),links=[...pane.querySelectorAll('.run-destinations a')],buttons=[...pane.querySelectorAll('button')].map(x=>x.textContent);matrix[kind]={{trace:links.some(x=>x.textContent==='Trace'&&new URL(x.href).searchParams.get('run')===id),input:buttons.some(x=>x.startsWith('输入 ')),output:buttons.some(x=>x.startsWith('输出 ')),stop:buttons.includes('停止'),rerun:buttons.includes('重新运行'),destination:[...pane.querySelectorAll('.run-destinations a,.run-destinations span')].map(x=>x.textContent)}}}}select({json.dumps(_HISTORY_COMPARISON)});await wait(()=>document.querySelector('.run-detail-head')?.textContent.includes('COMPARISON'));const comparisonHref=[...document.querySelectorAll('.run-destinations a')].find(x=>x.textContent==='Comparison')?.href||'';return {{rehydrated,staleListGuard,staleDetailGuard,matrix,comparisonHref}}}})()"""
+        result = _cdp(debug_port, script, await_promise=True, target_url=url)
+        assert result["rehydrated"] is True
+        assert result["staleListGuard"] is True and result["staleDetailGuard"] is True
+        assert f"comparison={_COMPARISON}" in result["comparisonHref"]
+        assert result["matrix"] == {
+            "INGESTION": {"trace": True, "input": True, "output": True, "stop": False, "rerun": True, "destination": ["Trace", "Documents"]},
+            "QUERY": {"trace": True, "input": True, "output": True, "stop": True, "rerun": False, "destination": ["Trace", "Query / Evidence"]},
+            "EVALUATION": {"trace": True, "input": True, "output": True, "stop": False, "rerun": False, "destination": ["Trace", "Evaluation"]},
+            "COMPARISON": {"trace": True, "input": True, "output": True, "stop": False, "rerun": False, "destination": ["Trace", "Comparison"]},
+            "CONTRACT_TEST": {"trace": True, "input": True, "output": True, "stop": False, "rerun": False, "destination": ["Trace"]},
+        }
+        assert _cdp(debug_port, f"location.href={json.dumps(result['comparisonHref'])}; true") is True
+        deep_link = """(async()=>{for(let i=0;i<160;i++){if(document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'))return {comparison:new URL(location).searchParams.get('comparison'),run:new URL(location).searchParams.get('run'),quality:document.body.innerText.includes('基准主体')};await new Promise(r=>setTimeout(r,25))}throw new Error('comparison deep link did not render')})()"""
+        assert _cdp(debug_port, deep_link, await_promise=True) == {"comparison": _COMPARISON, "run": _HISTORY_COMPARISON, "quality": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 for S-027 exact destination evidence",
+)
+def test_s027_destinations_load_exact_query_run_and_evaluation_case(tmp_path: Path) -> None:
+    """Runs and Comparison links resolve the requested persisted entity and case."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    runs_url = f"http://127.0.0.1:{port}/workbench/runs?run={_HISTORY_QUERY}&q=browser-query"
+    _wait_for_fixture(runs_url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's027-exact'}", runs_url])
+    try:
+        query_href = _cdp(debug_port, """(async()=>{for(let i=0;i<160;i++){const link=[...document.querySelectorAll('.run-destinations a')].find(x=>x.textContent==='Query / Evidence');if(link)return link.href;await new Promise(r=>setTimeout(r,25))}throw new Error('Query destination unavailable')})()""", await_promise=True, target_url=runs_url)
+        assert _cdp(debug_port, f"location.href={json.dumps(query_href)}; true") is True
+        query_state = """(async()=>{for(let i=0;i<200;i++){if(document.querySelector('.final-state')?.innerText.includes('ANSWERED'))return {run:new URL(location).searchParams.get('run'),q:new URL(location).searchParams.get('q'),identity:document.querySelector('.query-status').textContent.includes(new URL(location).searchParams.get('run')),evidence:document.body.innerText.includes('Evidence-bound fixture answer')};await new Promise(r=>setTimeout(r,25))}throw new Error('requested Query Run did not render')})()"""
+        assert _cdp(debug_port, query_state, await_promise=True) == {"run": _HISTORY_QUERY, "q": "browser-query", "identity": True, "evidence": True}
+
+        compare_url = f"http://127.0.0.1:{port}/workbench/compare?comparison={_COMPARISON}&run={_HISTORY_COMPARISON}"
+        assert _cdp(debug_port, f"location.href={json.dumps(compare_url)}; true") is True
+        case_href = _cdp(debug_port, """(async()=>{for(let i=0;i<200;i++){const link=[...document.querySelectorAll('a')].find(x=>x.textContent==='案例诊断');if(link)return link.href;await new Promise(r=>setTimeout(r,25))}throw new Error('case destination unavailable')})()""", await_promise=True)
+        assert _cdp(debug_port, f"location.href={json.dumps(case_href)}; true") is True
+        case_state = """(async()=>{for(let i=0;i<200;i++){const selected=document.querySelector('.failed-case-row[aria-pressed="true"]');if(selected)return {run:new URL(location).searchParams.get('run'),q:new URL(location).searchParams.get('q'),comparison:new URL(location).searchParams.get('comparison'),selected:selected.dataset.case,chain:document.querySelector('.evidence-chain')?.innerText.includes('gate.answer')};await new Promise(r=>setTimeout(r,25))}throw new Error('requested Evaluation case did not render')})()"""
+        assert _cdp(debug_port, case_state, await_promise=True) == {"run": _EVALUATION_RUN, "q": "qcase_0123456789abcdef", "comparison": _COMPARISON, "selected": "qcase_0123456789abcdef", "chain": True}
+        missing_url = f"http://127.0.0.1:{port}/workbench/evaluation-run?run={_EVALUATION_RUN}&q=qcase_missing&comparison={_COMPARISON}"
+        assert _cdp(debug_port, f"location.href={json.dumps(missing_url)}; true") is True
+        assert _cdp(debug_port, """(async()=>{for(let i=0;i<200;i++){if(document.body.innerText.includes('请求案例未找到'))return !document.querySelector('.failed-case-row[aria-pressed="true"]')&&new URL(location).searchParams.get('comparison')!==null;await new Promise(r=>setTimeout(r,25))}return false})()""", await_promise=True) is True
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 for S-027 stale create evidence",
+)
+def test_s027_delayed_comparison_create_cannot_replace_changed_selection(tmp_path: Path) -> None:
+    """Every selector change invalidates an in-flight immutable comparison create."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/compare"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's027-create'}", url])
+    try:
+        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<200;i++){{const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}}throw new Error('comparison controls unavailable')}};const base=await wait(()=>document.querySelector('select[aria-label="基准 Evaluation Report"]')?.options.length===4&&document.querySelector('select[aria-label="基准 Evaluation Report"]'));base.value={json.dumps(_COMPARISON_BASELINE)};base.dispatchEvent(new Event('change',{{bubbles:true}}));const candidate=await wait(()=>document.querySelector('select[aria-label="候选 Evaluation Report"]')?.options.length===4&&!document.querySelector('select[aria-label="候选 Evaluation Report"]').disabled&&document.querySelector('select[aria-label="候选 Evaluation Report"]'));candidate.value={json.dumps(_COMPARISON_CANDIDATE)};candidate.dispatchEvent(new Event('change',{{bubbles:true}}));const create=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较'&&!x.disabled));create.click();const disabled=base.disabled&&candidate.disabled&&create.disabled;candidate.value={json.dumps(_COMPARISON_SINGLE)};candidate.dispatchEvent(new Event('change',{{bubbles:true}}));await new Promise(r=>setTimeout(r,450));return {{disabled,selected:candidate.value,stale:document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'),changed:document.body.innerText.includes('候选已更改'),enabled:!create.disabled}}}})()""", await_promise=True, target_url=url)
+        assert result == {"disabled": True, "selected": _COMPARISON_SINGLE, "stale": False, "changed": True, "enabled": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 for S-027 close/action stale evidence",
+)
+def test_s027_close_invalidates_pending_detail_and_recovery_actions(tmp_path: Path) -> None:
+    """Closing diagnosis removes run context and blocks late Stop/rerun effects."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/runs?run={_HISTORY_QUERY}&runType=QUERY&q=browser-query"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's027-close'}", url])
+    try:
+        stop = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('stop action unavailable')};const action=await wait(()=>[...document.querySelectorAll('.run-actions button')].find(x=>x.textContent==='停止'));action.click();document.querySelector('button[aria-label="关闭 Run 诊断"]').click();await new Promise(r=>setTimeout(r,450));return {run:new URL(location).searchParams.get('run'),type:new URL(location).searchParams.get('runType'),q:new URL(location).searchParams.get('q'),empty:document.body.innerText.includes('未选择 Run'),reopened:!!document.querySelector('.run-detail-head')};})()""", await_promise=True, target_url=url)
+        assert stop == {"run": None, "type": "QUERY", "q": "browser-query", "empty": True, "reopened": False}
+        rerun = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<200;i++){{const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}}throw new Error('rerun action unavailable')}};document.querySelector('select[aria-label="Run 类型"]').value='';document.querySelector('select[aria-label="Run 类型"]').dispatchEvent(new Event('change',{{bubbles:true}}));document.querySelector('input[aria-label="筛选 Run"]').value='';document.querySelector('input[aria-label="筛选 Run"]').dispatchEvent(new Event('input',{{bubbles:true}}));const row=await wait(()=>[...document.querySelectorAll('.run-select')].find(x=>x.textContent==={json.dumps(_INGESTION_RUN)}));row.click();const input=await wait(()=>document.querySelector('input[aria-label="重新运行 Profile Set ID"]'));input.value='delayed-ingestion';[...document.querySelectorAll('.run-actions button')].find(x=>x.textContent==='重新运行').click();document.querySelector('button[aria-label="关闭 Run 诊断"]').click();await new Promise(r=>setTimeout(r,450));return {{path:location.pathname,run:new URL(location).searchParams.get('run'),empty:document.body.innerText.includes('未选择 Run'),handoff:sessionStorage.getItem('kb2.rerun-preflight')}}}})()""", await_promise=True)
+        assert rerun == {"path": "/workbench/runs", "run": None, "empty": True, "handoff": None}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)
 
@@ -2100,7 +2428,7 @@ def test_e2e_comparison_submission_renders_engine_provided_bands(tmp_path: Path)
     browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'comparison-e2e'}", url])
     time.sleep(0.5)
     try:
-        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<120;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('comparison flow did not become ready')}};const base=await wait(()=>document.querySelector('select[aria-label="基准 Evaluation Report"]')?.options.length===3&&document.querySelector('select[aria-label="基准 Evaluation Report"]'));const candidate=document.querySelector('select[aria-label="候选 Evaluation Report"]');base.value={json.dumps(_COMPARISON_BASELINE)};candidate.value={json.dumps(_COMPARISON_CANDIDATE)};[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较').click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));return {{mode:document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'),quality:document.body.innerText.includes('UNDEFINED_BASELINE_ZERO'),bands:['质量门禁','失败案例','延迟（独立）','本地资源（独立）'].every(x=>document.body.innerText.includes(x)),recommendation:document.body.innerText.includes('BASELINE_RETAINED')}}}})()""", await_promise=True, target_url=url)
+        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('comparison flow did not become ready')}};const base=await wait(()=>document.querySelector('select[aria-label="基准 Evaluation Report"]')?.options.length===4&&document.querySelector('select[aria-label="基准 Evaluation Report"]'));base.value={json.dumps(_COMPARISON_BASELINE)};base.dispatchEvent(new Event('change',{{bubbles:true}}));const candidate=await wait(()=>document.querySelector('select[aria-label="候选 Evaluation Report"]')?.options.length===4&&!document.querySelector('select[aria-label="候选 Evaluation Report"]').disabled&&document.querySelector('select[aria-label="候选 Evaluation Report"]'));candidate.value={json.dumps(_COMPARISON_CANDIDATE)};candidate.dispatchEvent(new Event('change',{{bubbles:true}}));const submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建固定比较');await wait(()=>!submit.disabled);submit.click();await wait(()=>document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'));return {{mode:document.body.innerText.includes('MULTI_AXIS_NON_CAUSAL'),quality:document.body.innerText.includes('UNDEFINED_BASELINE_ZERO'),bands:['质量门禁','失败案例','延迟（独立）','本地资源（独立）'].every(x=>document.body.innerText.includes(x)),recommendation:document.body.innerText.includes('CANDIDATE_ELIGIBLE')}}}})()""", await_promise=True, target_url=url)
         assert result == {"mode": True, "quality": True, "bands": True, "recommendation": True}
     finally:
         _close_isolated_chrome(debug_port, browser)

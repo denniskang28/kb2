@@ -289,8 +289,8 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         return JSONResponse(result) if result else problem("EVALUATION_RUN_NOT_FOUND", 404)
 
     @app.get("/api/workbench/comparisons/eligible")
-    async def comparison_eligible() -> JSONResponse:
-        return JSONResponse(await (await diagnosis())[0].eligible())
+    async def comparison_eligible(baselineReportId: UUID | None = None) -> JSONResponse:
+        return JSONResponse(await (await diagnosis())[0].eligible(baselineReportId))
 
     @app.post("/api/workbench/comparisons")
     async def comparison_create(payload: dict[str, object]) -> JSONResponse:

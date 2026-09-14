@@ -460,10 +460,11 @@ class EvaluationService:
         candidate_ref = await self._checked(artifacts, candidate_report_id, "evaluation.report")
         baseline = LayeredReport.model_validate_json(await artifacts.read_content(baseline_report_id))
         candidate = LayeredReport.model_validate_json(await artifacts.read_content(candidate_report_id))
+        await self._checked(artifacts, baseline.manifest_artifact_id, "evaluation.manifest", baseline.manifest_digest)
+        await self._checked(artifacts, candidate.manifest_artifact_id, "evaluation.manifest", candidate.manifest_digest)
         baseline_manifest = EvaluationManifest.model_validate_json(await artifacts.read_content(baseline.manifest_artifact_id))
         candidate_manifest = EvaluationManifest.model_validate_json(await artifacts.read_content(candidate.manifest_artifact_id))
-        fixed = ("dataset_snapshot_id", "dataset_snapshot_digest", "taxonomy_digest", "input_catalog_digest", "case_ids", "metric_ids", "gates", "runtime", "confidence_policy")
-        if any(getattr(baseline_manifest, key) != getattr(candidate_manifest, key) for key in fixed):
+        if not self.fixed_inputs_equivalent(baseline_manifest, candidate_manifest):
             raise ValueError("comparison inputs are not pinned-equivalent")
         mode, axis, changes = self.axis_diff(EvaluationManifest.model_validate(baseline_manifest.model_dump() | {"subjects": (baseline_manifest.subjects[0], candidate_manifest.subjects[1]), "experiment_name": candidate_manifest.experiment_name or baseline_manifest.experiment_name}))
         # Reports retain values elsewhere; comparison contains only transparent deltas.
@@ -474,17 +475,25 @@ class EvaluationService:
         )
         hard_failed = any(item.state is not GateState.PASS for item in candidate.gate_results)
         result = ComparisonResult(mode=mode, axis=axis, changes=changes, deltas=deltas, recommendation="BASELINE_RETAINED" if hard_failed else "CANDIDATE_ELIGIBLE")
-        async def quality(report: LayeredReport) -> list[dict]:
+        async def quality(report: LayeredReport, subject: str) -> list[dict]:
             values: list[dict] = []
             for identifier in report.report_ids:
+                if report.report_subjects.get(identifier) != subject:
+                    continue
                 await self._checked(artifacts, identifier, "metric.report")
                 item = MetricReport.model_validate_json(await artifacts.read_content(identifier))
                 values.append({"subject": report.report_subjects.get(identifier), "metric_id": item.metric_id, "owner": item.owner, "case_id": item.case_id, "slices": item.slices, "status": item.status, "value": item.value, "sample_count": item.sample_count, "labelled_count": item.labelled_count, "matched_count": item.matched_count})
             return sorted(values, key=lambda item: (item["metric_id"], item["case_id"] or "", str(item["slices"])))
-        baseline_quality, candidate_quality = await quality(baseline), await quality(candidate)
-        by_key = lambda values: {(item["subject"], item["metric_id"], item["owner"], item["case_id"], tuple(sorted(item["slices"].items()))): item for item in values}
+        baseline_quality, candidate_quality = await quality(baseline, "baseline"), await quality(candidate, "candidate")
+        by_key = lambda values: {(item["metric_id"], item["owner"], item["case_id"], tuple(sorted(item["slices"].items()))): item for item in values}
         bmap, cmap = by_key(baseline_quality), by_key(candidate_quality)
-        quality_deltas = [{"key": list(key), "delta": self.delta(bmap.get(key, {}).get("value"), cmap.get(key, {}).get("value")).model_dump(mode="json")} for key in sorted(set(bmap) | set(cmap), key=str)]
+        def fact(item: dict | None) -> dict | None:
+            return ({key: item.get(key) for key in ("subject", "status", "value", "sample_count", "labelled_count", "matched_count")}
+                    if item is not None else None)
+        quality_pairs = [{"metric_id": key[0], "owner": key[1], "case_id": key[2], "slices": dict(key[3]),
+                          "baseline": fact(bmap.get(key)), "candidate": fact(cmap.get(key)),
+                          "delta": self.delta(bmap.get(key, {}).get("value"), cmap.get(key, {}).get("value")).model_dump(mode="json")}
+                         for key in sorted(set(bmap) | set(cmap), key=str)]
         def confidence(values: list[dict], policy: object | None) -> dict:
             if policy is None or policy.kind == "none":
                 return {"state":"NOT_MEANINGFUL", "reason":"POLICY_NONE"}
@@ -499,9 +508,19 @@ class EvaluationService:
             return {"state":"VALUE", "method":"wilson", "level":policy.level, "numerator":successes, "denominator":n, "lower":max(0, center-radius), "upper":min(1, center+radius)}
         confidence_context = {"baseline":confidence(baseline_quality, baseline_manifest.confidence_policy), "candidate":confidence(candidate_quality, candidate_manifest.confidence_policy)}
         run_id = await runs.create_run(EngineKind.EVALUATION, {"kind": "evaluation_comparison", "baseline": str(baseline_report_id), "candidate": str(candidate_report_id)})
-        raw = canonical_bytes({"schema_version":"EvaluationComparison/v1", "baseline_report_id":str(baseline_report_id), "candidate_report_id":str(candidate_report_id), "mode":result.mode, "axis":result.axis, "changes":result.changes, "deltas":[item.model_dump(mode="json") for item in result.deltas], "quality":{"baseline":baseline_quality,"candidate":candidate_quality,"deltas":quality_deltas}, "confidence":confidence_context, "layers":{"baseline":baseline.layers,"candidate":candidate.layers}, "metric_report_ids":{"baseline":[str(x) for x in baseline.report_ids],"candidate":[str(x) for x in candidate.report_ids]}, "gates":{"baseline":[x.model_dump(mode="json") for x in baseline.gate_results],"candidate":[x.model_dump(mode="json") for x in candidate.gate_results]}, "failed_cases":{"baseline":[x.model_dump(mode="json") for x in baseline.failed_cases],"candidate":[x.model_dump(mode="json") for x in candidate.failed_cases]}, "latency":{"baseline":baseline.operation.elapsed_ms,"candidate":candidate.operation.elapsed_ms}, "resources":{"baseline":baseline.operation.model_dump(mode="json", exclude={"elapsed_ms"}),"candidate":candidate.operation.model_dump(mode="json", exclude={"elapsed_ms"})}, "recommendation":result.recommendation})
+        raw = canonical_bytes({"schema_version":"EvaluationComparison/v1", "baseline_report_id":str(baseline_report_id), "candidate_report_id":str(candidate_report_id), "mode":result.mode, "axis":result.axis, "changes":result.changes, "deltas":[item.model_dump(mode="json") for item in result.deltas], "quality":{"baseline":baseline_quality,"candidate":candidate_quality,"pairs":quality_pairs}, "confidence":confidence_context, "layers":{"baseline":baseline.layers,"candidate":candidate.layers}, "metric_report_ids":{"baseline":[str(x) for x in baseline.report_ids],"candidate":[str(x) for x in candidate.report_ids]}, "gates":{"baseline":[x.model_dump(mode="json") for x in baseline.gate_results],"candidate":[x.model_dump(mode="json") for x in candidate.gate_results]}, "failed_cases":{"baseline":[x.model_dump(mode="json") for x in baseline.failed_cases],"candidate":[x.model_dump(mode="json") for x in candidate.failed_cases]}, "latency":{"baseline":baseline.operation.elapsed_ms,"candidate":candidate.operation.elapsed_ms}, "resources":{"baseline":baseline.operation.model_dump(mode="json", exclude={"elapsed_ms"}),"candidate":candidate.operation.model_dump(mode="json", exclude={"elapsed_ms"})}, "recommendation":result.recommendation})
         attempt, _ = await runs.start_attempt(run_id, "evaluation.comparison", (baseline_report_id, candidate_report_id))
         output = ArtifactInput(artifact_type="evaluation.comparison", schema_revision="v1", content_digest=hashlib.sha256(raw).hexdigest(), byte_size=len(raw), producing_plugin_id="evaluation.comparison@1", configuration_digest=plan_digest({"baseline": baseline_ref.content_digest, "candidate": candidate_ref.content_digest}), parent_artifact_ids=(baseline_report_id, candidate_report_id), summary="immutable evaluation comparison")
         comparison_id = (await artifacts.complete_with_outputs(run_id, attempt, ((output, raw),), summary="evaluation comparison"))[0]
         await runs.finish_run(run_id, True)
         return run_id, comparison_id, result
+
+    @staticmethod
+    def fixed_inputs_equivalent(baseline: EvaluationManifest, candidate: EvaluationManifest) -> bool:
+        """Return the single S-021 authority for comparison input compatibility."""
+        fixed = (
+            "dataset_snapshot_id", "dataset_snapshot_digest", "taxonomy_digest",
+            "input_catalog_digest", "case_ids", "metric_ids", "gates", "runtime",
+            "confidence_policy",
+        )
+        return all(getattr(baseline, key) == getattr(candidate, key) for key in fixed)

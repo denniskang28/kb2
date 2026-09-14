@@ -296,5 +296,5 @@ def test_static_workbench_has_artifact_actions_schema_tabs_locator_sync_and_narr
     assert "overlay.remove()" in source and "returnFocus?.focus()" in source
     assert "e.key==='Escape'" in source and "e.key==='Tab'" in source
     assert "button('重新运行'" in source and "button('停止'" in source
-    assert "button('重试'" not in source
+    assert "actions?.retry" not in source
     assert "/ingestion-runs/{run_id}/retry" not in Path("src/kb2_runtime/api.py").read_text()

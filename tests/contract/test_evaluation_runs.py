@@ -8,7 +8,7 @@ import pytest
 
 from kb2_runtime.evaluation.datasets.contracts import Answerability, CaseOrigin, CaseProvenance, DatasetContent, QueryCase, ReviewEvent, SourceArtifactRef, canonical_bytes as dataset_bytes
 from kb2_runtime.evaluation.metrics import MetricMatch, MetricReport, MetricStatus
-from kb2_runtime.evaluation.runs.contracts import ArtifactBinding, ConfidencePolicy, EvaluationManifest, EvaluationSubject, FailedCaseLink, PlanIdentity, QualityGate, RuntimeSummary, SubjectMetricReport, digest
+from kb2_runtime.evaluation.runs.contracts import ArtifactBinding, ConfidencePolicy, EvaluationManifest, EvaluationSubject, FailedCaseLink, LayeredReport, PlanIdentity, QualityGate, RuntimeSummary, SubjectMetricReport, canonical_bytes, digest
 from kb2_runtime.evaluation.runs.service import EvaluationService
 from kb2_runtime.trace.contracts import ArtifactManifest
 from kb2_runtime.trace.schemas import schema_is_supported
@@ -237,6 +237,10 @@ def test_orchestration_replay_and_fixed_input_comparison_publish_immutable_artif
         _, observation_id, observation = await service.replay(first_manifest, (SubjectMetricReport(subject="baseline", metric_artifact_id=metric_id),), runs, artifacts, original_report_id=first_report)
         _, second_manifest = await service.publish_manifest(manifest("candidate-b@1"), runs, artifacts)
         _, second_report, _ = await service.orchestrate(second_manifest, (SubjectMetricReport(subject="baseline", metric_artifact_id=metric_id),), runs, artifacts)
+        tampered = LayeredReport.model_validate_json(artifacts.contents[first_report]).model_copy(update={"manifest_digest": _digest("0")})
+        tampered_report = artifacts.add("evaluation.report", canonical_bytes(tampered))
+        with pytest.raises(ValueError, match="pinned artifact digest"):
+            await service.compare(tampered_report, second_report, runs, artifacts)
         _, comparison_id, result = await service.compare(first_report, second_report, runs, artifacts)
         return artifacts, runs, first_manifest, first_report, observation_id, observation, comparison_id, result
 

@@ -237,3 +237,8 @@ before starting another delivery run.
   applicability, Judge calibration, and failed-case evidence with UI-009,
   UI-010, and UI-013. Ten responsive visual baselines, independent acceptance,
   and final review passed.
+- **2026-09-14:** S-027 UI-reference parity repair aligned fixed-pin Profile
+  comparison and unified mixed Run diagnosis with UI-011, UI-012, and UI-013.
+  Digest-bound manifests, real paired quality facts, exact deep links,
+  owner-scoped recovery, stable responsive focus, six dual-viewport baselines,
+  independent acceptance, and final review passed.
