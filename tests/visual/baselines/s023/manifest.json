@@ -1,0 +1,117 @@
+{
+  "story": "S-023",
+  "uiAnchors": ["UI-006", "UI-013"],
+  "prototypeSha256": "a07df450d231d777cb814d3a6695d67553748beda5491ce12e529ec2dca32ea7",
+  "fixtureRevision": "s023-profile-studio-parity-v2",
+  "captureConditions": {
+    "browser": {
+      "product": "Chrome/152.0.7977.83",
+      "protocolVersion": "1.3",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/152.0.0.0 Safari/537.36",
+      "javascriptRuntime": "V8 15.2.124.21",
+      "renderingEngine": "537.36 (@79460ebecaa5625e57a5fb679a735659e73dc687)",
+      "headlessMode": "new",
+      "gpu": "disabled"
+    },
+    "device": {
+      "deviceScaleFactor": 1,
+      "mobile": false
+    },
+    "media": {
+      "type": "screen",
+      "colorScheme": "light",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference"
+    },
+    "locale": {
+      "browser": "zh-CN",
+      "document": "zh-CN"
+    },
+    "readiness": {
+      "document": "complete",
+      "fontsPromise": "document.fonts.ready",
+      "archivoWeights": [400, 600, 800],
+      "archivoFaceStatus": "loaded",
+      "assetResourceTimingRequired": true
+    },
+    "stabilization": {
+      "animations": "none",
+      "transitions": "none",
+      "caretColor": "transparent"
+    },
+    "screenshotFormat": "png"
+  },
+  "comparison": {
+    "colorSpace": "RGBA",
+    "channelTolerance": 12,
+    "maximumDifferingPixelRatio": 0.005,
+    "baselineUpdatesAutomatic": false
+  },
+  "excludedPrototypeContent": [
+    "prototype control bar",
+    "prototype-only demonstration facts",
+    "locale switcher"
+  ],
+  "baselines": [
+    {
+      "file": "studio-query-valid-1440.png",
+      "scenario": "studio-query-valid",
+      "viewport": [1440, 900],
+      "sha256": "99c425c683c87ddd32c74bda009a0f8c2fcfe897d170900372da07ab0b08f15d"
+    },
+    {
+      "file": "studio-query-valid-644.png",
+      "scenario": "studio-query-valid",
+      "viewport": [644, 900],
+      "sha256": "fea172df2a4cb03b601f0770b0f60c16a5f63e15b292f8f2e6a893317b506d75"
+    },
+    {
+      "file": "studio-query-invalid-1440.png",
+      "scenario": "studio-query-invalid",
+      "viewport": [1440, 900],
+      "sha256": "28b6eb9295a077910ee864c3ff6bfe612768865dbf47cbc17bbec0f6461776b9"
+    },
+    {
+      "file": "studio-query-invalid-644.png",
+      "scenario": "studio-query-invalid",
+      "viewport": [644, 900],
+      "sha256": "d6c48e77ff1b2e0ad79ad29b148def48f86c4b13305ecd276e900b6e69add362"
+    },
+    {
+      "file": "studio-query-draft-yaml-1440.png",
+      "scenario": "studio-query-draft-yaml",
+      "viewport": [1440, 900],
+      "sha256": "77138b0390d1965650f70faf95d00ae68691da72b1133fdfc1bc0393c1145ee9"
+    },
+    {
+      "file": "studio-query-draft-yaml-644.png",
+      "scenario": "studio-query-draft-yaml",
+      "viewport": [644, 900],
+      "sha256": "d0a8d03ff5aadd7f1559314bb81b2d47345a0ac6d6fca8bbc0afb0b51b34d54f"
+    },
+    {
+      "file": "studio-ingestion-fallbacks-1440.png",
+      "scenario": "studio-ingestion-fallbacks",
+      "viewport": [1440, 900],
+      "sha256": "479d14e42e8f926db3e139cd261e45ed1bd229af7b72e6320823b7a913194137"
+    },
+    {
+      "file": "studio-ingestion-fallbacks-644.png",
+      "scenario": "studio-ingestion-fallbacks",
+      "viewport": [644, 900],
+      "sha256": "c3e252af111c0a3abe5201724186c214a297626cbe9d8cf8a584a7fd4cb975f9"
+    },
+    {
+      "file": "studio-unavailable-1440.png",
+      "scenario": "studio-unavailable",
+      "viewport": [1440, 900],
+      "sha256": "73789bd918ca70fe81aad0de1d4b932dd6fe051f739eeb93d16a0e0ec96702f1"
+    },
+    {
+      "file": "studio-unavailable-644.png",
+      "scenario": "studio-unavailable",
+      "viewport": [644, 900],
+      "sha256": "e5aa234516dbe37e7199315c22fc7d4bfeae6a0ddeaacc079a8e7421916832a0"
+    }
+  ]
+}

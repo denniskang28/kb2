@@ -3,8 +3,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from collections import Counter
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Any, Protocol
 from uuid import UUID
+
+import yaml
 
 from kb2_runtime.ingestion_profiles import ProfileCompiler, ProfileParser
 from kb2_runtime.ingestion_profiles.errors import ProfileError
@@ -77,11 +81,16 @@ class StudioService:
 
     async def list_profiles(self, kind: str | None = None, query: str = "") -> tuple[WorkspaceProfileSummary, ...]:
         if self._repository is not None:
-            return tuple(WorkspaceProfileSummary(profileId=x["profile_id"], kind=x["profile_kind"], updatedAt=x["updated_at"])
-                         for x in await self._repository.list_profile_workspaces(kind, query))
+            rows = await self._repository.list_profile_workspaces(kind, query)
+            values = []
+            for row in rows:
+                hydrated = row if "source_document" in row else await self._repository.get_profile_workspace(row["profile_id"])
+                document = hydrated["source_document"] if hydrated else {}
+                values.append(self._summary(row["profile_id"], row["profile_kind"], document, row["updated_at"]))
+            return tuple(values)
         query = query.lower()
         return tuple(
-            WorkspaceProfileSummary(profileId=item.profileId, kind=item.kind, updatedAt=item.updatedAt)
+            self._summary(item.profileId, item.kind, item.document, item.updatedAt)
             for item in sorted(self._items.values(), key=lambda x: (x.kind, x.profileId))
             if (kind is None or item.kind == kind) and query in item.profileId.lower()
         )[:64]
@@ -89,8 +98,41 @@ class StudioService:
     async def get_profile(self, profile_id: str) -> WorkspaceProfile | None:
         if self._repository is not None:
             row = await self._repository.get_profile_workspace(profile_id)
-            return WorkspaceProfile(profileId=row["profile_id"], kind=row["profile_kind"], document=row["source_document"], updatedAt=row["updated_at"]) if row else None
+            return self._workspace(row["profile_id"], row["profile_kind"], row["source_document"], row["updated_at"]) if row else None
         return self._items.get(profile_id)
+
+    @staticmethod
+    def _canonical(document: dict[str, Any]) -> tuple[str, str]:
+        raw = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        source = yaml.safe_dump(document, sort_keys=False, allow_unicode=False, default_flow_style=False)
+        return source, hashlib.sha256(raw).hexdigest()
+
+    @classmethod
+    def _workspace(cls, profile_id: str, kind: str, document: dict[str, Any], updated_at: datetime) -> WorkspaceProfile:
+        source, digest = cls._canonical(document)
+        return WorkspaceProfile(profileId=profile_id, kind=kind, document=document, canonicalYaml=source,
+                                documentDigest=digest, updatedAt=updated_at)  # type: ignore[arg-type]
+
+    @classmethod
+    def _summary(cls, profile_id: str, kind: str, document: dict[str, Any], updated_at: datetime) -> WorkspaceProfileSummary:
+        checked_at = datetime.now(timezone.utc)
+        source, digest = cls._canonical(document)
+        del source
+        try:
+            parser = ProfileParser if kind == "ingestion" else QueryProfileParser
+            parsed = parser.parse(json.dumps(document), "application/json")
+            profile = next((item for item in parsed.profiles if item.profile_id == parsed.default_profile_id), parsed.profiles[0])
+            if kind == "query":
+                labels = [stage.kind for stage in profile.stages]
+            else:
+                labels = [f"{axis}.{sub.stage_id}" for axis, value in profile.axes.items() for sub in value.normalized_sub_stages]
+            return WorkspaceProfileSummary(profileId=profile_id, kind=kind, stageCount=len(labels),
+                stageSummary=" · ".join(labels)[:256] or None, documentDigest=digest,
+                validationState="VALID", diagnosticCount=0, checkedAt=checked_at, updatedAt=updated_at)
+        except (ProfileError, QueryProfileError, ValueError, TypeError):
+            return WorkspaceProfileSummary(profileId=profile_id, kind=kind, stageCount=0,
+                stageSummary=None, documentDigest=digest, validationState="INVALID", diagnosticCount=1,
+                checkedAt=checked_at, updatedAt=updated_at)
 
     async def validate(self, kind: str, document: dict[str, Any] | None, compile: bool = False, search_artifact: dict[str, Any] | None = None, source: str | None = None, media_type: str = "application/json") -> ProfileValidation:
         try:
@@ -98,19 +140,22 @@ class StudioService:
             if kind == "ingestion":
                 parsed = ProfileParser.parse(payload, media_type)  # type: ignore[arg-type]
                 normalized = parsed.model_dump(mode="json", exclude_none=True)
+                canonical_yaml, document_digest = self._canonical(normalized)
                 if not compile:
-                    return ProfileValidation(valid=True, normalizedDocument=normalized)
+                    return ProfileValidation(valid=True, normalizedDocument=normalized, canonicalYaml=canonical_yaml, documentDigest=document_digest)
                 plan = ProfileCompiler(await self._registry()).compile(parsed).get(parsed.default_profile_id)
             else:
                 parsed = QueryProfileParser.parse(payload, media_type)  # type: ignore[arg-type]
                 normalized = parsed.model_dump(mode="json", exclude_none=True)
+                canonical_yaml, document_digest = self._canonical(normalized)
                 if not compile:
-                    return ProfileValidation(valid=True, normalizedDocument=normalized)
+                    return ProfileValidation(valid=True, normalizedDocument=normalized, canonicalYaml=canonical_yaml, documentDigest=document_digest)
                 if search_artifact is None:
                     return self._invalid("SCHEMA_INCOMPATIBLE", "/searchArtifact")
                 binding = QueryArtifactBinding.model_validate(search_artifact)
                 plan = QueryProfileCompiler(await self._registry()).compile(parsed, binding).get(parsed.default_profile_id)
-            return ProfileValidation(valid=True, normalizedDocument=normalized, resolvedPlan=plan.canonical_payload, planDigest=plan.digest)
+            return ProfileValidation(valid=True, normalizedDocument=normalized, canonicalYaml=canonical_yaml,
+                                     documentDigest=document_digest, resolvedPlan=plan.canonical_payload, planDigest=plan.digest)
         except (ProfileError, QueryProfileError) as exc:
             return self._invalid(exc.code.value, exc.location)
         except (ValueError, TypeError):
@@ -127,10 +172,10 @@ class StudioService:
         body_id = checked.normalizedDocument.get("default_profile_id")
         if body_id != profile_id:
             return self._invalid("PROFILE_ID_MISMATCH", "/default_profile_id")
-        value = WorkspaceProfile(profileId=profile_id, kind=kind, document=checked.normalizedDocument, updatedAt=datetime.now(timezone.utc))
+        value = self._workspace(profile_id, kind, checked.normalizedDocument, datetime.now(timezone.utc))
         if self._repository is not None:
             row = await self._repository.save_profile_workspace(profile_id, kind, checked.normalizedDocument)
-            return WorkspaceProfile(profileId=row["profile_id"], kind=row["profile_kind"], document=row["source_document"], updatedAt=row["updated_at"])
+            return self._workspace(row["profile_id"], row["profile_kind"], row["source_document"], row["updated_at"])
         self._items[profile_id] = value
         return value
 

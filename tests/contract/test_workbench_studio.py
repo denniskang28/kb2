@@ -53,8 +53,12 @@ def test_yaml_round_trip_persists_normalized_working_profile_and_survives_servic
         source = Path("tests/fixtures/query_profiles/text-hybrid.json").read_text()
         validated = await first.validate("query", None, source=source, media_type="application/yaml")
         assert validated.valid and validated.normalizedDocument
+        assert validated.canonicalYaml == yaml.safe_dump(validated.normalizedDocument, sort_keys=False, allow_unicode=False)
+        assert validated.documentDigest is not None and len(validated.documentDigest) == 64
         saved = await first.save("text-hybrid", "query", validated.normalizedDocument)
         assert saved.profileId == "text-hybrid"
+        assert saved.canonicalYaml == validated.canonicalYaml
+        assert saved.documentDigest == validated.documentDigest
         second = StudioService(repository=repository)
         restored = await second.get_profile("text-hybrid")
         assert restored and restored.document == validated.normalizedDocument
@@ -107,6 +111,8 @@ def test_fastapi_profile_save_get_and_copy_return_json_safe_persisted_working_va
     assert stage["configuration"] == {"limit": 8}
     assert stage["inputs"] == {"question": "query.question", "index": "search.index"}
     assert isinstance(saved.json()["updatedAt"], str)
+    assert saved.json()["canonicalYaml"].startswith("schema_version: v1\n")
+    assert len(saved.json()["documentDigest"]) == 64
 
     read = client.get("/api/workbench/profiles/text-hybrid")
     assert read.status_code == 200
@@ -115,7 +121,14 @@ def test_fastapi_profile_save_get_and_copy_return_json_safe_persisted_working_va
     copied = client.post("/api/workbench/profiles/text-hybrid/copy?copy_id=text-hybrid-copy")
     assert copied.status_code == 201
     assert copied.json()["profileId"] == "text-hybrid-copy"
-    assert client.get("/api/workbench/profiles?kind=query&q=text-hybrid").json()[0]["profileId"] == "text-hybrid"
+    summary = client.get("/api/workbench/profiles?kind=query&q=text-hybrid").json()[0]
+    assert summary["profileId"] == "text-hybrid"
+    assert summary["validationState"] == "VALID"
+    assert summary["diagnosticCount"] == 0
+    assert summary["stageCount"] == len(document["profiles"][0]["stages"])
+    assert summary["stageSummary"].startswith("retrieve")
+    assert summary["documentDigest"] == saved.json()["documentDigest"]
+    assert isinstance(summary["checkedAt"], str)
 
 
 def test_fastapi_profile_rejects_unsafe_declarative_input_without_persisting(settings: Settings, catalog: CapabilityCatalog, monkeypatch) -> None:

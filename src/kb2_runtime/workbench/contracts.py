@@ -107,12 +107,20 @@ class WorkspaceProfile(OverviewContract):
     profileId: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")
     kind: Literal["ingestion", "query"]
     document: dict[str, Any] = Field(max_length=64)
+    canonicalYaml: str = Field(max_length=64 * 1024)
+    documentDigest: str = Field(pattern=r"^[a-f0-9]{64}$")
     updatedAt: datetime
 
 
 class WorkspaceProfileSummary(OverviewContract):
     profileId: str
     kind: Literal["ingestion", "query"]
+    stageCount: int = Field(ge=0, le=128)
+    stageSummary: str | None = Field(default=None, max_length=256)
+    documentDigest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    validationState: Literal["VALID", "INVALID"]
+    diagnosticCount: int = Field(ge=0, le=16)
+    checkedAt: datetime
     updatedAt: datetime
 
 
@@ -132,6 +140,8 @@ class StudioDiagnostic(OverviewContract):
 class ProfileValidation(OverviewContract):
     valid: bool
     normalizedDocument: dict[str, Any] | None = None
+    canonicalYaml: str | None = Field(default=None, max_length=64 * 1024)
+    documentDigest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     diagnostics: tuple[StudioDiagnostic, ...] = Field(default_factory=tuple, max_length=16)
     resolvedPlan: dict[str, Any] | None = None
     planDigest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")

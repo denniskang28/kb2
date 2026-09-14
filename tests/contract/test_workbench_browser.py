@@ -18,6 +18,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 import httpx
 import pytest
 import websocket
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
@@ -49,6 +50,7 @@ S025_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines
 S026_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s026"
 S027_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s027"
 S028_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s028"
+S023_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s023"
 S022_CHROME_FLAGS = (
     f"--headless={S022_CAPTURE['browser']['headlessMode']}",
     "--no-sandbox",
@@ -71,6 +73,29 @@ _PROFILE = {
         "profiles": [{"profile_id": "browser-query", "stages": [{"stage_id": "keyword", "kind": "retrieve", "plugin_id": "retriever.keyword@1", "configuration": {"limit": 8}, "inputs": {"question": "query.question", "index": "search.index"}, "outputs": ["candidates"], "when": None, "max_attempts": None}]}],
     },
 }
+_PROFILE["canonicalYaml"] = yaml.safe_dump(_PROFILE["document"], sort_keys=False, allow_unicode=False)
+_PROFILE["documentDigest"] = hashlib.sha256(json.dumps(_PROFILE["document"], sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+
+_INGESTION_DOCUMENT = {
+    "schema_version": "v1",
+    "default_profile_id": "browser-ingestion",
+    "document_inputs": {"source": {"artifact_type": "opaque.bytes", "schema_revision": "v1"}},
+    "profiles": [{"profile_id": "browser-ingestion", "axes": {
+        axis: {"candidates": ([
+            {"plugin_id": "transform.synthetic@1", "configuration": {"suffix": "primary"}, "inputs": {"source": "document.source" if index == 0 else f"{list(('extraction','structure','chunking','enrichment','embedding','indexing'))[index-1]}.result"}, "outputs": ["result"], "accept_quality": ["PASS"]},
+            {"plugin_id": "transform.synthetic@1", "configuration": {"suffix": "fallback"}, "inputs": {"source": "document.source" if index == 0 else f"{list(('extraction','structure','chunking','enrichment','embedding','indexing'))[index-1]}.result"}, "outputs": ["result"], "accept_quality": ["PASS", "WARN", "FAIL"]},
+        ] if index == 0 else [
+            {"plugin_id": "transform.synthetic@1", "configuration": {"suffix": ""}, "inputs": {"source": f"{list(('extraction','structure','chunking','enrichment','embedding','indexing'))[index-1]}.result"}, "outputs": ["result"], "accept_quality": ["PASS", "WARN", "FAIL"]},
+        ])}
+        for index, axis in enumerate(("extraction", "structure", "chunking", "enrichment", "embedding", "indexing"))
+    }}],
+}
+_INGESTION_PROFILE = {
+    "profileId": "browser-ingestion", "kind": "ingestion", "updatedAt": "2026-09-15T07:30:00Z",
+    "document": _INGESTION_DOCUMENT,
+    "canonicalYaml": yaml.safe_dump(_INGESTION_DOCUMENT, sort_keys=False, allow_unicode=False),
+    "documentDigest": hashlib.sha256(json.dumps(_INGESTION_DOCUMENT, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest(),
+}
 
 _PLUGIN = {
     "pluginId": "retriever.keyword@1",
@@ -83,7 +108,7 @@ _PLUGIN = {
     "outputSchemas": ["retrieval.candidates/v1"],
     "inputPorts": [{"name": "question", "artifactType": "query.question", "schemaRevision": "v1", "minItems": 1, "maxItems": 1}],
     "outputPorts": [{"name": "candidates", "artifactType": "retrieval.candidates", "schemaRevision": "v1", "minItems": 1, "maxItems": 1}],
-    "configurationSchema": {"type": "object", "properties": {
+    "configurationSchema": {"type": "object", "required": ["limit"], "properties": {
         "limit": {"type": "integer", "default": 8, "minimum": 1, "maximum": 64},
         "strategy": {"type": "string", "enum": ["plain", "ranked"], "default": "plain"},
         "enabled": {"type": "boolean", "default": True},
@@ -92,6 +117,19 @@ _PLUGIN = {
     "capabilities": ["retrieval.keyword"], "resourceHints": {"cpu": 1}, "timeoutSeconds": 30,
     "contractTestState": "SUCCEEDED", "contractTestRunId": "12345678-1234-5678-1234-567812345678",
     "safeExample": {"limit": 8}, "contractTests": [{"state": "SUCCEEDED"}], "recentRuns": [{"state": "FAILED"}],
+}
+
+_INGESTION_PLUGIN = {
+    **_PLUGIN,
+    "pluginId": "transform.synthetic@1",
+    "kind": "transform",
+    "inputSchemas": ["opaque.bytes/v1"],
+    "outputSchemas": ["opaque.bytes/v1"],
+    "inputPorts": [{"name": "source", "artifactType": "opaque.bytes", "schemaRevision": "v1", "minItems": 1, "maxItems": 1}],
+    "outputPorts": [{"name": "result", "artifactType": "opaque.bytes", "schemaRevision": "v1", "minItems": 1, "maxItems": 1}],
+    "configurationSchema": {"type": "object", "properties": {"suffix": {"type": "string", "default": ""}}},
+    "capabilities": [],
+    "timeoutSeconds": 2,
 }
 
 
@@ -140,6 +178,8 @@ _fixture_preflights: dict[str, dict[str, object]] = {}
 _fixture_preflight_receipts: list[dict[str, object]] = []
 _document_list_requests = 0
 _document_list_stale_armed = False
+_studio_copy_completions = 0
+_studio_dry_run_completions = 0
 _document_list_stale_requests = 0
 _document_list_completions: list[int] = []
 _document_list_release = asyncio.Event()
@@ -358,8 +398,23 @@ async def fixture_overview_request_count() -> JSONResponse:
 
 
 @fixture_app.get("/api/workbench/profiles")
-async def fixture_profiles() -> JSONResponse:
-    return JSONResponse([{key: _PROFILE[key] for key in ("profileId", "kind", "updatedAt")}])
+async def fixture_profiles(request: Request) -> JSONResponse:
+    fixture_state = os.getenv("KB2_WORKBENCH_FIXTURE_STATE", "populated")
+    if fixture_state == "profile-unavailable":
+        return JSONResponse({"code": "PROFILE_LIST_UNAVAILABLE"}, status_code=503)
+    requested_kind = request.query_params.get("kind")
+    if fixture_state == "studio-stale" and requested_kind == "ingestion":
+        await asyncio.sleep(0.8)
+    ingestion_fixture = fixture_state in {"studio-ingestion", "studio-ingestion-policy-diagnostic"} or (fixture_state == "studio-stale" and requested_kind == "ingestion")
+    value = _INGESTION_PROFILE if ingestion_fixture else _PROFILE
+    return JSONResponse([{
+        **{key: value[key] for key in ("profileId", "kind", "updatedAt", "documentDigest")},
+        "stageCount": 6 if ingestion_fixture else 1,
+        "stageSummary": "extraction · structure · chunking · enrichment · embedding · indexing" if ingestion_fixture else "retrieve",
+        "validationState": "VALID",
+        "diagnosticCount": 0,
+        "checkedAt": "2026-09-15T08:00:00Z",
+    }])
 
 
 @fixture_app.get("/api/workbench/profiles/browser-query")
@@ -367,13 +422,51 @@ async def fixture_profile() -> JSONResponse:
     return JSONResponse(_PROFILE)
 
 
+@fixture_app.get("/api/workbench/profiles/browser-ingestion")
+async def fixture_ingestion_profile() -> JSONResponse:
+    return JSONResponse(_INGESTION_PROFILE)
+
+
 @fixture_app.post("/api/workbench/profiles/{action}")
-async def fixture_profile_action(action: str) -> JSONResponse:
-    invalid = action == "compile"
+async def fixture_profile_action(action: str, request: Request) -> JSONResponse:
+    payload = await request.json()
+    invalid_yaml = payload.get("mediaType") == "application/yaml" and payload.get("source") in ("", "profiles: [")
+    fixture_state = os.getenv("KB2_WORKBENCH_FIXTURE_STATE")
+    delayed_action_fixture = fixture_state == "studio-delayed-actions"
+    policy_location = {
+        "studio-query-policy-diagnostic": "/profiles/0/stages/0/max_attempts",
+        "studio-ingestion-policy-diagnostic": "/profiles/0/axes/extraction/on_exhausted",
+    }.get(fixture_state)
+    invalid = invalid_yaml or (action == "compile" and not delayed_action_fixture)
     return JSONResponse({"valid": not invalid, "normalizedDocument": _PROFILE["document"] if not invalid else None,
-                         "diagnostics": [] if not invalid else [{"code": "QUERY_PROFILE_PARSE_INVALID", "location": "/profiles/0/stages/0/plugin_id"}],
+                         "canonicalYaml": _PROFILE["canonicalYaml"] if not invalid else None,
+                         "documentDigest": _PROFILE["documentDigest"] if not invalid else None,
+                         "diagnostics": [] if not invalid else [{"code": "YAML_PARSE_INVALID" if invalid_yaml else "POLICY_INVALID" if policy_location else "QUERY_PROFILE_PARSE_INVALID", "location": "/" if invalid_yaml else policy_location or "/profiles/0/stages/0/plugin_id"}],
                          "resolvedPlan": {"fixture": True} if action == "compile" and not invalid else None,
                          "planDigest": "b" * 64 if action == "compile" and not invalid else None})
+
+
+@fixture_app.post("/api/workbench/profiles/browser-query/copy")
+async def fixture_profile_copy() -> JSONResponse:
+    global _studio_copy_completions
+    if os.getenv("KB2_WORKBENCH_FIXTURE_STATE") == "studio-delayed-actions":
+        await asyncio.sleep(0.6)
+    _studio_copy_completions += 1
+    return JSONResponse({**_PROFILE, "profileId": "delayed-copy"})
+
+
+@fixture_app.post("/api/workbench/profiles/browser-query/dry-run")
+async def fixture_profile_dry_run() -> JSONResponse:
+    global _studio_dry_run_completions
+    if os.getenv("KB2_WORKBENCH_FIXTURE_STATE") == "studio-delayed-actions":
+        await asyncio.sleep(0.6)
+    _studio_dry_run_completions += 1
+    return JSONResponse({"runId": "delayed-dry-run", "planDigest": "c" * 64})
+
+
+@fixture_app.get("/api/fixture/studio-action-counts")
+async def fixture_studio_action_counts() -> JSONResponse:
+    return JSONResponse({"copy": _studio_copy_completions, "dryRun": _studio_dry_run_completions})
 
 
 @fixture_app.get("/api/workbench/plugins")
@@ -385,10 +478,11 @@ async def fixture_plugins() -> JSONResponse:
 async def fixture_compatible_plugins(request: Request) -> JSONResponse:
     value = await request.json()
     compatible_requests.append(value)
-    assert value["kind"] == "query"
-    assert value["stageId"] == "keyword"
-    assert value["document"] == _PROFILE["document"]
-    return JSONResponse([{key: _PLUGIN[key] for key in ("pluginId", "kind", "runner", "runnable", "reason")}])
+    plugin = _INGESTION_PLUGIN if value["kind"] == "ingestion" else _PLUGIN
+    if value["kind"] == "query":
+        assert value["stageId"].startswith("keyword")
+        assert value["document"]["schema_version"] == "v1"
+    return JSONResponse([{key: plugin[key] for key in ("pluginId", "kind", "runner", "runnable", "reason")}])
 
 
 @fixture_app.get("/api/fixture/compatible-requests")
@@ -399,6 +493,11 @@ async def fixture_compatible_requests() -> JSONResponse:
 @fixture_app.get("/api/workbench/plugins/retriever.keyword@1")
 async def fixture_plugin() -> JSONResponse:
     return JSONResponse(_PLUGIN)
+
+
+@fixture_app.get("/api/workbench/plugins/transform.synthetic@1")
+async def fixture_ingestion_plugin() -> JSONResponse:
+    return JSONResponse(_INGESTION_PLUGIN)
 
 
 @fixture_app.get("/api/workbench/ingestion-runs/{run_id}")
@@ -1460,6 +1559,31 @@ def test_s024_visual_manifest_is_pinned_and_baselines_are_reviewed_assets() -> N
         assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
 
 
+def test_s023_visual_manifest_is_pinned_and_baselines_are_reviewed_assets() -> None:
+    manifest = json.loads((S023_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["story"] == "S-023"
+    assert set(manifest["uiAnchors"]) == {"UI-006", "UI-013"}
+    assert manifest["prototypeSha256"] == hashlib.sha256(Path("docs/ui/kb_ui.zip").read_bytes()).hexdigest()
+    assert manifest["fixtureRevision"] == "s023-profile-studio-parity-v2"
+    assert manifest["captureConditions"] == S022_CAPTURE
+    assert manifest["comparison"] == {
+        "colorSpace": "RGBA", "channelTolerance": 12,
+        "maximumDifferingPixelRatio": 0.005, "baselineUpdatesAutomatic": False,
+    }
+    records = manifest["baselines"]
+    assert len(records) == 10
+    assert {record["scenario"] for record in records} == {
+        "studio-query-valid", "studio-query-invalid", "studio-query-draft-yaml",
+        "studio-ingestion-fallbacks", "studio-unavailable",
+    }
+    assert {tuple(record["viewport"]) for record in records} == {(1440, 900), (644, 900)}
+    assert len({record["file"] for record in records}) == len(records)
+    for record in records:
+        baseline = S023_BASELINE_ROOT / record["file"]
+        assert baseline.is_file()
+        assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
+
+
 def test_s025_s026_s027_visual_manifests_are_pinned_and_complete() -> None:
     expectations = ((S025_BASELINE_ROOT, "S-025", {"UI-005", "UI-008", "UI-013"}, 14),
                     (S026_BASELINE_ROOT, "S-026", {"UI-009", "UI-010", "UI-013"}, 10),
@@ -1825,39 +1949,297 @@ def test_fixture_backed_navigation_survives_both_breakpoint_resize_directions(tm
     reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
 )
 @pytest.mark.parametrize("width", (1440, 644))
-def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflow(tmp_path: Path, width: int) -> None:
-    """Exercise valid, invalid, draft, unavailable, and inspector states in shipped assets."""
-    port, debug_port = "8895", "9226"
-    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+@pytest.mark.parametrize(
+    "scenario",
+    (
+        "studio-query-valid",
+        "studio-query-invalid",
+        "studio-query-draft-yaml",
+        "studio-ingestion-fallbacks",
+        "studio-unavailable",
+    ),
+)
+def test_s023_profile_studio_visual_and_semantic_matrix(tmp_path: Path, width: int, scenario: str) -> None:
+    """Verify every approved UI-006/UI-013 state against a reviewed immutable image."""
+    port, debug_port = _free_local_port(), _free_local_port()
+    fixture_state = "studio-ingestion" if scenario == "studio-ingestion-fallbacks" else "profile-unavailable" if scenario == "studio-unavailable" else "populated"
+    environment = {
+        **os.environ,
+        "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}",
+        "KB2_WORKBENCH_FIXTURE_STATE": fixture_state,
+    }
+    url = f"http://127.0.0.1:{port}/workbench/studio"
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
     )
-    browser = subprocess.Popen(
-        [str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'profile'}", f"http://127.0.0.1:{port}/workbench/studio"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / scenario}", url]
     )
-    click_profile = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Studio fixture did not become ready'); }; const profile = await wait(() => [...document.querySelectorAll('button')].find(x => x.textContent === 'browser-query')); profile.click(); await wait(() => document.querySelector('select[aria-label=\"keyword 插件\"]')); return {overflow: document.documentElement.scrollWidth <= innerWidth, selector: !!document.querySelector('select[aria-label=\"keyword 插件\"]')}; })()"""
     try:
-        assert _cdp(int(debug_port), click_profile, await_promise=True) == {"overflow": True, "selector": True}
-        controls = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = await predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Studio schema controls did not become ready'); }; await wait(async () => { const requests = await fetch('/api/fixture/compatible-requests').then(r => r.json()); return document.querySelector('input[aria-label=\"keyword limit\"]') && document.querySelector('select[aria-label=\"keyword strategy\"]') && document.querySelector('input[aria-label=\"keyword enabled\"]') && document.querySelector('input[aria-label=\"keyword labels 对象\"]') && requests.length; }); const requests = await fetch('/api/fixture/compatible-requests').then(r => r.json()); return {schemaScalar: !!document.querySelector('input[aria-label=\"keyword limit\"]'), schemaEnum: !!document.querySelector('select[aria-label=\"keyword strategy\"]'), schemaBoolean: !!document.querySelector('input[aria-label=\"keyword enabled\"]'), boundedObject: !!document.querySelector('input[aria-label=\"keyword labels 对象\"]'), compatibleOnly: [...document.querySelector('select[aria-label=\"keyword 插件\"]').options].every(x => x.value === 'retriever.keyword@1'), postedCanonicalContext: requests.some(x => x.kind === 'query' && x.stageId === 'keyword' && x.document.default_profile_id === 'browser-query')}; })()"""
-        assert _cdp(int(debug_port), controls, await_promise=True) == {"schemaScalar": True, "schemaEnum": True, "schemaBoolean": True, "boundedObject": True, "compatibleOnly": True, "postedCanonicalContext": True}
-        assert _cdp(int(debug_port), "(async () => { [...document.querySelectorAll('button')].find(x => x.textContent === '验证').click(); await new Promise(r => setTimeout(r, 150)); return document.body.innerText.includes('配置有效'); })()", await_promise=True) is True
-        _capture_cdp(int(debug_port), tmp_path / f"studio-valid-{width}.png")
+        _prepare_s022_capture_environment(debug_port, url, width)
+        common = _cdp(
+            debug_port,
+            """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('Studio did not settle')};await wait(()=>document.querySelector('.studio-page')?.dataset.studioPending==='false');window.__nativeDialogCalls=0;window.prompt=window.confirm=()=>{window.__nativeDialogCalls++;throw new Error('native dialog used')};const tabs=[...document.querySelectorAll('.studio-kind-tabs [role=tab]')];const boxes=[...document.querySelectorAll('.studio-titlebar [role=tab],.studio-editor-actions button')].filter(x=>{const r=x.getBoundingClientRect();return r.width&&r.height&&r.bottom>0&&r.top<innerHeight}).map(x=>x.getBoundingClientRect());const overlaps=boxes.some((a,i)=>boxes.slice(i+1).some(b=>Math.min(a.right,b.right)-Math.max(a.left,b.left)>1&&Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>1));return {viewport:[innerWidth,innerHeight,devicePixelRatio],tabs:tabs.map(x=>[x.textContent,x.getAttribute('aria-selected'),x.tabIndex]),panel:document.querySelector('#studio-kind-panel')?.getAttribute('role'),overflow:document.documentElement.scrollWidth<=innerWidth,visibleControls:[...document.querySelectorAll('.studio-page button,.studio-page input,.studio-page select,.studio-page textarea')].every(x=>{const r=x.getBoundingClientRect();return r.width>0&&r.height>0}),overlaps,nativeDialogs:window.__nativeDialogCalls}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert common == {
+            "viewport": [width, 900, 1],
+            "tabs": [["Ingestion", "true", 0], ["Query", "false", -1]],
+            "panel": "tabpanel", "overflow": True, "visibleControls": True,
+            "overlaps": False, "nativeDialogs": 0,
+        }
 
-        # The fixture makes compile return a field-addressable compiler error.
-        assert _cdp(int(debug_port), "(async () => { [...document.querySelectorAll('button')].find(x => x.textContent === '编译预览').click(); await new Promise(r => setTimeout(r, 150)); return document.body.innerText.includes('/profiles/0/stages/0/plugin_id: QUERY_PROFILE_PARSE_INVALID'); })()", await_promise=True) is True
-        _capture_cdp(int(debug_port), tmp_path / f"studio-invalid-{width}.png")
+        if scenario == "studio-unavailable":
+            result = _cdp(debug_port, "(()=>({failure:document.body.innerText.includes('Profile 列表不可用')&&document.body.innerText.includes('PROFILE_LIST_UNAVAILABLE'),retry:[...document.querySelectorAll('button')].some(x=>x.textContent==='重试'),profiles:document.querySelectorAll('.studio-profile-row').length,editor:document.body.innerText.includes('选择工作配置')}))()", target_url=url)
+            assert result == {"failure": True, "retry": True, "profiles": 0, "editor": True}
+        elif scenario == "studio-ingestion-fallbacks":
+            result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('Ingestion inspector did not settle')};(await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==='browser-ingestion'))).click();await wait(()=>document.querySelector('.studio-fallback-chip'));const rows=[...document.querySelectorAll('.studio-stage-select')];const selected=rows.find(x=>x.getAttribute('aria-pressed')==='true');selected.focus();return {tab:document.querySelector('.studio-kind-tabs [aria-selected=true]').textContent,axes:rows.map(x=>x.textContent.match(/(?:extraction|structure|chunking|enrichment|embedding|indexing)\\.main/)?.[0]),selectedFocus:document.activeElement===selected,inspector:document.querySelector('.studio-stage-inspector h2').textContent,ports:document.body.innerText.includes('source * · opaque.bytes/v1')&&document.body.innerText.includes('result * · opaque.bytes/v1'),fallbacks:[...document.querySelectorAll('.studio-fallback-chip code')].map(x=>x.textContent),quality:['PASS','WARN','FAIL'].every(x=>document.body.innerText.includes(x)),exhaustion:!!document.querySelector('[aria-label="extraction.main 候选耗尽策略"]'),neutral:document.body.innerText.includes('当前会话尚未验证'),nativeDialogs:window.__nativeDialogCalls,overflow:document.documentElement.scrollWidth<=innerWidth}})()""", await_promise=True, target_url=url)
+            assert result == {"tab": "Ingestion", "axes": ["extraction.main", "structure.main", "chunking.main", "enrichment.main", "embedding.main", "indexing.main"], "selectedFocus": True, "inspector": "extraction.main", "ports": True, "fallbacks": ["transform.synthetic@1"], "quality": True, "exhaustion": True, "neutral": True, "nativeDialogs": 0, "overflow": True}
+        else:
+            ready = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=await p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('Query inspector did not settle')};(await wait(()=>[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==='Query'))).click();(await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==='browser-query'))).click();await wait(async()=>document.querySelector('input[aria-label="keyword limit"]')&&(await fetch('/api/fixture/compatible-requests').then(r=>r.json())).some(x=>x.kind==='query'));const stage=document.querySelector('.studio-stage-select[aria-pressed=true]');stage.focus();const plugin=document.querySelector('select[aria-label="keyword 插件"]'),required=document.querySelector('input[aria-label="keyword limit"]');return {tab:document.querySelector('.studio-kind-tabs [aria-selected=true]').textContent,profileSelected:document.querySelector('.studio-profile-select[aria-selected=true]').textContent,selectedFocus:document.activeElement===stage,selectedStage:document.querySelector('.studio-stage-inspector h2').textContent,compatibleOnly:[...plugin.options].every(x=>x.value==='retriever.keyword@1'),ports:document.body.innerText.includes('question * · query.question/v1')&&document.body.innerText.includes('candidates * · retrieval.candidates/v1'),types:[...document.querySelectorAll('.studio-field-type')].map(x=>x.textContent),required:required.required&&required.closest('label').innerText.includes('必填'),neutral:document.body.innerText.includes('当前会话尚未验证'),saveDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='保存').disabled,dryDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='干运行').disabled}})()""", await_promise=True, target_url=url)
+            assert ready == {"tab": "Query", "profileSelected": "browser-query", "selectedFocus": True, "selectedStage": "keyword", "compatibleOnly": True, "ports": True, "types": ["integer", "string", "boolean", "object"], "required": True, "neutral": True, "saveDisabled": True, "dryDisabled": True}
+            if scenario == "studio-query-valid":
+                result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('validation did not settle')};const copy=[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='复制候选');copy.focus();copy.click();const dialog=await wait(()=>document.querySelector('[role=dialog][aria-label="复制为候选"]')),initialFocus=document.activeElement===dialog.querySelector('[aria-label="候选 Profile ID"]');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await wait(()=>!document.querySelector('[role=dialog][aria-label="复制为候选"]'));const focusReturned=document.activeElement===copy;[...document.querySelectorAll('button')].find(x=>x.textContent==='验证').click();await wait(()=>document.body.innerText.includes('配置有效'));return {valid:true,inPageDialog:initialFocus,focusReturned,saveEnabled:![...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='保存').disabled,dryDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='干运行').disabled,nativeDialogs:window.__nativeDialogCalls}})()""", await_promise=True, target_url=url)
+                assert result == {"valid": True, "inPageDialog": True, "focusReturned": True, "saveEnabled": True, "dryDisabled": True, "nativeDialogs": 0}
+            elif scenario == "studio-query-invalid":
+                result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('compile result did not settle')};[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='编译预览').click();const dialog=await wait(()=>document.querySelector('[role=dialog][aria-label="编译预览"]'));const inputs=dialog.querySelectorAll('input');inputs[0].value='12345678-1234-5678-1234-567812345678';inputs[1].value='a'.repeat(64);inputs[2].value='1';dialog.querySelector('button[type=submit]').click();const diagnostic=await wait(()=>[...document.querySelectorAll('.studio-diagnostic')].find(x=>x.textContent.includes('/profiles/0/stages/0/plugin_id: QUERY_PROFILE_PARSE_INVALID')));await wait(()=>!document.querySelector('[role=dialog][aria-label="编译预览"]'));diagnostic.click();const focused=await wait(()=>document.activeElement.closest('.studio-stage-inspector')&&document.activeElement),described=document.getElementById(focused.getAttribute('aria-describedby'));return {diagnostic:true,selected:document.querySelector('.studio-stage-select[aria-pressed=true]').textContent.includes('keyword'),located:focused.dataset.studioLocation===diagnostic.dataset.location,ariaInvalid:focused.getAttribute('aria-invalid')==='true',described:!!described&&described.textContent.includes('QUERY_PROFILE_PARSE_INVALID'),saveDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='保存').disabled,dryDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='干运行').disabled,dialogClosed:!document.querySelector('[role=dialog][aria-label="编译预览"]'),nativeDialogs:window.__nativeDialogCalls}})()""", await_promise=True, target_url=url)
+                assert result == {"diagnostic": True, "selected": True, "located": True, "ariaInvalid": True, "described": True, "saveDisabled": True, "dryDisabled": True, "dialogClosed": True, "nativeDialogs": 0}
+            else:
+                result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('YAML mode did not settle')};[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent==='YAML').click();const source=await wait(()=>document.querySelector('textarea[aria-label="YAML Profile"]'));source.value+='\\n# draft';source.dispatchEvent(new Event('input',{bubbles:true}));return {yaml:source.value.startsWith('schema_version: v1'),jsonLabel:source.value.trimStart().startsWith('{'),apply:[...document.querySelectorAll('button')].some(x=>x.textContent==='应用到表单'),draft:document.body.innerText.includes('草稿更改尚未验证'),fixedBand:source.getBoundingClientRect().bottom<=document.querySelector('.studio-validation-band').getBoundingClientRect().top+1,saveDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='保存').disabled,dryDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='干运行').disabled,nativeDialogs:window.__nativeDialogCalls}})()""", await_promise=True, target_url=url)
+                assert result == {"yaml": True, "jsonLabel": False, "apply": True, "draft": True, "fixedBand": True, "saveDisabled": True, "dryDisabled": True, "nativeDialogs": 0}
 
-        draft = """(async () => { [...document.querySelectorAll('button')].find(x => x.textContent === 'YAML').click(); const t = document.querySelector('textarea[aria-label="YAML Profile"]'); t.value += '\\n# draft'; t.dispatchEvent(new Event('input', {bubbles:true})); return {draft: document.body.innerText.includes('需先保存并成功编译'), overflow: document.documentElement.scrollWidth <= innerWidth}; })()"""
-        assert _cdp(int(debug_port), draft, await_promise=True) == {"draft": True, "overflow": True}
-        _capture_cdp(int(debug_port), tmp_path / f"studio-draft-{width}.png")
+        settled = _cdp(debug_port, """(async()=>{await document.fonts.ready;await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));const band=document.querySelector('.studio-validation-band'),bandBox=band?.getBoundingClientRect(),painted=element=>{const box=element.getBoundingClientRect(),r={left:box.left,right:box.right,top:box.top,bottom:box.bottom};for(let parent=element.parentElement;parent;parent=parent.parentElement){const style=getComputedStyle(parent),clip=parent.getBoundingClientRect();if(['auto','scroll','hidden','clip'].includes(style.overflowX)){r.left=Math.max(r.left,clip.left);r.right=Math.min(r.right,clip.right)}if(['auto','scroll','hidden','clip'].includes(style.overflowY)){r.top=Math.max(r.top,clip.top);r.bottom=Math.min(r.bottom,clip.bottom)}}return r},overlap=bandBox?[...document.querySelectorAll('.studio-page button,.studio-page input,.studio-page select,.studio-page textarea')].filter(x=>!band.contains(x)).some(x=>{const r=painted(x);return r.right>r.left&&r.bottom>r.top&&r.bottom>0&&r.top<innerHeight&&Math.min(r.right,bandBox.right)-Math.max(r.left,bandBox.left)>1&&Math.min(r.bottom,bandBox.bottom)-Math.max(r.top,bandBox.top)>1}):false;return {pending:document.querySelector('.studio-page').dataset.studioPending,overflow:document.documentElement.scrollWidth<=innerWidth,validationVisible:Boolean(bandBox&&bandBox.top>=0&&bandBox.bottom<=innerHeight),validationOverlap:overlap,nativeDialogs:window.__nativeDialogCalls}})()""", await_promise=True, target_url=url)
+        validation_visible = scenario != "studio-unavailable"
+        assert settled == {"pending": "false", "overflow": True, "validationVisible": validation_visible, "validationOverlap": False, "nativeDialogs": 0}
+        image = tmp_path / f"{scenario}-{width}.png"
+        _capture_cdp(debug_port, image, target_url=url)
+        _assert_manifest_visual(debug_port, image, image.name, target_url=url, baseline_root=S023_BASELINE_ROOT, story="S-023")
     finally:
-        browser.terminate()
-        browser.wait(timeout=10)
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)
 
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
+)
+def test_s023_stale_ingestion_list_cannot_replace_newer_query_kind(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {
+        **os.environ,
+        "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}",
+        "KB2_WORKBENCH_FIXTURE_STATE": "studio-stale",
+    }
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'stale-kind'}", url]
+    )
+    try:
+        result = _cdp(
+            debug_port,
+            """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('kind switch did not settle')};const query=await wait(()=>[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==='Query'));query.click();await wait(()=>document.querySelector('.studio-page').dataset.studioPending==='false'&&document.querySelector('.studio-profile-select')?.textContent==='browser-query');await new Promise(r=>setTimeout(r,900));return {selectedTab:document.querySelector('.studio-kind-tabs [aria-selected=true]').textContent,queryRow:document.querySelector('.studio-profile-select')?.textContent,staleIngestion:document.body.innerText.includes('browser-ingestion'),overflow:document.documentElement.scrollWidth<=innerWidth}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert result == {"selectedTab": "Query", "queryRow": "browser-query", "staleIngestion": False, "overflow": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
+)
+@pytest.mark.parametrize(
+    ("fixture_state", "profile_id", "kind", "field_label", "values"),
+    (
+        pytest.param("studio-ingestion", "browser-ingestion", "Ingestion", "extraction.main suffix", ("x", "xy", "xyz"), id="text"),
+        pytest.param("populated", "browser-query", "Query", "keyword limit", ("1", "12"), id="number"),
+    ),
+)
+def test_s023_schema_typing_retains_focus_and_complete_draft(
+    tmp_path: Path, fixture_state: str, profile_id: str, kind: str, field_label: str, values: tuple[str, ...]
+) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": fixture_state}
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / field_label.replace(' ', '-')}", url]
+    )
+    try:
+        result = _cdp(
+            debug_port,
+            f"""(async()=>{{const wait=async p=>{{for(let i=0;i<200;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('schema field did not settle')}};await wait(()=>document.querySelector('.studio-page')?.dataset.studioPending==='false');const tab=[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==={json.dumps(kind)});if(tab.getAttribute('aria-selected')!=='true')tab.click();const row=await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==={json.dumps(profile_id)}));row.click();let field=await wait(()=>document.querySelector({json.dumps(f'input[aria-label="{field_label}"]')}));field.focus();for(const value of {json.dumps(values)}){{field.value=value;field.dispatchEvent(new Event('input',{{bubbles:true}}));field=await wait(()=>{{const current=document.querySelector({json.dumps(f'input[aria-label="{field_label}"]')});return current?.value===value&&document.activeElement===current&&current}})}}return {{value:field.value,focused:document.activeElement===field,dirty:document.body.innerText.includes('未保存草稿'),unvalidated:document.body.innerText.includes('草稿更改尚未验证。')}}}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert result == {"value": values[-1], "focused": True, "dirty": True, "unvalidated": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
+)
+def test_s023_reorder_moves_stage_and_restores_focus_to_moved_row(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": "populated"}
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'reorder'}", url]
+    )
+    try:
+        result = _cdp(
+            debug_port,
+            """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('reorder did not settle')};await wait(()=>document.querySelector('.studio-page')?.dataset.studioPending==='false');[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==='Query').click();(await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==='browser-query'))).click();await wait(()=>document.querySelector('input[aria-label="keyword limit"]'));document.querySelector('[aria-label="添加阶段"]').click();const moved=await wait(()=>[...document.querySelectorAll('.studio-stage-select')].find(x=>x.textContent.includes('keyword-copy'))),up=moved.closest('.studio-stage-row').querySelector('.move-up');up.focus();up.click();const first=await wait(()=>{const item=document.querySelector('.studio-stage-select');return item?.textContent.includes('keyword-copy')&&document.activeElement===item&&item});return {first:first.textContent.includes('keyword-copy'),selected:first.getAttribute('aria-pressed')==='true',focused:document.activeElement===first,count:document.querySelectorAll('.studio-stage-select').length}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert result == {"first": True, "selected": True, "focused": True, "count": 2}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
+)
+@pytest.mark.parametrize("source", (pytest.param("", id="empty"), pytest.param("profiles: [", id="syntax-invalid")))
+def test_s023_failed_yaml_validation_preserves_exact_source(tmp_path: Path, source: str) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": "populated"}
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / ('empty' if not source else 'invalid')}", url]
+    )
+    try:
+        result = _cdp(
+            debug_port,
+            f"""(async()=>{{const wait=async p=>{{for(let i=0;i<200;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('YAML validation did not settle')}};await wait(()=>document.querySelector('.studio-page')?.dataset.studioPending==='false');[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==='Query').click();(await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==='browser-query'))).click();await wait(()=>document.querySelector('input[aria-label="keyword limit"]'));[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent==='YAML').click();const textarea=await wait(()=>document.querySelector('textarea[aria-label="YAML Profile"]'));textarea.value={json.dumps(source)};textarea.dispatchEvent(new Event('input',{{bubbles:true}}));[...document.querySelectorAll('button')].find(x=>x.textContent==='应用到表单').click();await wait(()=>document.querySelector('.studio-diagnostic')?.textContent.includes('YAML_PARSE_INVALID')&&document.querySelector('.studio-page').dataset.studioPending==='false');const current=document.querySelector('textarea[aria-label="YAML Profile"]');return {{exact:current.value==={json.dumps(source)},value:current.value,mode:document.querySelector('.studio-mode-tabs [aria-selected=true]').textContent,invalid:document.body.innerText.includes('YAML_PARSE_INVALID')}}}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert result == {"exact": True, "value": source, "mode": "YAML", "invalid": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
+)
+def test_s023_delayed_copy_and_dry_run_cannot_overwrite_newer_context(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": "studio-delayed-actions"}
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'delayed-actions'}", url]
+    )
+    try:
+        result = _cdp(
+            debug_port,
+            """(async()=>{const wait=async p=>{for(let i=0;i<240;i++){const x=await p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('delayed Studio action did not settle')},selectQuery=async()=>{[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==='Query').click();(await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==='browser-query'))).click();await wait(()=>document.querySelector('input[aria-label="keyword limit"]'))};await wait(()=>document.querySelector('.studio-page')?.dataset.studioPending==='false');await selectQuery();const copy=[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='复制候选');copy.click();let dialog=await wait(()=>document.querySelector('[role=dialog][aria-label="复制为候选"]'));dialog.querySelector('[aria-label="候选 Profile ID"]').value='late-copy';dialog.querySelector('button[type=submit]').click();document.querySelector('.studio-kind-tabs [role=tab]').click();await wait(()=>fetch('/api/fixture/studio-action-counts').then(r=>r.json()).then(x=>x.copy===1));const copySuppressed=document.querySelector('.studio-kind-tabs [aria-selected=true]').textContent==='Ingestion'&&!document.body.innerText.includes('delayed-copy')&&!document.body.innerText.includes('PROFILE_LOAD_UNAVAILABLE');await selectQuery();[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='编译预览').click();dialog=await wait(()=>document.querySelector('[role=dialog][aria-label="编译预览"]'));let inputs=dialog.querySelectorAll('input');inputs[0].value='12345678-1234-5678-1234-567812345678';inputs[1].value='a'.repeat(64);inputs[2].value='1';dialog.querySelector('button[type=submit]').click();await wait(()=>document.body.innerText.includes('编译成功'));const dry=[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='干运行');dry.click();dialog=await wait(()=>document.querySelector('[role=dialog][aria-label="干运行"]'));inputs=dialog.querySelectorAll('input');inputs[0].value='12345678-1234-5678-1234-567812345678';inputs[1].value='22345678-1234-5678-1234-567812345678';inputs[2].value='b'.repeat(64);inputs[3].value='2';dialog.querySelector('button[type=submit]').click();const limit=await wait(()=>document.querySelector('input[aria-label="keyword limit"]'));limit.value='9';limit.dispatchEvent(new Event('input',{bubbles:true}));await wait(()=>fetch('/api/fixture/studio-action-counts').then(r=>r.json()).then(x=>x.dryRun===1));const current=document.querySelector('input[aria-label="keyword limit"]');return {copySuppressed,drySuppressed:current.value==='9'&&document.body.innerText.includes('未保存草稿')&&!document.querySelector('.studio-validation-band').textContent.includes('delayed-dry-run'),dryDisabled:[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='干运行').disabled}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert result == {"copySuppressed": True, "drySuppressed": True, "dryDisabled": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Studio evidence",
+)
+@pytest.mark.parametrize(
+    ("fixture_state", "kind", "profile_id", "location", "control_label"),
+    (
+        pytest.param(
+            "studio-query-policy-diagnostic", "Query", "browser-query",
+            "/profiles/0/stages/0/max_attempts", "keyword 最大尝试次数", id="query-max-attempts",
+        ),
+        pytest.param(
+            "studio-ingestion-policy-diagnostic", "Ingestion", "browser-ingestion",
+            "/profiles/0/axes/extraction/on_exhausted", "extraction.main 候选耗尽策略", id="ingestion-on-exhausted",
+        ),
+    ),
+)
+def test_s023_policy_diagnostic_locates_exact_accessible_control(
+    tmp_path: Path, fixture_state: str, kind: str, profile_id: str, location: str, control_label: str
+) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_WORKBENCH_FIXTURE_STATE": fixture_state}
+    url = f"http://127.0.0.1:{port}/workbench/studio"
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome(
+        [*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / fixture_state}", url]
+    )
+    try:
+        result = _cdp(
+            debug_port,
+            f"""(async()=>{{const wait=async p=>{{for(let i=0;i<200;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('policy diagnostic did not settle')}};await wait(()=>document.querySelector('.studio-page')?.dataset.studioPending==='false');const tab=[...document.querySelectorAll('.studio-kind-tabs [role=tab]')].find(x=>x.textContent==={json.dumps(kind)});if(tab.getAttribute('aria-selected')!=='true')tab.click();(await wait(()=>[...document.querySelectorAll('.studio-profile-select')].find(x=>x.textContent==={json.dumps(profile_id)}))).click();await wait(()=>document.querySelector({json.dumps(f'[aria-label="{control_label}"]')}));[...document.querySelectorAll('.studio-command')].find(x=>x.textContent==='编译预览').click();if({str(kind == 'Query').lower()}){{const dialog=await wait(()=>document.querySelector('[role=dialog][aria-label="编译预览"]')),inputs=dialog.querySelectorAll('input');inputs[0].value='12345678-1234-5678-1234-567812345678';inputs[1].value='a'.repeat(64);inputs[2].value='1';dialog.querySelector('button[type=submit]').click()}}const diagnostic=await wait(()=>[...document.querySelectorAll('.studio-diagnostic')].find(x=>x.dataset.location==={json.dumps(location)}&&x.textContent.includes('POLICY_INVALID')));await wait(()=>!document.querySelector('[role=dialog][aria-label="编译预览"]'));diagnostic.click();const focused=await wait(()=>document.activeElement?.dataset?.studioLocation==={json.dumps(location)}&&document.activeElement),described=document.getElementById(focused.getAttribute('aria-describedby'));return {{label:focused.getAttribute('aria-label'),exact:focused.dataset.studioLocation===diagnostic.dataset.location,invalid:focused.getAttribute('aria-invalid')==='true',described:!!described&&described.textContent.includes('POLICY_INVALID')}}}})()""",
+            await_promise=True,
+            target_url=url,
+        )
+        assert result == {"label": control_label, "exact": True, "invalid": True, "described": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser Registry evidence",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+def test_fixture_backed_registry_unavailable_detail_is_reachable_without_overflow(tmp_path: Path, width: int) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
     server = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
@@ -1872,8 +2254,7 @@ def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflo
         _capture_cdp(int(debug_port), tmp_path / f"registry-unavailable-detail-{width}.png")
         assert _cdp(int(debug_port), "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); await new Promise(r => setTimeout(r, 30)); return {closed: !document.querySelector('.registry-dialog'), focusReturned: document.activeElement.textContent.includes('retriever.keyword@1')}; })()", await_promise=True) == {"closed": True, "focusReturned": True}
     finally:
-        browser.terminate()
-        browser.wait(timeout=10)
+        _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)
 
@@ -2706,7 +3087,7 @@ def test_e2e_profile_studio_loads_compatible_plugins_and_validates(tmp_path: Pat
     browser = _launch_isolated_chrome(["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'studio-e2e'}", url])
     time.sleep(0.5)
     try:
-        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('studio flow did not become ready')};const profile=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='browser-query'));profile.click();const plugin=await wait(()=>document.querySelector('select[aria-label="keyword 插件"]'));await wait(()=>[...plugin.options].some(x=>x.value==='retriever.keyword@1'));[...document.querySelectorAll('button')].find(x=>x.textContent==='验证').click();await wait(()=>document.body.innerText.includes('配置有效'));return {compatible:[...plugin.options].every(x=>x.value==='retriever.keyword@1'),schema:!!document.querySelector('input[aria-label="keyword limit"]'),valid:document.body.innerText.includes('配置有效')}})()""", await_promise=True, target_url=url)
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('studio flow did not become ready')};(await wait(()=>[...document.querySelectorAll('[role=tab]')].find(x=>x.textContent==='Query'))).click();const profile=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='browser-query'));profile.click();const plugin=await wait(()=>document.querySelector('select[aria-label="keyword 插件"]'));await wait(()=>[...plugin.options].some(x=>x.value==='retriever.keyword@1'));[...document.querySelectorAll('button')].find(x=>x.textContent==='验证').click();await wait(()=>document.body.innerText.includes('配置有效'));return {compatible:[...plugin.options].every(x=>x.value==='retriever.keyword@1'),schema:!!document.querySelector('input[aria-label="keyword limit"]'),valid:document.body.innerText.includes('配置有效')}})()""", await_promise=True, target_url=url)
         assert result == {"compatible": True, "schema": True, "valid": True}
     finally:
         _close_isolated_chrome(debug_port, browser)

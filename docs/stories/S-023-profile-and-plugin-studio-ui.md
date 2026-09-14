@@ -95,3 +95,7 @@ None. Editor and component libraries belong to Story design.
 - **2026-09-12:** Delivered Profile and Plugin Studio UI after API, browser,
   regression, and final-review evidence passed; delivery commit `b8af610` was
   fast-forwarded into local main.
+- **2026-09-15:** Completed the UI-006/UI-013 Profile Studio parity repair with
+  server-authoritative summaries and canonical YAML, three-level form editing,
+  guarded async actions, exact diagnostic focus/ARIA, responsive desktop/narrow
+  layouts, and ten reviewed visual baselines; independent review passed.

@@ -273,6 +273,262 @@ captures for the full-width populated table, filtering, modal focus/close, and
 desktop/narrow geometry.  No migration, Registry mutation, package operation,
 or Profile behavior changes.
 
+## UI-006 Profile Studio Parity Repair (2026-09-15)
+
+The delivered Profile Studio preserves the S-023 safety and engine-authority
+boundary, but its two-column list plus fully expanded editor does not preserve
+the adopted UI-006 hierarchy. This repair is limited to `/workbench/studio` and
+the Profile projections it consumes. It does not change Profile semantics,
+Plugin Registry behavior, persistence, the shell, or the adopted reference.
+
+### DOM And Information Architecture
+
+Keep the existing S-022 page shell and replace only the Studio route subtree
+with the following stable landmarks. Class names are implementation hooks, not
+new product concepts:
+
+```text
+main.studio-page
+  header.studio-titlebar
+    title + subtitle
+    tablist "Profile 类型"
+      tab "Ingestion"
+      tab "Query"
+  div.studio-workspace
+    aside.studio-profile-pane "工作配置"
+      search control + icon-only new/copy-candidate command
+      listbox of compact Profile rows
+    section.studio-editor-pane "Profile 编辑器"
+      toolbar
+        Form/YAML mode group
+        validate, compile, save, copy, dry-run commands
+      div.studio-form-workspace
+        section.studio-stage-pane "有序阶段"
+          stage list + add command
+        section.studio-stage-inspector "所选阶段"
+          Plugin, typed ports, schema fields, condition/policy,
+          timeout metadata, fallbacks
+      section.studio-yaml-workspace
+        declarative-only heading + apply-to-form command + textarea
+      section.studio-validation-band "验证结果"
+        authoritative state, diagnostics with locate actions,
+        resolved-plan/digest preview
+```
+
+At 1440 x 900, `studio-workspace` is a 280 px Profile pane plus a flexible
+editor. Form mode divides the editor into an approximately 290 px stage list
+and a flexible inspector, producing the reference's effective three-column
+hierarchy. The title-level Ingestion/Query controls use actual `role="tab"`,
+`aria-selected`, `aria-controls`, and roving keyboard focus; the Profile kind
+is no longer a select inside the list. Form/YAML remains a compact segmented
+control in the editor toolbar. Commands stay in the toolbar in the reference
+order, using the already pinned Lucide sprite/helper where an icon exists.
+
+Each Profile row shows its real ID, an authoritative state chip, a bounded
+stage summary, a short source-document digest, and the time at which the shown
+state was checked. The selected row has the three-pixel accent and pressed or
+selected semantics used elsewhere in the workbench. The list must not reuse
+prototype Profile names, timestamps, summaries, or digests. When those fields
+are unavailable, render an explicit unavailable value rather than synthetic
+content.
+
+The stage list contains one row per Query stage or one row per normalized
+Ingestion sub-stage. An Ingestion row represents its primary candidate; its
+remaining ordered candidates are explicit fallback chips in the inspector,
+not separate peer stages. The inspector alone renders the selected stage's
+compatible Plugin selector and configuration. It shows descriptor-owned named
+input/output ports and their schema revisions, required markers and scalar
+types from `configurationSchema`, the contract-supported condition/policy,
+and descriptor timeout as read-only metadata. It must not expose a writable
+timeout when the Profile contract has no timeout field. Query `max_attempts`
+and Ingestion `accept_quality`/`on_exhausted` remain their actual contract
+controls.
+
+Add, remove, move, and fallback changes operate only on the canonical draft
+document. Query stage ordering is bounded by the parser/compiler contract;
+Ingestion axis order remains fixed while sub-stage and candidate order may be
+edited where the contract permits it. Every structural edit immediately
+invalidates prior validation and compilation. The next validate/compile/save
+request is the authority on whether the resulting draft is acceptable.
+
+### Client State And Async Authority
+
+Use one route-local state object rather than independent `valid` and `compiled`
+booleans:
+
+```text
+kind, query, summaries, listState
+selectedProfileId, canonicalDocument, savedDocument, savedDocumentDigest
+editorMode, yamlDraft, selectedStageKey
+draftRevision
+validation: idle | pending | valid | invalid | unavailable
+compilation: idle | pending | valid | invalid | unavailable
+validatedDraftRevision, compiledDraftRevision
+validatedDocumentDigest, compiledDocumentDigest, resolvedPlan, planDigest
+mutation: idle | saving | copying | dry-running
+listEpoch, selectionEpoch, editorEpoch
+```
+
+Dirty state is derived by structural comparison of the canonical draft with
+the saved canonical snapshot; it is not inferred from control events alone and
+does not treat a browser hash as authoritative. Every accepted local edit
+increments `draftRevision`. Validation and compilation eligibility is tied to
+the request's matching local revision and the server-returned document digest.
+Any form/YAML edit clears the matching eligibility, resolved plan, and dry-run
+readiness. Loading a saved Profile means `saved`, not implicitly `validated` or
+`compiled` in the current session.
+
+List refresh, Profile selection, compatible-Plugin lookup, descriptor detail,
+validation, compilation, save, copy, and dry run each use an `AbortController`
+or monotonically increasing request epoch. A response may update the DOM only
+when its kind, selected Profile, stage key, and draft revision still match the
+request snapshot. Changing kind aborts outstanding selection/editor requests,
+clears selection, updates the corresponding tab panel, and then loads the new
+list. Selecting another Profile while the current draft is dirty requires the
+existing in-page confirmation dialog; browser `prompt()` and `confirm()` are
+not used.
+
+Form edits mutate a cloned canonical document through narrow adapters. YAML
+text remains separate until `validate` succeeds; invalid YAML never replaces
+the last canonical document. Switching Form to YAML asks the server to
+normalize the current JSON draft and uses returned canonical YAML. Applying
+YAML to Form validates the exact YAML text, adopts `normalizedDocument` only on
+success, restores the corresponding selected stage when possible, and focuses
+the first diagnostic otherwise. Validation and compilation results render in
+the fixed bottom band and are never appended after whichever editor mode is
+currently visible.
+
+Save is enabled only for a validation result matching the current draft
+revision.
+Compile may operate on a validated unsaved draft and, for Query, first obtains
+the existing typed Search Artifact binding through an in-page dialog. Dry run
+is enabled only when the saved document digest and latest successful compiled
+document digest match and both results still correspond to the current draft
+revision; Query dry run collects the existing question/Search
+Artifact fields in the same dialog pattern. The existing
+`INGESTION_DRY_RUN_UNSUPPORTED` response is surfaced as an unavailable command,
+not hidden or replaced with a simulation.
+
+### Existing API Implications
+
+Keep the current Profile list/get/save/copy/validate/compile/dry-run and
+compatible-Plugin routes and their mutation semantics. The repair requires
+only bounded response projection additions:
+
+- Extend `WorkspaceProfileSummary` with `stageCount`, `stageSummary`,
+  `documentDigest`, `validationState`, `diagnosticCount`, and `checkedAt`.
+  `StudioService.list_profiles` derives these server-side from the stored
+  declarative document using the existing parser and canonical serialization;
+  the repository may hydrate the bounded source document internally but the
+  list response never exposes it. `validationState` is parse validation at
+  `checkedAt`, not persisted approval or compilation state.
+- Add bounded `canonicalYaml` and `documentDigest` fields to successful
+  `WorkspaceProfile` and `ProfileValidation` projections. The server emits
+  deterministic declarative YAML from the normalized document. The browser
+  does not stringify JSON and label it YAML, implement a YAML serializer, or
+  calculate an authoritative digest.
+- Return descriptor `inputPorts`, `outputPorts`, `configurationSchema`, and
+  `timeoutSeconds` from the already existing Plugin detail request used by the
+  selected-stage inspector. Compatibility options continue to come only from
+  `POST /api/workbench/plugins/compatible`; the client does not derive or cache
+  compatibility across draft changes.
+
+The added fields are additive and bounded. No database migration or stored
+validation history is introduced. `checkedAt` must therefore be labelled as a
+current check, never “last validated”; `documentDigest` is reproducibility
+identity, not user-facing version history. Query compilation still requires
+the existing `searchArtifact` request member. Diagnostics remain the existing
+safe code plus JSON-pointer location. If summary derivation fails for one
+stored Profile, return that row with `INVALID` and bounded diagnostics rather
+than fail or omit the entire list.
+
+Creating a blank engine-valid Profile requires defaults the current API does
+not own, so this repair does not invent a browser template. The plus command
+opens the candidate-copy dialog against the selected saved Profile and labels
+the operation “复制为候选”; in an empty list it is disabled with an accessible
+explanation. A future true blank-Profile workflow requires a separately owned
+engine template contract.
+
+### Accessible Interaction And Diagnostics
+
+- Profile rows and stage rows are native buttons within labelled lists. Arrow
+  controls are native icon buttons with visible tooltips/accessible names;
+  unavailable boundary actions are disabled, and focus stays on the moved row.
+- The selected-stage inspector heading is programmatically associated with its
+  stage row. Required fields expose a textual required indicator plus native
+  `required`; type labels remain visible and errors set `aria-invalid` and
+  `aria-describedby` without relying on color.
+- Diagnostic locate actions parse only returned JSON-pointer locations. They
+  select the matching stage, switch to Form or YAML as applicable, focus the
+  exact control when represented, and otherwise focus the inspector or YAML
+  error summary. The validation band uses `aria-live="polite"`; request-level
+  failures use `role="alert"` without moving focus unexpectedly.
+- Copy and dry-run inputs use labelled in-page modal dialogs with focus trap,
+  Escape/cancel, initial focus, error summary, and focus return to the invoking
+  command. A destructive remove action requires the same in-page confirmation
+  pattern. No native prompt is retained.
+- Form/YAML and kind tabs support Left/Right, Home, and End. Every hover,
+  pressed, focus-visible, disabled, pending, valid, warning/fallback, and error
+  state follows UI-013 semantic colors and remains distinguishable by text or
+  icon as well as color.
+
+### Responsive Behavior
+
+At widths below 900 px, the page title and kind tabs wrap without changing
+document order. `studio-workspace` becomes one column: the Profile pane has an
+intrinsic-content height capped at 220 px, then the editor follows immediately.
+Form mode also becomes one column with the stage pane above the selected-stage
+inspector. Neither pane receives a viewport-derived minimum height that leaves
+blank space. The toolbar wraps Form/YAML first and commands into subsequent
+rows while retaining source order and minimum 26 px icon-button geometry.
+
+Long Profile/Plugin IDs use ellipsis only where the full value is available by
+accessible name/title. YAML, plan preview, and long schema values scroll within
+their labelled regions. Parameter rows change from label/control/type columns
+to stacked labels below 560 px. Fallback chips wrap; they never force page
+overflow. Dialog width is `min(100% - 24px, 640px)` with bounded internal
+scroll. At both 1440 x 900 and 644 x 900,
+`document.documentElement.scrollWidth <= innerWidth`, all visible controls
+have non-zero geometry, and no action overlaps or clips adjacent text.
+
+### Deterministic Visual Regression Plan
+
+Create `tests/visual/baselines/s023/manifest.json` using the same pinned Chrome,
+Archivo, locale, media, stabilization, RGBA comparison, channel tolerance 12,
+maximum differing-pixel ratio 0.005, immutable-baseline policy, and prototype
+archive SHA-256 convention as S-022 and S-024 through S-028. Record fixture
+revision `s023-profile-studio-parity-v2`, UI anchors `UI-006` and `UI-013`, and
+reviewed SHA-256 values for each PNG. Baselines are reviewed application
+screenshots, not direct pixel comparisons against the executable prototype,
+because prototype-only data and controls are explicitly excluded.
+
+Capture this minimum matrix at 1440 x 900 and 644 x 900:
+
+| Scenario | Required visible evidence |
+|---|---|
+| `studio-query-valid` | Query tab, dense Profile rows, selected stage and inspector, typed ports/schema fields, matching successful validation |
+| `studio-query-invalid` | Field-addressable compile diagnostic, selected failing stage, disabled save/dry run |
+| `studio-query-draft-yaml` | Real declarative YAML, draft state, Apply to Form, fixed validation band |
+| `studio-ingestion-fallbacks` | Fixed axes/sub-stage hierarchy, ordered fallback chips, quality/exhaustion policy |
+| `studio-unavailable` | Stable page hierarchy and retryable request failure without fabricated Profile facts |
+
+Before every capture, wait for `document.readyState`, `document.fonts.ready`,
+the expected fixture request count, no pending Studio state, and two animation
+frames. Normalize fixture timestamps, IDs, digests, and Registry descriptors;
+disable animation/transition/caret exactly as in the shared capture manifest.
+Assertions accompany pixels: correct tab semantics, selected-stage focus,
+compatible-only options, schema types and required markers, stale-response
+rejection, locate behavior, modal focus/return, action eligibility by matching
+digest, no browser prompts, no horizontal page overflow, and non-overlapping
+controls. Dynamic timestamps are fixed in fixtures rather than masked so the
+entire rendered surface remains regression-covered.
+
+Focused verification covers the additive service/API projections and all five
+browser scenarios, then reruns S-003, S-004, S-011, S-022, and existing S-023
+contract suites. The older reachability-only Studio screenshots are replaced
+by manifest comparisons; Registry baselines and UI-007 behavior remain
+unchanged.
+
 ## Open Questions
 
 None. The pipeline may proceed directly to development.
@@ -285,6 +541,9 @@ product decision is required.
 The UI-007 parity repair above was explicitly confirmed by the user on
 2026-09-14 and is approved for implementation.
 
+The UI-006/UI-013 Profile Studio parity repair above was explicitly confirmed
+by the user on 2026-09-15 and is approved for immediate pipeline development.
+
 ## Change History
 
 - **2026-09-12:** Created just-in-time implementation design from confirmed
@@ -292,3 +551,7 @@ The UI-007 parity repair above was explicitly confirmed by the user on
   workbench code.
 - **2026-09-14:** Added the confirmed full-width Registry table, actual-kind
   filters, capability search, and modal contract-detail parity repair.
+- **2026-09-15:** Added the confirmed UI-006/UI-013 Profile Studio parity repair
+  covering the three-level editor hierarchy, authoritative async state,
+  bounded additive API projections, accessible responsive interactions, and
+  deterministic reviewed visual baselines.
