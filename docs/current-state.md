@@ -290,3 +290,7 @@ change before starting another delivery pipeline.
   eighteen reviewed desktop/narrow visual baselines. Independent acceptance
   and repaired final review passed; Docker PostgreSQL execution remains blocked
   before the fixture by the known local `LOCAL_START_FAILED` condition.
+- **2026-09-15:** Repaired S-023 candidate copy to retarget only formal Query
+  and Ingestion Profile references. Focused contract verification and final
+  independent review passed; unrelated configuration and source Profiles stay
+  unchanged.
