@@ -46,6 +46,40 @@ def _binding() -> dict[str, object]:
     return {"artifact_id": "12345678-1234-5678-1234-567812345678", "artifact_type": "search.index.result", "schema_revision": "v1", "content_digest": "a" * 64, "byte_size": 1}
 
 
+def _ingestion_document() -> dict[str, object]:
+    axes: dict[str, object] = {}
+    previous = "document.source"
+    for axis in ("extraction", "structure", "chunking", "enrichment", "embedding", "indexing"):
+        configuration = {"corpus": "ingestion-source"} if axis == "enrichment" else {}
+        axes[axis] = {
+            "candidates": [{
+                "plugin_id": "transform.synthetic@1",
+                "configuration": configuration,
+                "inputs": {"source": previous},
+                "outputs": ["result"],
+                "accept_quality": ["PASS", "WARN", "FAIL"],
+            }]
+        }
+        previous = f"{axis}.result"
+    other_axes = json.loads(json.dumps(axes))
+    return {
+        "schema_version": "v1",
+        "default_profile_id": "ingestion-source",
+        "profiles": [
+            {"profile_id": "ingestion-source", "axes": axes},
+            {"profile_id": "ingestion-other", "axes": other_axes},
+        ],
+        "document_class_rules": [
+            {"rule_id": "annual", "document_class": "annual-report", "profile_id": "ingestion-source"},
+            {"rule_id": "memo", "document_class": "memo", "profile_id": "ingestion-other"},
+        ],
+        "preflight_rules": [
+            {"rule_id": "pdf", "when": {"eq": ["document.extension", "pdf"]}, "profile_id": "ingestion-source"},
+            {"rule_id": "scanned", "when": {"eq": ["document.is_scanned", True]}, "profile_id": "ingestion-other"},
+        ],
+    }
+
+
 def test_yaml_round_trip_persists_normalized_working_profile_and_survives_service_restart() -> None:
     async def exercise() -> None:
         repository = _Repository()
@@ -101,6 +135,11 @@ def test_fastapi_profile_save_get_and_copy_return_json_safe_persisted_working_va
     monkeypatch.setattr(api_module.TraceRepository, "connect", connect)
     client = TestClient(create_app(settings, catalog))
     document = _document()
+    document["selection_rules"] = [{
+        "rule_id": "fact",
+        "question_class": "fact",
+        "profile_id": "text-hybrid",
+    }]
 
     saved = client.put("/api/workbench/profiles/text-hybrid", json={"kind": "query", "document": document})
     assert saved.status_code == 200
@@ -121,6 +160,10 @@ def test_fastapi_profile_save_get_and_copy_return_json_safe_persisted_working_va
     copied = client.post("/api/workbench/profiles/text-hybrid/copy?copy_id=text-hybrid-copy")
     assert copied.status_code == 201
     assert copied.json()["profileId"] == "text-hybrid-copy"
+    assert copied.json()["document"]["selection_rules"][0]["profile_id"] == "text-hybrid-copy"
+    duplicate = client.post("/api/workbench/profiles/text-hybrid/copy?copy_id=text-hybrid-copy")
+    assert duplicate.status_code == 404
+    assert duplicate.json()["code"] == "PROFILE_COPY_UNAVAILABLE"
     summary = client.get("/api/workbench/profiles?kind=query&q=text-hybrid").json()[0]
     assert summary["profileId"] == "text-hybrid"
     assert summary["validationState"] == "VALID"
@@ -129,6 +172,58 @@ def test_fastapi_profile_save_get_and_copy_return_json_safe_persisted_working_va
     assert summary["stageSummary"].startswith("retrieve")
     assert summary["documentDigest"] == saved.json()["documentDigest"]
     assert isinstance(summary["checkedAt"], str)
+
+
+def test_query_candidate_copy_retargets_only_source_profile_references() -> None:
+    async def exercise() -> None:
+        service = StudioService()
+        document = _document()
+        other = json.loads(json.dumps(document["profiles"][0]))
+        other["profile_id"] = "text-other"
+        document["profiles"].append(other)
+        document["selection_rules"] = [
+            {"rule_id": "fact", "question_class": "fact", "profile_id": "text-hybrid"},
+            {"rule_id": "summary", "question_class": "summary", "profile_id": "text-other"},
+        ]
+        document["profiles"][0]["stages"][0]["configuration"]["corpus"] = "text-hybrid"
+
+        saved = await service.save("text-hybrid", "query", document)
+        assert saved.profileId == "text-hybrid"
+        original_document = json.loads(json.dumps(saved.document))
+        copied = await service.copy("text-hybrid", "text-hybrid-copy")
+
+        assert copied is not None
+        assert copied.document["default_profile_id"] == "text-hybrid-copy"
+        assert [item["profile_id"] for item in copied.document["profiles"]] == ["text-hybrid-copy", "text-other"]
+        assert [item["profile_id"] for item in copied.document["selection_rules"]] == ["text-hybrid-copy", "text-other"]
+        assert copied.document["profiles"][0]["stages"][0]["configuration"]["corpus"] == "text-hybrid"
+        original = await service.get_profile("text-hybrid")
+        assert original is not None and original.document == original_document
+
+    asyncio.run(exercise())
+
+
+def test_ingestion_candidate_copy_retargets_both_rule_collections_only() -> None:
+    async def exercise() -> None:
+        service = StudioService()
+        document = _ingestion_document()
+
+        saved = await service.save("ingestion-source", "ingestion", document)
+        assert saved.profileId == "ingestion-source"
+        original_document = json.loads(json.dumps(saved.document))
+        copied = await service.copy("ingestion-source", "ingestion-copy")
+
+        assert copied is not None
+        assert copied.document["default_profile_id"] == "ingestion-copy"
+        assert [item["profile_id"] for item in copied.document["profiles"]] == ["ingestion-copy", "ingestion-other"]
+        assert [item["profile_id"] for item in copied.document["document_class_rules"]] == ["ingestion-copy", "ingestion-other"]
+        assert [item["profile_id"] for item in copied.document["preflight_rules"]] == ["ingestion-copy", "ingestion-other"]
+        configuration = copied.document["profiles"][0]["axes"]["enrichment"]["candidates"][0]["configuration"]
+        assert configuration["corpus"] == "ingestion-source"
+        original = await service.get_profile("ingestion-source")
+        assert original is not None and original.document == original_document
+
+    asyncio.run(exercise())
 
 
 def test_fastapi_profile_rejects_unsafe_declarative_input_without_persisting(settings: Settings, catalog: CapabilityCatalog, monkeypatch) -> None:

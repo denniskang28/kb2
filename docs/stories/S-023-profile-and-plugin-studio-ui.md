@@ -99,3 +99,6 @@ None. Editor and component libraries belong to Story design.
   server-authoritative summaries and canonical YAML, three-level form editing,
   guarded async actions, exact diagnostic focus/ARIA, responsive desktop/narrow
   layouts, and ten reviewed visual baselines; independent review passed.
+- **2026-09-15:** Repaired candidate copy so Query selection rules and
+  Ingestion document-class/preflight rules follow the new Profile ID while
+  unrelated business configuration and the saved source remain unchanged.

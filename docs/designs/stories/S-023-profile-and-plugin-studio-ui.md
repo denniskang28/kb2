@@ -529,6 +529,31 @@ contract suites. The older reachability-only Studio screenshots are replaced
 by manifest comparisons; Registry baselines and UI-007 behavior remain
 unchanged.
 
+### Candidate-Copy Reference Repair
+
+The existing copy endpoint and persistence contract remain unchanged. On a
+deep copy of the saved canonical document, `StudioService.copy` must retarget
+only formal references whose value exactly equals the source Profile ID:
+
+- always `default_profile_id` and matching `profiles[].profile_id`;
+- for an Ingestion Profile, `document_class_rules[].profile_id` and
+  `preflight_rules[].profile_id`;
+- for a Query Profile, `selection_rules[].profile_id`.
+
+Choose the rule collections from the server-owned `source.kind` through a
+fixed allowlist, then pass the transformed document through the existing
+validation and save path. Do not recursively replace strings: references to
+other Profiles and unrelated nested configuration values remain byte-for-byte
+equivalent, including a business field such as `configuration.fields.corpus`
+whose value happens to equal the source Profile ID. This repair changes no API,
+schema, persistence model, migration, or browser interaction.
+
+Focused contract tests must cover Query selection rules and both Ingestion rule
+collections, assert that the original saved document is unchanged, and assert
+that unrelated nested equal-valued configuration survives the copy. Existing
+duplicate-target rejection and successful API copy behavior remain regression
+requirements.
+
 ## Open Questions
 
 None. The pipeline may proceed directly to development.
@@ -544,6 +569,10 @@ The UI-007 parity repair above was explicitly confirmed by the user on
 The UI-006/UI-013 Profile Studio parity repair above was explicitly confirmed
 by the user on 2026-09-15 and is approved for immediate pipeline development.
 
+The candidate-copy reference repair above is approved by the S-023 repair
+`story-pipeline` invocation on 2026-09-15; no separate product decision is
+required.
+
 ## Change History
 
 - **2026-09-12:** Created just-in-time implementation design from confirmed
@@ -555,3 +584,6 @@ by the user on 2026-09-15 and is approved for immediate pipeline development.
   covering the three-level editor hierarchy, authoritative async state,
   bounded additive API projections, accessible responsive interactions, and
   deterministic reviewed visual baselines.
+- **2026-09-15:** Added the approved candidate-copy repair design for exact
+  kind-specific Profile reference retargeting while preserving unrelated
+  configuration values.

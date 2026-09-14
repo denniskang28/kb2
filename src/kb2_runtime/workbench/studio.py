@@ -184,10 +184,19 @@ class StudioService:
         if source is None or await self.get_profile(copy_id) is not None:
             return None
         document = __import__("copy").deepcopy(source.document)
-        document["default_profile_id"] = copy_id
+        if document.get("default_profile_id") == profile_id:
+            document["default_profile_id"] = copy_id
         for profile in document.get("profiles", []):
             if profile.get("profile_id") == profile_id:
                 profile["profile_id"] = copy_id
+        reference_fields = {
+            "ingestion": ("document_class_rules", "preflight_rules"),
+            "query": ("selection_rules",),
+        }
+        for field in reference_fields.get(source.kind, ()):
+            for rule in document.get(field, []):
+                if rule.get("profile_id") == profile_id:
+                    rule["profile_id"] = copy_id
         saved = await self.save(copy_id, source.kind, document)
         return saved if isinstance(saved, WorkspaceProfile) else None
 

@@ -280,3 +280,7 @@ Deliver S-029 through the Story Pipeline.
   server-owned upload/preflight/Profile flow and a unified document Inspector
   with real source preview, applicable Canonical/table views, related RAG
   Chunks, and synchronized source locators.
+- **2026-09-15:** Repaired S-023 candidate copy to retarget only formal Query
+  and Ingestion Profile references. Focused contract verification and final
+  independent review passed; unrelated configuration and source Profiles stay
+  unchanged.
