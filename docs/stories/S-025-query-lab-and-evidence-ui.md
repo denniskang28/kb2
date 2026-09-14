@@ -98,3 +98,9 @@ None. Exact query controls and renderer integration belong to Story design.
   candidate projections, Evidence-to-Context synchronization, authoritative
   final-state behavior, async stale-response protection, and eight reviewed
   desktop/narrow visual baselines.
+- **2026-09-14:** Extended diagnostic parity with pinned Search Artifact
+  validation, exact document/chunk decision paths, lineage-proven source
+  labels, bounded candidate excerpts, stage timing, progressive Evidence,
+  separated citation/source-preview actions, and fourteen reviewed
+  desktop/narrow visual baselines covering factual, table, hierarchy,
+  clarification, abstention, successful repair, and exhausted repair states.

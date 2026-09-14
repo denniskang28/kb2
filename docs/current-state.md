@@ -231,9 +231,9 @@ when another product change is confirmed.
   review passed.
 - **2026-09-14:** S-025 UI-reference parity repair aligned Query Lab controls,
   production-typed candidate and Context/Evidence diagnosis, authoritative final
-  states, synchronized source inspection, async authority, and eight responsive
-  visual baselines with UI-005, UI-008, and UI-013. Independent acceptance and
-  final review passed.
+  states, synchronized source inspection, async authority, exact pinned-index
+  provenance, and fourteen responsive visual baselines with UI-005, UI-008,
+  and UI-013. Independent acceptance and final review passed.
 - **2026-09-14:** S-026 UI-reference parity repair aligned Evaluation Dataset
   editing and typed Evaluation Run manifest, layered metrics, gates,
   applicability, Judge calibration, and failed-case evidence with UI-009,
