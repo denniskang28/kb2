@@ -1878,6 +1878,41 @@ def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflo
 
 @pytest.mark.skipif(
     not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for real Registry evidence",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+def test_real_app_registry_remains_populated_without_database_run_history(tmp_path: Path, width: int) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {
+        **os.environ,
+        "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}",
+        "KB2_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+        "KB2_DATABASE_PASSWORD_FILE": str(tmp_path / "missing-database-password"),
+        "KB2_PROBE_TIMEOUT_SECONDS": "0.1",
+    }
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "kb2_runtime.api:app", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    browser = subprocess.Popen(
+        [str(CHROME), "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--remote-allow-origins=*", f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / f'real-registry-{width}'}", f"http://127.0.0.1:{port}/workbench/plugins"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    try:
+        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 120; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Real Registry did not become ready'); }; const rows = await wait(() => { const values = [...document.querySelectorAll('.registry-select')]; return values.length > 1 ? values : null; }); rows.find(x => x.textContent === 'retriever.keyword@1').click(); const detail = await wait(() => { const value = document.querySelector('.registry-detail'); return value?.innerText.includes('输出端口') ? value : null; }); return {rows: rows.length, actualDescriptor: rows.some(x => x.textContent === 'retriever.keyword@1'), detail: detail.innerText.includes('配置 Schema') && detail.innerText.includes('安全示例'), failureAbsent: !document.body.innerText.includes('PLUGIN_REGISTRY_UNAVAILABLE'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: innerWidth >= 900 || detail.getAttribute('role') === 'dialog'}; })()"""
+        result = _cdp(int(debug_port), expression, await_promise=True)
+        assert result["rows"] > 1
+        assert result == {"rows": result["rows"], "actualDescriptor": True, "detail": True, "failureAbsent": True, "overflow": True, "modal": True}
+        _capture_cdp(int(debug_port), tmp_path / f"real-registry-populated-{width}.png")
+    finally:
+        browser.terminate()
+        browser.wait(timeout=10)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
     reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for document preflight state evidence",
 )
 def test_fixture_backed_document_preflight_loading_error_retry_and_modal_keyboard(tmp_path: Path) -> None:

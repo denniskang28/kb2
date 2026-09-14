@@ -165,6 +165,31 @@ def test_registry_compatibility_is_server_owned_and_detail_projects_bounded_run_
     asyncio.run(exercise())
 
 
+def test_real_registry_routes_accept_empty_filters_and_survive_run_history_unavailability(settings: Settings, catalog: CapabilityCatalog, monkeypatch) -> None:
+    async def report(*_: object, **__: object):
+        return SimpleNamespace(capabilities=())
+
+    async def unavailable_repository(**_: object):
+        raise RuntimeError("test repository unavailable")
+
+    monkeypatch.setattr(api_module.HealthService, "report", report)
+    monkeypatch.setattr(api_module.TraceRepository, "connect", unavailable_repository)
+    client = TestClient(create_app(settings, catalog))
+
+    response = client.get("/api/workbench/plugins?kind=&runner=&readiness=&q=")
+    assert response.status_code == 200
+    assert len(response.json()) > 1
+    assert {item["pluginId"] for item in response.json()} >= {"retriever.keyword@1"}
+
+    detail = client.get("/api/workbench/plugins/retriever.keyword@1")
+    assert detail.status_code == 200
+    assert detail.json()["pluginId"] == "retriever.keyword@1"
+    assert detail.json()["configurationSchema"]["type"] == "object"
+    assert detail.json()["recentRuns"] == []
+
+    assert client.get("/api/workbench/plugins?runner=unknown").status_code == 422
+
+
 def test_query_dry_run_recompiles_saved_profile_and_delegates_only_artifact_ids() -> None:
     async def exercise() -> None:
         repository, runner = _Repository(), _Runner()
