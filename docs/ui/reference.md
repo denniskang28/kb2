@@ -144,7 +144,8 @@ user-facing version-management behavior.
 - **Stable Visual Scope:** Plugin ID, kind, runner type, accepted and output
   schemas, capabilities, local readiness, implementation digest, contract-test
   result, configuration schema, resource hints, timeout, safe example, and
-  recent Runs
+  recent Runs. The Registry list retains the prototype's compact search field,
+  low-profile kind filters, and dense single-line data rows.
 - **Allowed Deviations:** Initial kinds and registry rows are limited to actually
   implemented descriptors
 - **Adoption Status:** Confirmed
