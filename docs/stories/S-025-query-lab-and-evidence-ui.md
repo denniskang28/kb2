@@ -104,3 +104,10 @@ None. Exact query controls and renderer integration belong to Story design.
   separated citation/source-preview actions, and fourteen reviewed
   desktop/narrow visual baselines covering factual, table, hierarchy,
   clarification, abstention, successful repair, and exhausted repair states.
+- **2026-09-15:** Reworked Query Lab into the reference-aligned fixed-height
+  desktop workspace with 28/40/32 independently scrolling panes, compact
+  preflight and Resolved Plan controls, Retriever-only counted tabs, a single
+  server-owned Fusion/Rerank/Context decision table, and a clearer
+  answer/Verification/Evidence hierarchy. Natural-language fixtures, fourteen
+  refreshed desktop/narrow baselines, and 1440/1280/900 geometry checks passed
+  independent acceptance and final review.

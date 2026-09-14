@@ -99,11 +99,12 @@ def test_document_label_uses_registered_opaque_source_behind_inspector_artifact(
     asyncio.run(exercise())
 
 
-def test_query_preflight_appends_plan_preview_before_submit_controls() -> None:
+def test_query_preflight_renders_compact_plan_before_submit_controls() -> None:
     source = Path("src/kb2_runtime/workbench/static/workbench.js").read_text()
     assert 'class: "query-preflight"' in source
-    assert 'el("h2", "已解析计划")' in source
-    assert "plan.append(submit);" in source and "preview.replaceChildren(plan);" in source
+    assert '"Resolved Plan"' in source
+    assert "renderPlan(p.planDigest, p.stages || [], true);" in source
+    assert "plan.append(submit);" in source and "preview.append(plan);" in source
 
 
 def test_evidence_contributor_projection_keeps_score_and_explicit_unavailable_fallbacks() -> None:

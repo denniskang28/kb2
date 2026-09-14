@@ -1,6 +1,6 @@
 # Current State
 
-- **As Of:** 2026-09-14
+- **As Of:** 2026-09-15
 - **Harness State:** Lite Harness Initialized
 - **Product Requirements:** Approved - 2026-09-10 (17 confirmed REQs)
 - **Core Design:** Approved - 2026-09-10 (16 confirmed DES records)
@@ -255,3 +255,10 @@ when another product change is confirmed.
   responsive populated and exceptional states, and eight desktop/narrow visual
   baselines. Independent acceptance and repaired final review passed; the
   existing Docker Compose startup residual remains environment-limited.
+- **2026-09-15:** S-025 workspace parity repair brought Query Lab closer to the
+  adopted reference with a fixed 28/40/32 desktop workspace, pane-local
+  scrolling, compact preflight and Resolved Plan controls, Retriever-only
+  candidate tabs, one server-owned decision path, and a summary-first
+  answer/Verification/Evidence hierarchy. Fourteen refreshed responsive
+  baselines, three desktop geometry widths, independent acceptance, and final
+  review passed.
