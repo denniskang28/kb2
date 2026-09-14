@@ -2201,13 +2201,28 @@ def test_s028_document_list_visual_matrix(tmp_path: Path, width: int, scenario: 
         selectors = {"populated": ".document-table", "empty": ".documents-surface .empty-state", "loading": ".document-list-loading", "error": ".documents-surface .notice-failure"}
         ready = f"(async()=>{{for(let i=0;i<120;i++){{if(document.querySelector('{selectors[scenario]}'))return true;await new Promise(r=>setTimeout(r,25))}}return false}})()"
         assert _cdp(debug_port, ready, await_promise=True, target_url=url) is True
-        geometry = _cdp(debug_port, "(()=>{const wrap=document.querySelector('.document-table-wrap'),commands=[...document.querySelectorAll('.documents-commands button')];return {pageOverflow:document.documentElement.scrollWidth<=innerWidth,upload:commands.some(x=>x.textContent.includes('上传并预检')),refresh:commands.some(x=>x.getAttribute('aria-label')==='刷新文档列表'),scoped:wrap?wrap.scrollWidth>wrap.clientWidth:null,actions:[...document.querySelectorAll('.document-actions .icon-button')].every(x=>Math.round(x.getBoundingClientRect().width)>=30&&Math.round(x.getBoundingClientRect().height)>=30)}})()", target_url=url)
+        geometry = _cdp(debug_port, """(()=>{const wrap=document.querySelector('.document-table-wrap'),commands=[...document.querySelectorAll('.documents-commands button')],title=document.querySelector('.documents-title'),summary=document.querySelector('.documents-summary'),table=document.querySelector('.document-table'),header=table?.querySelector('th'),cell=table?.querySelector('td'),name=document.querySelector('.document-identity strong'),source=document.querySelector('.document-identity code'),klass=document.querySelector('.document-class'),profile=document.querySelector('.document-profile'),run=document.querySelector('.document-run-link');const style=x=>x?getComputedStyle(x):null;return {pageOverflow:document.documentElement.scrollWidth<=innerWidth,upload:commands.some(x=>x.textContent.includes('上传并预检')),refresh:commands.some(x=>x.getAttribute('aria-label')==='刷新文档列表'),scoped:wrap?wrap.scrollWidth>wrap.clientWidth:null,actions:[...document.querySelectorAll('.document-actions .icon-button')].every(x=>Math.round(x.getBoundingClientRect().width)>=30&&Math.round(x.getBoundingClientRect().height)>=30),titleHeight:title?.getBoundingClientRect().height,summaryHeight:summary?.getBoundingClientRect().height,summaryText:summary?.textContent,tableFont:style(table)?.fontSize,tableLayout:style(table)?.tableLayout,headerRule:style(header)?.borderBottomWidth,verticalRule:style(cell)?.borderRightWidth,rowHeight:cell?.parentElement.getBoundingClientRect().height,nameSingle:name?style(name).whiteSpace==='nowrap':null,runSingle:run?style(run).whiteSpace==='nowrap':null,runColor:run?style(run).color:null,infoColor:getComputedStyle(document.documentElement).getPropertyValue('--color-info').trim(),mono:[klass,profile,run].filter(Boolean).every(x=>style(x).fontFamily.includes('monospace')),fullValues:name?name.title===name.textContent&&source.title===source.textContent&&run.title===run.textContent:null}})()""", target_url=url)
         assert geometry["pageOverflow"] and geometry["upload"] and geometry["refresh"] and geometry["actions"]
+        assert 29 <= geometry["summaryHeight"] <= 31
         if scenario == "populated":
             assert geometry["scoped"] is (width < 900)
+            assert geometry["tableFont"] == "12.5px" and geometry["tableLayout"] == "auto"
+            assert geometry["headerRule"] == "2px" and geometry["verticalRule"] == "0px"
+            assert 48 <= geometry["rowHeight"] <= 50
+            assert geometry["nameSingle"] and geometry["runSingle"] and geometry["mono"] and geometry["fullValues"]
+            assert geometry["runColor"] == "rgb(29, 78, 216)"
+            assert geometry["summaryText"] == "已持久化文档 · 4 份"
             text_state = _cdp(debug_port, "document.body.innerText", target_url=url)
             assert "contract-framework-sample.pdf" in text_state and "不可用" in text_state
             assert "NOT_INGESTED" not in text_state and "删除" not in text_state
+        elif scenario == "loading":
+            assert geometry["summaryText"] == "正在读取持久化文档"
+        elif scenario == "error":
+            assert geometry["summaryText"] == "文档数量暂不可用"
+        else:
+            assert geometry["summaryText"] == "已持久化文档 · 0 份"
+        if width >= 900:
+            assert 56 <= geometry["titleHeight"] <= 58
         image = tmp_path / f"documents-{scenario}-{width}.png"
         _capture_cdp(debug_port, image, target_url=url)
         _assert_manifest_visual(debug_port, image, image.name, target_url=url, baseline_root=S028_BASELINE_ROOT, story="S-028")

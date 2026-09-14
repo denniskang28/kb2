@@ -444,16 +444,26 @@ function documents() {
       "aria-live": "polite",
       hidden: "",
     }),
-    header = heading("文档", "已持久化的提交、处理状态与诊断入口"),
+    header = el("header", "", { class: "title-row documents-title" }),
+    headingCopy = el("div", "", { class: "documents-heading" }),
+    summary = el("div", "", {
+      class: "documents-summary",
+      "aria-live": "polite",
+    }),
     commands = el("div", "", { class: "documents-commands" }),
     open = button("", () => showDialog()),
     refresh = iconButton("refresh", "刷新文档列表", () => load(false));
   open.className = "command-link command-primary";
   open.append(icon("upload"), el("span", "上传并预检"));
+  headingCopy.append(
+    el("h1", "文档实验"),
+    el("span", "已持久化的提交、处理状态与诊断入口", {
+      class: "documents-purpose",
+    }),
+  );
   commands.append(refresh, open);
-  header.classList.add("documents-title");
-  header.append(commands);
-  main.append(header, surface, current);
+  header.append(headingCopy, commands);
+  main.append(header, summary, surface, current);
   shell(main);
   let generation = 0,
     items = [],
@@ -471,6 +481,14 @@ function documents() {
     return `/workbench/runs?${p}`;
   };
   const renderList = () => {
+    summary.textContent =
+      mode === "loading"
+        ? "正在读取持久化文档"
+        : mode === "error"
+          ? "文档数量暂不可用"
+          : nextCursor
+            ? `已加载 ${items.length} 份文档 · 还有更多`
+            : `已持久化文档 · ${items.length} 份`;
     surface.replaceChildren(
       el("h2", "已上传文档", { id: "documents-list-title", class: "sr-only" }),
     );
@@ -527,16 +545,33 @@ function documents() {
     for (const row of items) {
       const tr = el("tr"),
         identity = el("div", "", { class: "document-identity" }),
-        name = el("strong", row.filename),
-        meta = el("span", byteLabel(row.byteSize)),
-        source = el("code", row.sourceArtifactId);
-      identity.append(name, meta, source);
+        glyph = el("span", "", { class: "document-glyph", "aria-hidden": "true" }),
+        identityCopy = el("span", "", { class: "document-identity-copy" }),
+        name = el("strong", row.filename, { title: row.filename }),
+        meta = el("span", "", { class: "document-meta" }),
+        source = el("code", row.sourceArtifactId, {
+          title: row.sourceArtifactId,
+        });
+      glyph.append(icon("file"));
+      meta.append(el("span", byteLabel(row.byteSize)), source);
+      identityCopy.append(name, meta);
+      identity.append(glyph, identityCopy);
       const run = row.latestRun
           ? el("a", row.latestRun.id, {
               href: runHref(row.latestRun.id),
               class: "document-run-link",
+              title: row.latestRun.id,
             })
           : el("span", "不可用", { class: "muted" }),
+        documentClass = el(
+          "span",
+          row.documentClass || "不可用",
+          { class: "document-class" },
+        ),
+        profile = el("code", row.profileId || "不可用", {
+          class: "document-profile",
+          title: row.profileId || "不可用",
+        }),
         actions = el("div", "", { class: "document-actions" });
       if (row.actions?.sourceArtifactId)
         actions.append(
@@ -555,8 +590,8 @@ function documents() {
       [
         identity,
         row.format || row.mediaType || "不可用",
-        row.documentClass || "不可用",
-        row.profileId || "不可用",
+        documentClass,
+        profile,
         run,
         statusTag(statusLabel(state), tone),
         actions,

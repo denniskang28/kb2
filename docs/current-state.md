@@ -262,3 +262,9 @@ when another product change is confirmed.
   answer/Verification/Evidence hierarchy. Fourteen refreshed responsive
   baselines, three desktop geometry widths, independent acceptance, and final
   review passed.
+- **2026-09-15:** S-028 visual parity repair aligned the Documents title,
+  truthful summary strip, dense table geometry, document identity hierarchy,
+  and diagnostic typography with UI-003 and UI-013 while preserving real
+  states, supported actions, and 30 px accessible controls. Eight refreshed
+  desktop/narrow baselines, focused regression verification, and final review
+  passed.
