@@ -358,6 +358,56 @@ UI and browser fixtures; automated/visual evidence. If work is parallelized,
 each group owns only its listed files and must coordinate the typed contracts
 before editing shared call sites.
 
+## 2026-09-15 Visual Parity Repair
+
+The user confirmed a presentation-only repair against UI-003 and UI-013. It
+does not change the document API, persisted data, authoritative state labels,
+upload/preflight, refresh, paging, Run navigation, Artifact eligibility, or the
+existing 30 x 30 accessible actions. Prototype control chrome, synthetic copy
+and values, 26 px controls, start-Ingestion, Query, and invented `INDEXED`
+semantics remain excluded.
+
+Implementation is limited to `workbench.js` and page-local `workbench.css`:
+
+- Replace the generic stacked Documents heading with a `文档实验` 22 px/800
+  inline title and 12 px truthful purpose copy. Use the reference rhythm of
+  `16px 16px 10px`, a 2 px ink bottom rule, and an approximately 57 px desktop
+  band. Keep Refresh and the same upload handler at right; its shorter visible
+  label may be `上传文档` without changing dialog behavior.
+- Add a stable approximately 30 px, 11 px muted summary strip under the title.
+  It reports client-known facts only: loaded item count for populated/empty,
+  `正在读取持久化文档` while loading, and `文档数量暂不可用` on initial error.
+  It must not claim a total while a next cursor exists.
+- Align the populated table to the reference with `min-width:900px`, automatic
+  column sizing, 12.5 px body type, `6px 10px` header padding, `7px 10px` body
+  padding, a 2 px ink header rule, soft horizontal row rules, and no vertical
+  cell borders. Target approximately 49 px rows; do not retain the current
+  fixed 28/10/12/16/15/10/9 percentage tracks.
+- Compose the first cell as a framed 26 x 34 px document glyph using the
+  existing Lucide `file` asset plus a two-line min-width-zero text block.
+  Ellipsize filename and source Artifact ID visually, preserve their complete
+  DOM text, and expose complete values through `title`; byte size remains on
+  the muted metadata line.
+- Render processing class as an 11 px zero-radius monospace outlined label and
+  Profile as 11.5 px monospace. Render the unchanged complete Run ID as a
+  single-line ellipsized 11.5 px monospace link in `var(--color-info)`, with
+  full text and `title` retained. Keep server-owned Chinese status labels and
+  the current semantic status tones.
+- Below 900 px, title/purpose and commands may wrap, but the summary strip must
+  not overflow. `.document-table-wrap` remains the only horizontal scroller,
+  retains the 900 px table minimum, and all actions remain at least 30 px.
+
+Update `test_s028_document_list_visual_matrix` with reference-oriented geometry
+and computed-style assertions: approximately 57 px desktop title band, 30 px
+summary strip, 12.5 px table type, 2 px header rule, no vertical cell border,
+single-line filename/Run layout, blue Run link, monospace class/Profile/Run,
+and full diagnostic values despite ellipsis. Preserve the existing populated,
+empty, loading, error, narrow-overflow, paging, stale-response, inspector focus,
+and unsupported-action assertions. Intentionally regenerate and review only the
+eight S-028 baseline PNGs and their manifest hashes at 1440 x 900 and 644 x 900;
+older Story baselines remain unchanged. This makes parity measurable rather
+than proving only agreement with a newly recorded self-baseline.
+
 ## Open Questions
 
 None. Product behavior is fully specified by S-028; this design resolves its
@@ -373,3 +423,7 @@ directly to implementation; no separate design approval gate is required.
 - **2026-09-14:** Created the just-in-time design from the confirmed S-028
   contract, exact UI anchors, S-024 dependency, and current trace/workbench
   implementation. Approved for immediate Story Pipeline development.
+- **2026-09-15:** Added the user-confirmed UI-003/UI-013 visual parity repair
+  for the Documents title, truthful summary strip, table geometry, document
+  identity hierarchy, diagnostic typography/colors, responsive constraints,
+  and reference-oriented visual verification. Product behavior is unchanged.

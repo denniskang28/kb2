@@ -28,13 +28,13 @@
   },
   "comparison": {"colorSpace": "RGBA", "channelTolerance": 12, "maximumDifferingPixelRatio": 0.005, "baselineUpdatesAutomatic": false},
   "baselines": [
-    {"file": "documents-populated-1440.png", "scenario": "populated", "viewport": [1440, 900], "sha256": "fdc57f460f4a26e0bca0ff2b2a4c3d34c6bb0367c7a59c0b21fba22ffac8defc"},
-    {"file": "documents-populated-644.png", "scenario": "populated", "viewport": [644, 900], "sha256": "914595057b0981468d75a3d7e1294e9f8a2fe27942c9f87c24e8b50b57043e1b"},
-    {"file": "documents-empty-1440.png", "scenario": "empty", "viewport": [1440, 900], "sha256": "8268f61fed790709b4f6532e305aa42e36cdcd7a866ac61e97010ca7b06e3f0c"},
-    {"file": "documents-empty-644.png", "scenario": "empty", "viewport": [644, 900], "sha256": "4c6638828b9e9c75a95b62fe3671529290d083c76790209f57e69ed88b3c68ce"},
-    {"file": "documents-loading-1440.png", "scenario": "loading", "viewport": [1440, 900], "sha256": "b28bfaca3126b8111a1d936154f4274e65c3d32ebd1c6ea28b4877b1b4f38cd4"},
-    {"file": "documents-loading-644.png", "scenario": "loading", "viewport": [644, 900], "sha256": "82a24146653815fbfbd950474211e60524262bccce5b0f4582cf33c0690ae59b"},
-    {"file": "documents-error-1440.png", "scenario": "error", "viewport": [1440, 900], "sha256": "9bf01079ba2664f125c7bed7f98c22767d6b8a91b2b6ed71047b6893090d032d"},
-    {"file": "documents-error-644.png", "scenario": "error", "viewport": [644, 900], "sha256": "aedd611e25da0ccb7df7a60d308bcf8b0d7640b6c8116cd4e1040aa0b52db92e"}
+    {"file": "documents-populated-1440.png", "scenario": "populated", "viewport": [1440, 900], "sha256": "14ac377717496a609d81e3726b98d642cfa6adf334d4ed151c1f6b9d1120bad4"},
+    {"file": "documents-populated-644.png", "scenario": "populated", "viewport": [644, 900], "sha256": "6428c61e81d960cebcb641a04d676a636cb520b72f3692f2d1fc1781ebec6f38"},
+    {"file": "documents-empty-1440.png", "scenario": "empty", "viewport": [1440, 900], "sha256": "0ec5f963c8489645613ac9f58efef5f4266272482f0c700f06c8543316e8aa4e"},
+    {"file": "documents-empty-644.png", "scenario": "empty", "viewport": [644, 900], "sha256": "c88083b41fd85b23ae4b7c82072794690a7394d3acd7459c7c11610b88c6010c"},
+    {"file": "documents-loading-1440.png", "scenario": "loading", "viewport": [1440, 900], "sha256": "d0ac180878d51d079c6c7e9993ea0067ea68b5adf7df870ee8200f5be58bcaa5"},
+    {"file": "documents-loading-644.png", "scenario": "loading", "viewport": [644, 900], "sha256": "92d12cddca489fc5a7c45822927760f0f83a790cc6e8dbf25fb62cdfccd6289f"},
+    {"file": "documents-error-1440.png", "scenario": "error", "viewport": [1440, 900], "sha256": "dbebe4f7d0a284f401a8ea1f92babeb59c8304757f5b09c405b88b4e35c4e15b"},
+    {"file": "documents-error-644.png", "scenario": "error", "viewport": [644, 900], "sha256": "c02bba6eed5f0f845a4dadf3b88b357822585668088565dac16ca5e10e087462"}
   ]
 }
