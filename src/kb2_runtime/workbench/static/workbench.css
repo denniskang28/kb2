@@ -563,9 +563,15 @@ h3 { margin: 13px 0 4px; font-size: 12px; }
 .dialog-header, .dialog-actions { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--color-surface); }
 .dialog-header { border-bottom: 2px solid var(--color-ink); }
 .dialog-header .icon-button { margin-left: auto; }
+.upload-title-copy { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.upload-step-label { color: var(--color-muted); font-size: 12px; font-weight: 600; }
 .dialog-actions { justify-content: flex-end; border-top: 1px solid var(--color-rule); }
 .upload-dialog-body { min-height: 0; overflow-y: auto; }
 .upload-source-step { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; gap: 8px; align-items: end; padding: 12px; border-bottom: 1px solid var(--color-rule); background: var(--color-ground); }
+.upload-file-step { grid-template-columns: 1fr; min-height: 220px; align-content: center; padding: 28px; }
+.upload-file-step label { padding: 28px; border: 1px dashed var(--color-muted); background: var(--color-surface); }
+.upload-profile-step { grid-template-columns: minmax(180px, .7fr) minmax(220px, 1fr) auto; }
+.selected-file-summary { align-self: center; min-width: 0; overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .upload-source-step label { display: grid; gap: 4px; color: var(--color-muted); font-size: 10.5px; font-weight: 600; }
 .preflight-result > section, .profile-resolution, .preflight-result > dl { margin: 0; padding: 11px 12px; border: 0; border-bottom: 1px solid var(--color-rule); }
 .preflight-result h3 { margin: 0 0 6px; }
@@ -722,6 +728,7 @@ h3 { margin: 13px 0 4px; font-size: 12px; }
   .modal-backdrop { padding: 8px; }
   .upload-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
   .upload-source-step { grid-template-columns: 1fr; }
+  .upload-title-copy { display: block; }
   .definition-grid { grid-template-columns: 104px minmax(0, 1fr); }
   .ingestion-run-header { grid-template-columns: 1fr; gap: 8px; }
   .run-actions { justify-content: flex-start; }

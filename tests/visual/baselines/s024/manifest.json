@@ -38,8 +38,8 @@
     "baselineUpdatesAutomatic": false
   },
   "baselines": [
-    {"file": "documents-preflight-automatic-1440.png", "scenario": "preflight-automatic", "viewport": [1440, 900], "sha256": "635ff72a9bca26b36799d16c07d1f5a9abacb07fc528b26b49d039f3fe96f0cb"},
-    {"file": "documents-preflight-automatic-644.png", "scenario": "preflight-automatic", "viewport": [644, 900], "sha256": "80248b0268893ce9fc5f772cc9dcbf971fd32a2bc8fa58b96ba59c65608311dd"},
+    {"file": "documents-preflight-automatic-1440.png", "scenario": "preflight-automatic", "viewport": [1440, 900], "sha256": "09076d7d931b30502bb6feb2d401ba60b9cec15d7f402dc690e7e9b8eeb566e7"},
+    {"file": "documents-preflight-automatic-644.png", "scenario": "preflight-automatic", "viewport": [644, 900], "sha256": "38ac7737ac47870f0a4b535932f52f267d8b2a1b29ca08994ab16c0e6d0384f4"},
     {"file": "ingestion-state-matrix-1440.png", "scenario": "ingestion-state-matrix", "viewport": [1440, 900], "sha256": "48068e26127a171035e21370d64a7552d89b88d920572a6ac47b0f984ab1e119"},
     {"file": "ingestion-state-matrix-644.png", "scenario": "ingestion-state-matrix", "viewport": [644, 900], "sha256": "506fb4a9bb72f8ad6be0f4ecbada54c812ad807dddd6aa846cbed0e563c56ff7"},
     {"file": "artifact-canonical-source-1440.png", "scenario": "artifact-canonical-source", "viewport": [1440, 900], "sha256": "604b9ca749ab6c8a156f70e185141a40a23f456a426d2167d20675db79a9a9d2"},

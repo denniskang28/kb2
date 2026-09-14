@@ -4,6 +4,7 @@ import base64
 import asyncio
 from datetime import datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -20,7 +21,7 @@ import pytest
 import websocket
 import yaml
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from kb2_runtime.evaluation.datasets.contracts import DEFAULT_TAXONOMY, DatasetContent
 from kb2_runtime.evaluation.ingestion import MetricReport, MetricStatus, metric_report_bytes
@@ -50,6 +51,7 @@ S025_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines
 S026_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s026"
 S027_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s027"
 S028_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s028"
+S029_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s029"
 S023_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s023"
 S022_CHROME_FLAGS = (
     f"--headless={S022_CAPTURE['browser']['headlessMode']}",
@@ -176,6 +178,7 @@ _retry_preflight_attempts = 0
 _preflight_serial = 0
 _fixture_preflights: dict[str, dict[str, object]] = {}
 _fixture_preflight_receipts: list[dict[str, object]] = []
+_fixture_preflight_discards: list[str] = []
 _document_list_requests = 0
 _document_list_stale_armed = False
 _studio_copy_completions = 0
@@ -187,6 +190,7 @@ _ingestion_stop_requests: list[str] = []
 _INGESTION_RUN = "12345678-1234-5678-1234-567812345680"
 _ARTIFACT = "12345678-1234-5678-1234-567812345681"
 _VISUAL_RUN = "12345678-1234-5678-1234-567812345682"
+_CANONICAL_ARTIFACT = "12345678-1234-5678-1234-567812345683"
 _CHUNK_ARTIFACT = "12345678-1234-5678-1234-567812345684"
 _EVALUATION_DATASET = "12345678-1234-5678-1234-567812345690"
 _EVALUATION_RUN = "12345678-1234-5678-1234-567812345691"
@@ -310,17 +314,25 @@ async def fixture_document_submit(token: str, request: Request) -> JSONResponse:
     return JSONResponse({"contractVersion": "workbench-ingestion-receipt/v1", "runId": _VISUAL_RUN, "profileId": value["profileId"], "planDigest": claimed["planDigest"]}, status_code=202)
 
 
+@fixture_app.delete("/api/workbench/documents/preflights/{token}", status_code=204)
+async def fixture_document_preflight_discard(token: str) -> Response:
+    _fixture_preflight_discards.append(token)
+    _fixture_preflights.pop(token, None)
+    return Response(status_code=204)
+
+
 @fixture_app.get("/api/fixture/document-preflights")
 async def fixture_document_preflights() -> JSONResponse:
-    return JSONResponse({"tokens": list(_fixture_preflights), "receipts": _fixture_preflight_receipts})
+    return JSONResponse({"tokens": list(_fixture_preflights), "receipts": _fixture_preflight_receipts,
+                         "discards": _fixture_preflight_discards})
 
 
 def _document_list_fixture() -> list[dict[str, object]]:
     return [
-        {"sourceArtifactId": _ARTIFACT, "filename": "contract-framework-sample.pdf", "mediaType": "application/pdf", "format": "pdf", "byteSize": 4404019, "documentClass": "native_long_hierarchical", "profileId": "ing.contract-long@3", "registeredAt": "2026-09-14T08:05:00Z", "latestRun": {"id": _INGESTION_RUN, "state": "SUCCEEDED"}, "actions": {"sourceArtifactId": _ARTIFACT, "outputArtifactId": _CHUNK_ARTIFACT}},
-        {"sourceArtifactId": "22345678-1234-5678-1234-567812345681", "filename": "equipment-maintenance-scan.pdf", "mediaType": "application/pdf", "format": "pdf", "byteSize": 13421773, "documentClass": "scanned_mixed_zh_en", "profileId": "ing.ocr-mixed@2", "registeredAt": "2026-09-14T08:04:00Z", "latestRun": {"id": _VISUAL_RUN, "state": "FAILED"}, "actions": {"sourceArtifactId": "22345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
-        {"sourceArtifactId": "32345678-1234-5678-1234-567812345681", "filename": "quarterly-operations-data.xlsx", "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "format": "xlsx", "byteSize": 901120, "documentClass": "table_heavy_multi_sheet", "profileId": "ing.table-heavy@1", "registeredAt": "2026-09-14T08:03:00Z", "latestRun": {"id": "32345678-1234-5678-1234-567812345680", "state": "RUNNING"}, "actions": {"sourceArtifactId": "32345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
-        {"sourceArtifactId": "42345678-1234-5678-1234-567812345681", "filename": "product-architecture-deck.pptx", "mediaType": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "format": "pptx", "byteSize": 6396313, "documentClass": None, "profileId": "ing.slide-object@1", "registeredAt": "2026-09-14T08:02:00Z", "latestRun": {"id": "42345678-1234-5678-1234-567812345680", "state": "PENDING"}, "actions": {"sourceArtifactId": "42345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
+        {"sourceArtifactId": _ARTIFACT, "filename": "contract-framework-sample.pdf", "mediaType": "application/pdf", "format": "pdf", "byteSize": 4404019, "documentClass": "native_long_hierarchical", "profileId": "ing.contract-long@3", "registeredAt": "2026-09-14T08:05:00Z", "latestRun": {"id": _INGESTION_RUN, "state": "SUCCEEDED"}, "actions": {"inspectDocument": True, "sourceArtifactId": _ARTIFACT, "outputArtifactId": _CHUNK_ARTIFACT}},
+        {"sourceArtifactId": "22345678-1234-5678-1234-567812345681", "filename": "equipment-maintenance-scan.pdf", "mediaType": "application/pdf", "format": "pdf", "byteSize": 13421773, "documentClass": "scanned_mixed_zh_en", "profileId": "ing.ocr-mixed@2", "registeredAt": "2026-09-14T08:04:00Z", "latestRun": {"id": _VISUAL_RUN, "state": "FAILED"}, "actions": {"inspectDocument": True, "sourceArtifactId": "22345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
+        {"sourceArtifactId": "32345678-1234-5678-1234-567812345681", "filename": "quarterly-operations-data.xlsx", "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "format": "xlsx", "byteSize": 901120, "documentClass": "table_heavy_multi_sheet", "profileId": "ing.table-heavy@1", "registeredAt": "2026-09-14T08:03:00Z", "latestRun": {"id": "32345678-1234-5678-1234-567812345680", "state": "RUNNING"}, "actions": {"inspectDocument": True, "sourceArtifactId": "32345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
+        {"sourceArtifactId": "42345678-1234-5678-1234-567812345681", "filename": "product-architecture-deck.pptx", "mediaType": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "format": "pptx", "byteSize": 6396313, "documentClass": None, "profileId": "ing.slide-object@1", "registeredAt": "2026-09-14T08:02:00Z", "latestRun": {"id": "42345678-1234-5678-1234-567812345680", "state": "PENDING"}, "actions": {"inspectDocument": True, "sourceArtifactId": "42345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
     ]
 
 
@@ -349,6 +361,131 @@ async def fixture_document_list(cursor: str = "") -> JSONResponse:
         _document_list_completions.append(stale_request_number)
     return JSONResponse({"contractVersion": "workbench-document-list/v1", "items": rows,
                          "page": {"limit": 25, "nextCursor": "fixture-next" if state == "paging" and not cursor else None}})
+
+
+@fixture_app.get("/api/workbench/documents/{source_id}/inspector")
+async def fixture_document_inspector(source_id: str) -> JSONResponse:
+    row = next((item for item in _document_list_fixture() if item["sourceArtifactId"] == source_id), None)
+    if row is None:
+        return JSONResponse({"code": "DOCUMENT_NOT_FOUND"}, status_code=404)
+    if source_id == "42345678-1234-5678-1234-567812345681":
+        return JSONResponse({"code": "DOCUMENT_INSPECTOR_UNAVAILABLE"}, status_code=503)
+    complete = source_id == _ARTIFACT
+    return JSONResponse({
+        "contractVersion": "workbench-document-inspector/v1",
+        "source": {"id": source_id, "filename": row["filename"], "mediaType": row["mediaType"],
+                   "byteSize": row["byteSize"], "registeredAt": row["registeredAt"]},
+        "latestRun": row["latestRun"],
+        "preview": {"kind": "pdf" if complete else "unavailable",
+                    "contentUrl": f"/api/workbench/documents/{source_id}/content" if complete else None,
+                    "pageCount": 2 if complete else None,
+                    "reason": None if complete else "SOURCE_PREVIEW_UNAVAILABLE"},
+        "tabs": [
+            {"id": "canonical", "state": "available" if complete else "unavailable", "artifactId": _CANONICAL_ARTIFACT if complete else None, "reason": None if complete else "CANONICAL_UNAVAILABLE"},
+            {"id": "structure", "state": "available" if complete else "unavailable", "artifactId": _CANONICAL_ARTIFACT if complete else None, "reason": None if complete else "CANONICAL_UNAVAILABLE"},
+            {"id": "tables", "state": "available" if complete else "unavailable", "artifactId": _CANONICAL_ARTIFACT if complete else None, "reason": None if complete else "CANONICAL_UNAVAILABLE"},
+            {"id": "chunks", "state": "available" if complete else "unavailable", "artifactId": _CHUNK_ARTIFACT if complete else None, "reason": None if complete else "CHUNKSET_UNAVAILABLE"},
+            {"id": "metadata", "state": "available"}, {"id": "lineage", "state": "available"},
+        ],
+        "artifacts": {"source": {"id": source_id, "artifactType": "opaque.bytes", "schemaRevision": "v1"}},
+        "metadata": {"format": row["format"], "documentClass": row["documentClass"], "profileId": row["profileId"]},
+    })
+
+
+@fixture_app.get("/api/workbench/documents/{source_id}/inspector/views/{view}")
+async def fixture_document_view(source_id: str, view: str, request: Request) -> JSONResponse:
+    locator = {"kind": "pdf", "page_number": 2, "x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.3}
+    cursor = request.query_params.get("cursor")
+    limit = request.query_params.get("limit")
+    race = os.getenv("KB2_WORKBENCH_FIXTURE_STATE") == "s029-races"
+    next_cursor = None
+    if view == "chunks":
+        items = [{"id": _QUERY_CHUNK, "content": "采购合同中的付款、交付和验收条款。", "truncated": False,
+                  "tokenCount": 8, "sourceElementIds": ["elm_" + "1" * 16], "parentChunkId": None,
+                  "childChunkIds": [], "citations": [{"elementId": "elm_" + "1" * 16, "locator": locator},
+                                                       {"elementId": "elm_" + "2" * 16, "locator": {**locator, "page_number": 1}}]}]
+    elif view == "tables":
+        if cursor and limit != "10":
+            return JSONResponse({"code": "DOCUMENT_VIEW_INVALID"}, status_code=422)
+        suffix = "1"
+        cells = [
+                      {"id": "cel_" + suffix * 15 + "1", "text": "项目", "row": 0, "column": 0,
+                       "rowSpan": 1, "columnSpan": 1, "isHeader": True},
+                      {"id": "cel_" + suffix * 15 + "2", "text": "金额", "row": 0, "column": 1,
+                       "rowSpan": 1, "columnSpan": 1, "isHeader": True},
+                      {"id": "cel_" + suffix * 15 + "3", "text": "付款", "row": 1, "column": 0,
+                       "rowSpan": 1, "columnSpan": 1, "isHeader": False},
+                      {"id": "cel_" + suffix * 15 + "4", "text": "100 万元", "row": 1, "column": 1,
+                       "rowSpan": 1, "columnSpan": 1, "isHeader": False},
+                  ]
+        if race and cursor == "table-next":
+            cells = [
+                {"id": "cel_" + suffix * 15 + "5", "text": "交付", "row": 2, "column": 0,
+                 "rowSpan": 1, "columnSpan": 1, "isHeader": False},
+                {"id": "cel_" + suffix * 15 + "6", "text": "验收后", "row": 2, "column": 1,
+                 "rowSpan": 1, "columnSpan": 1, "isHeader": False},
+            ]
+        items = [{"id": "tbl_" + suffix * 16, "elementId": "elm_" + suffix * 16,
+                  "rows": 3 if race else 2, "columns": 2, "locator": locator,
+                  "cellOffset": 4 if race and cursor else 0,
+                  "totalCells": 6 if race else 4,
+                  "hasMoreCells": bool(race and not cursor), "cells": cells}]
+        if race and not cursor:
+            next_cursor = "table-next"
+    elif view in {"canonical", "structure"}:
+        if race and view == "canonical" and cursor == "slow-canonical":
+            await asyncio.sleep(0.4)
+            items = [{"id": "elm_" + "3" * 16, "kind": "paragraph", "readingOrder": 2,
+                      "parentId": "elm_" + "1" * 16, "level": None,
+                      "text": "迟到的 Canonical 分页响应", "truncated": False, "locator": locator}]
+        else:
+            items = [
+                {"id": "elm_" + "1" * 16, "kind": "heading", "readingOrder": 0, "parentId": None,
+                 "level": 1, "text": "采购合同条款", "truncated": False, "locator": locator},
+                {"id": "elm_" + "2" * 16, "kind": "heading", "readingOrder": 1,
+                 "parentId": "elm_" + "1" * 16, "level": 2,
+                 "text": "付款与验收", "truncated": False, "locator": {**locator, "page_number": 1}},
+            ]
+            if race and view == "canonical":
+                next_cursor = "slow-canonical"
+    else:
+        items = [
+            {"id": source_id, "artifactType": "opaque.bytes", "schemaRevision": "v1",
+             "producer": "ingestion.source@1", "parents": [], "summary": "source"},
+            {"id": _CANONICAL_ARTIFACT, "artifactType": "canonical.document", "schemaRevision": "v1",
+             "producer": "parser.fixture@1", "parents": [source_id], "summary": "canonical projection"},
+        ]
+    return JSONResponse({"contractVersion": "workbench-document-view/v1", "view": view,
+                         "artifactId": _CHUNK_ARTIFACT if view == "chunks" else _ARTIFACT if view == "lineage" else _CANONICAL_ARTIFACT,
+                         "items": items, "page": {"limit": int(limit or 25), "nextCursor": next_cursor}})
+
+
+@fixture_app.get("/api/workbench/documents/{source_id}/content")
+async def fixture_document_content(source_id: str) -> Response:
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    output = BytesIO()
+    writer = PdfWriter()
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica-Bold"),
+    })
+    for page_number in (1, 2):
+        page = writer.add_blank_page(width=612, height=792)
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        stream = DecodedStreamObject()
+        stream.set_data(
+            f"BT /F1 20 Tf 54 700 Td (Knowledge Engine Lite) Tj 0 -32 Td "
+            f"/F1 12 Tf (S-029 document preview - page {page_number}) Tj ET".encode("ascii")
+        )
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    writer.write(output)
+    return Response(output.getvalue(), media_type="application/pdf",
+                    headers={"Accept-Ranges": "bytes", "Cache-Control": "private, no-store"})
 
 
 @fixture_app.get("/api/fixture/document-list-stale-pending")
@@ -412,18 +549,22 @@ async def fixture_profiles(request: Request) -> JSONResponse:
     if fixture_state == "profile-unavailable":
         return JSONResponse({"code": "PROFILE_LIST_UNAVAILABLE"}, status_code=503)
     requested_kind = request.query_params.get("kind")
-    if fixture_state == "studio-stale" and requested_kind == "ingestion":
+    if fixture_state in {"studio-stale", "s029-races"} and requested_kind == "ingestion":
         await asyncio.sleep(0.8)
-    ingestion_fixture = fixture_state in {"studio-ingestion", "studio-ingestion-policy-diagnostic"} or (fixture_state == "studio-stale" and requested_kind == "ingestion")
+    ingestion_fixture = requested_kind == "ingestion"
     value = _INGESTION_PROFILE if ingestion_fixture else _PROFILE
-    return JSONResponse([{
+    result = [{
         **{key: value[key] for key in ("profileId", "kind", "updatedAt", "documentDigest")},
         "stageCount": 6 if ingestion_fixture else 1,
         "stageSummary": "extraction · structure · chunking · enrichment · embedding · indexing" if ingestion_fixture else "retrieve",
         "validationState": "VALID",
         "diagnosticCount": 0,
         "checkedAt": "2026-09-15T08:00:00Z",
-    }])
+    }]
+    if ingestion_fixture:
+        result = [{**result[0], "profileId": identifier} for identifier in
+                  ("fixture-ingestion", "external-ingestion", "retry-ingestion", "delayed-ingestion", "switch-local", "switch-external")]
+    return JSONResponse(result)
 
 
 @fixture_app.get("/api/workbench/profiles/browser-query")
@@ -1495,6 +1636,14 @@ def _assert_s022_visual(port: int, current: Path, baseline_name: str, *, target_
     _assert_manifest_visual(port, current, baseline_name, target_url=target_url)
 
 
+def _capture_s029_visual(port: int, current: Path, baseline_name: str, *, target_url: str) -> None:
+    _capture_cdp(port, current, target_url=target_url)
+    _assert_manifest_visual(
+        port, current, baseline_name, target_url=target_url,
+        baseline_root=S029_BASELINE_ROOT, story="S-029",
+    )
+
+
 def _prepare_s022_capture_environment(port: int, target_url: str, width: int) -> None:
     """Apply and verify every rendering condition recorded with the goldens."""
     device = S022_CAPTURE["device"]
@@ -1686,6 +1835,32 @@ def test_s028_visual_manifest_is_pinned_and_complete() -> None:
     assert {tuple(record["viewport"]) for record in manifest["baselines"]} == {(1440, 900), (644, 900)}
     for record in manifest["baselines"]:
         baseline = S028_BASELINE_ROOT / record["file"]
+        assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
+
+
+def test_s029_visual_manifest_is_pinned_and_complete() -> None:
+    manifest = json.loads((S029_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["story"] == "S-029"
+    assert set(manifest["uiAnchors"]) == {"UI-003", "UI-005", "UI-013"}
+    assert manifest["prototypeSha256"] == hashlib.sha256(Path("docs/ui/kb_ui.zip").read_bytes()).hexdigest()
+    assert manifest["fixtureRevision"] == "s029-two-step-document-inspector-v2"
+    assert manifest["captureConditions"] == S022_CAPTURE
+    assert manifest["comparison"] == {
+        "colorSpace": "RGBA", "channelTolerance": 12,
+        "maximumDifferingPixelRatio": .005, "baselineUpdatesAutomatic": False,
+    }
+    records = manifest["baselines"]
+    assert len(records) == 18
+    assert {record["scenario"] for record in records} == {
+        "intake-file", "intake-automatic", "intake-explicit", "intake-disclosure",
+        "inspector-pdf-source", "inspector-structured", "inspector-chunks-citation",
+        "inspector-partial", "inspector-error",
+    }
+    assert {tuple(record["viewport"]) for record in records} == {(1440, 900), (644, 900)}
+    assert len({record["file"] for record in records}) == len(records)
+    for record in records:
+        baseline = S029_BASELINE_ROOT / record["file"]
+        assert baseline.is_file()
         assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
 
 
@@ -2391,19 +2566,19 @@ def test_fixture_backed_document_preflight_loading_error_retry_and_modal_keyboar
     browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'preflight-states'}", url])
     try:
         _prepare_s022_capture_environment(debug_port, url, 1440)
-        modal = """(async()=>{const wait=async p=>{for(let i=0;i<100;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Documents modal did not render')};const opener=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')));opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog'));const enabled=[...dialog.querySelectorAll('button,input')].filter(x=>!x.disabled);enabled.at(-1).focus();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));const trapped=document.activeElement===enabled[0];document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,20));const escaped=!document.querySelector('.upload-dialog')&&document.activeElement===opener,rootUnlocked=!document.documentElement.classList.contains('modal-open')&&!document.body.classList.contains('modal-open');opener.click();await wait(()=>document.querySelector('.upload-dialog'));const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='fixture-ingestion';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检');action.click();await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run'));const old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));const fileChanged=file.files===changed.files;profile.value='retry-ingestion';profile.dispatchEvent(new Event('input',{bubbles:true}));const invalidated=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run')&&!document.body.innerText.includes('Profile 解析依据');action.click();const status=document.querySelector('[role=status]');return {trapped,escaped,rootUnlocked,fileChanged,invalidated,loading:status?.textContent.includes('正在预检'),live:status?.getAttribute('aria-live')==='polite',disabled:action.disabled,old};})()"""
+        modal = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Documents modal did not render')},chooseFile=dialog=>{const file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));return file};const opener=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')));opener.click();let dialog=await wait(()=>document.querySelector('.upload-dialog'));const enabled=[...dialog.querySelectorAll('button,input')].filter(x=>!x.disabled);enabled.at(-1).focus();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));const trapped=document.activeElement===enabled[0];document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,20));const escaped=!document.querySelector('.upload-dialog')&&document.activeElement===opener,rootUnlocked=!document.documentElement.classList.contains('modal-open')&&!document.body.classList.contains('modal-open');opener.click();dialog=await wait(()=>document.querySelector('.upload-dialog'));const file=chooseFile(dialog);[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='fixture-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));let action=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配');action.click();await wait(()=>[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion'));const old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1);profile.value='retry-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));const invalidated=![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion')&&!dialog.innerText.includes('Profile 解析依据');action=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配');action.click();const status=dialog.querySelector('[role=status]');return {trapped,escaped,rootUnlocked,fileChanged:file.files?.[0]?.name==='fixture.pdf',invalidated,loading:status?.textContent.includes('正在预检'),live:status?.getAttribute('aria-live')==='polite',disabled:action.disabled,old};})()"""
         state = _cdp(debug_port, modal, await_promise=True, target_url=url)
         old_token = state.pop("old")
         assert state == {"trapped": True, "escaped": True, "rootUnlocked": True, "fileChanged": True, "invalidated": True, "loading": True, "live": True, "disabled": True}
         _assert_root_scroll_locked(debug_port, target_url=url)
-        failure = """(async()=>{for(let i=0;i<100;i++){const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'),profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]'),status=document.querySelector('[role=status]');if(document.body.innerText.includes('请检查 Profile Set 和文档后重试。'))return {error:status?.textContent==='预检失败，可重试',enabled:!action.disabled,profile:profile.value,file:file.files?.[0]?.name,noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),previewGone:!document.body.innerText.includes('Profile 解析依据')};await new Promise(r=>setTimeout(r,25))}throw new Error('Preflight failure did not render')})()"""
+        failure = """(async()=>{for(let i=0;i<100;i++){const dialog=document.querySelector('.upload-dialog'),action=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配'),profile=dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'),status=dialog.querySelector('[role=status]');if(dialog.innerText.includes('请检查 Profile Set 和文档后重试。'))return {error:status?.textContent==='预检失败，可重试',enabled:!action.disabled,profile:profile.value,file:dialog.querySelector('.selected-file-summary')?.textContent,noSubmit:![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion'),previewGone:!dialog.innerText.includes('Profile 解析依据')};await new Promise(r=>setTimeout(r,25))}throw new Error('Preflight failure did not render')})()"""
         assert _cdp(debug_port, failure, await_promise=True, target_url=url) == {"error": True, "enabled": True, "profile": "retry-ingestion", "file": "fixture.pdf", "noSubmit": True, "previewGone": True}
         assert old_token not in httpx.get(f"http://127.0.0.1:{port}/api/fixture/document-preflights").json()["tokens"]
-        assert _cdp(debug_port, "(()=>{const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检');action.click();return {loading:document.querySelector('[role=status]').textContent.includes('正在预检'),disabled:action.disabled}})()", target_url=url) == {"loading": True, "disabled": True}
-        success = """(async()=>{for(let i=0;i<100;i++){const action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'),status=document.querySelector('[role=status]');if(document.body.innerText.includes('Profile 解析依据'))return {complete:status?.textContent==='预检完成',enabled:!action.disabled,profile:document.querySelector('input[aria-label="Ingestion Profile Set ID"]').value,file:document.querySelector('input[type=file]').files?.[0]?.name};await new Promise(r=>setTimeout(r,25))}throw new Error('Preflight retry did not complete')})()"""
+        assert _cdp(debug_port, "(()=>{const dialog=document.querySelector('.upload-dialog'),action=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配');action.click();return {loading:dialog.querySelector('[role=status]').textContent.includes('正在预检'),disabled:action.disabled}})()", target_url=url) == {"loading": True, "disabled": True}
+        success = """(async()=>{for(let i=0;i<100;i++){const dialog=document.querySelector('.upload-dialog'),action=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配'),status=dialog.querySelector('[role=status]');if(dialog.innerText.includes('Profile 解析依据'))return {complete:status?.textContent==='预检完成',enabled:!action.disabled,profile:dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]').value,file:dialog.querySelector('.selected-file-summary')?.textContent};await new Promise(r=>setTimeout(r,25))}throw new Error('Preflight retry did not complete')})()"""
         assert _cdp(debug_port, success, await_promise=True, target_url=url) == {"complete": True, "enabled": True, "profile": "retry-ingestion", "file": "fixture.pdf"}
-        delayed_guard = """(async()=>{const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]'),action=[...document.querySelectorAll('button')].find(x=>x.textContent==='预检');profile.value='delayed-ingestion';profile.dispatchEvent(new Event('input',{bubbles:true}));action.click();const pending=action.disabled&&document.querySelector('[role=status]')?.textContent.includes('正在预检')&&![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,350));return {pending,fileChanged:file.files===changed.files,previewGone:!document.body.innerText.includes('Profile 解析依据'),noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),notCompleted:document.querySelector('[role=status]')?.textContent!=='预检完成'};})()"""
-        assert _cdp(debug_port, delayed_guard, await_promise=True, target_url=url) == {"pending": True, "fileChanged": True, "previewGone": True, "noSubmit": True, "notCompleted": True}
+        delayed_guard = """(async()=>{const wait=async p=>{for(let i=0;i<100;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,20))}throw new Error('step one not restored')},dialog=document.querySelector('.upload-dialog'),profile=dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]');profile.value='delayed-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));const action=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配');action.click();const pending=action.disabled&&dialog.querySelector('[role=status]')?.textContent.includes('正在预检')&&![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion');[...dialog.querySelectorAll('button')].find(x=>x.textContent==='上一步').click();const file=await wait(()=>dialog.querySelector('input[type=file]')),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,350));return {pending,fileChanged:file.files===changed.files,step1:dialog.innerText.includes('步骤 1 / 2 · 选择文件'),previewGone:!dialog.innerText.includes('Profile 解析依据'),noSubmit:![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion')};})()"""
+        assert _cdp(debug_port, delayed_guard, await_promise=True, target_url=url) == {"pending": True, "fileChanged": True, "step1": True, "previewGone": True, "noSubmit": True}
     finally:
         _close_isolated_chrome(debug_port, browser)
         server.terminate()
@@ -2427,7 +2602,7 @@ def test_fixture_backed_document_candidate_selection_rotates_preview_and_submit_
     browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'candidate-selection'}", url])
     try:
         _prepare_s022_capture_environment(debug_port, url, 1440)
-        local_to_external = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const profile=await wait(()=>document.querySelector('input[aria-label="Ingestion Profile Set ID"]')),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='switch-local';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-external-profile"]'));const before=await (await fetch('/api/fixture/document-preflights')).json(),old=before.tokens.at(-1),choice=document.querySelector('input[value="switch-external-profile"]');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run')&&!document.body.innerText.includes('parser.fixture@1');await wait(()=>document.body.innerText.includes('parser.external@1')&&document.querySelector('input[aria-label="确认外部阶段披露"]'));const after=await (await fetch('/api/fixture/document-preflights')).json(),submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run'),ack=document.querySelector('input[aria-label="确认外部阶段披露"]'),blocked=submit.disabled;ack.click();const enabled=!submit.disabled,rotated=after.tokens.at(-1);submit.click();return {pending,blocked,enabled,checked:choice.checked,oldInvalid:!after.tokens.includes(old),rotated:rotated!==old,disclosed:document.body.innerText.includes('外部阶段披露')};})()"""
+        local_to_external = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='switch-local';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();await wait(()=>dialog.querySelector('input[value="switch-external-profile"]'));const before=await (await fetch('/api/fixture/document-preflights')).json(),old=before.tokens.at(-1),choice=dialog.querySelector('input[value="switch-external-profile"]');choice.click();const pending=![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion')&&!dialog.innerText.includes('parser.fixture@1');await wait(()=>dialog.innerText.includes('parser.external@1')&&dialog.querySelector('input[aria-label="确认外部阶段披露"]'));const after=await (await fetch('/api/fixture/document-preflights')).json(),submit=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion'),ack=dialog.querySelector('input[aria-label="确认外部阶段披露"]'),blocked=submit.disabled;ack.click();const enabled=!submit.disabled,rotated=after.tokens.at(-1);submit.click();return {pending,blocked,enabled,checked:choice.checked,oldInvalid:!after.tokens.includes(old),rotated:rotated!==old,disclosed:dialog.innerText.includes('外部阶段披露')};})()"""
         assert _cdp(debug_port, local_to_external, await_promise=True, target_url=url) == {"pending": True, "blocked": True, "enabled": True, "checked": True, "oldInvalid": True, "rotated": True, "disclosed": True}
         for _ in range(100):
             receipts = httpx.get(f"http://127.0.0.1:{port}/api/fixture/document-preflights").json()["receipts"]
@@ -2438,13 +2613,13 @@ def test_fixture_backed_document_candidate_selection_rotates_preview_and_submit_
         assert receipts[-1]["acknowledgeExternal"] is True
 
         assert _cdp(debug_port, "location.href='/workbench/documents'; true", target_url=f"http://127.0.0.1:{port}/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion") is True
-        external_to_local = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('reverse candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const profile=await wait(()=>document.querySelector('input[aria-label="Ingestion Profile Set ID"]')),file=document.querySelector('input[type=file]'),transfer=new DataTransfer();profile.value='switch-external';transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-local-profile"]'));const initiallyExternal=document.body.innerText.includes('parser.external@1')&&!!document.querySelector('input[aria-label="确认外部阶段披露"]'),choice=document.querySelector('input[value="switch-local-profile"]');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run');await wait(()=>document.body.innerText.includes('parser.fixture@1')&&[...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'));const automaticLabel=document.querySelector('input[value="switch-external-profile"]')?.closest('label')?.innerText.includes('自动选中');return {initiallyExternal,pending,checked:document.querySelector('input[value="switch-local-profile"]')?.checked,local:!document.querySelector('input[aria-label="确认外部阶段披露"]'),enabled:![...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run').disabled,automaticLabel};})()"""
+        external_to_local = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('reverse candidate preview timeout')};(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')))).click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='switch-external';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();await wait(()=>dialog.querySelector('input[value="switch-local-profile"]'));const initiallyExternal=dialog.innerText.includes('parser.external@1')&&!!dialog.querySelector('input[aria-label="确认外部阶段披露"]'),choice=dialog.querySelector('input[value="switch-local-profile"]');choice.click();const pending=![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion');await wait(()=>dialog.innerText.includes('parser.fixture@1')&&[...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion'));const automaticLabel=dialog.querySelector('input[value="switch-external-profile"]')?.closest('label')?.innerText.includes('自动选中');return {initiallyExternal,pending,checked:dialog.querySelector('input[value="switch-local-profile"]')?.checked,local:!dialog.querySelector('input[aria-label="确认外部阶段披露"]'),enabled:![...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion').disabled,automaticLabel};})()"""
         assert _cdp(debug_port, external_to_local, await_promise=True, target_url=url) == {"initiallyExternal": True, "pending": True, "checked": True, "local": True, "enabled": True, "automaticLabel": True}
 
-        delayed_selection_guard = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('delayed selection timeout')};const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]'),file=document.querySelector('input[type=file]');profile.value='switch-local';profile.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-delayed"]'));document.querySelector('input[value="switch-delayed"]').click();const pending=document.querySelector('[role=status]')?.textContent.includes('正在切换 Profile 预览')&&![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,350));return {pending,fileChanged:file.files===changed.files,previewGone:!document.body.innerText.includes('Profile 解析依据'),noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),notUpdated:document.querySelector('[role=status]')?.textContent!=='Profile 预览已更新'};})()"""
-        assert _cdp(debug_port, delayed_selection_guard, await_promise=True, target_url=url) == {"pending": True, "fileChanged": True, "previewGone": True, "noSubmit": True, "notUpdated": True}
+        delayed_selection_guard = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('delayed selection timeout')};let dialog=document.querySelector('.upload-dialog'),profile=dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]');profile.value='switch-local';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();await wait(()=>dialog.querySelector('input[value="switch-delayed"]'));dialog.querySelector('input[value="switch-delayed"]').click();const pending=dialog.querySelector('[role=status]')?.textContent.includes('正在切换 Profile 预览')&&![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion');[...dialog.querySelectorAll('button')].find(x=>x.textContent==='上一步').click();const file=await wait(()=>dialog.querySelector('input[type=file]')),changed=new DataTransfer();changed.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:changed.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));await new Promise(r=>setTimeout(r,350));return {pending,fileChanged:file.files===changed.files,step1:dialog.innerText.includes('步骤 1 / 2 · 选择文件'),previewGone:!dialog.innerText.includes('Profile 解析依据'),noSubmit:![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion')};})()"""
+        assert _cdp(debug_port, delayed_selection_guard, await_promise=True, target_url=url) == {"pending": True, "fileChanged": True, "step1": True, "previewGone": True, "noSubmit": True}
 
-        selection_failure = """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('selection failure timeout')};const profile=document.querySelector('input[aria-label="Ingestion Profile Set ID"]');profile.value='switch-local';profile.dispatchEvent(new Event('input',{bubbles:true}));[...document.querySelectorAll('button')].find(x=>x.textContent==='预检').click();await wait(()=>document.querySelector('input[value="switch-error"]'));document.querySelector('input[value="switch-error"]').click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run');await wait(()=>document.body.innerText.includes('旧预检已失效'));return {pending,failed:document.querySelector('[role=status]')?.textContent.includes('切换失败'),noSubmit:![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run'),selectionGone:!document.body.innerText.includes('Profile 解析依据')};})()"""
+        selection_failure = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('selection failure timeout')};const dialog=document.querySelector('.upload-dialog'),file=dialog.querySelector('input[type=file]');[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='switch-local';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();await wait(()=>dialog.querySelector('input[value="switch-error"]'));dialog.querySelector('input[value="switch-error"]').click();const pending=![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion');await wait(()=>dialog.innerText.includes('旧预检已失效'));return {pending,failed:dialog.querySelector('[role=status]')?.textContent.includes('切换失败'),noSubmit:![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion'),selectionGone:!dialog.innerText.includes('Profile 解析依据')};})()"""
         assert _cdp(debug_port, selection_failure, await_promise=True, target_url=url) == {"pending": True, "failed": True, "noSubmit": True, "selectionGone": True}
     finally:
         _close_isolated_chrome(debug_port, browser)
@@ -2489,7 +2664,7 @@ def test_fixture_backed_ingestion_artifact_inspector_sync_and_escape(tmp_path: P
             time.sleep(.025)
         else:
             pytest.fail("Rerun handoff did not navigate to Documents")
-        assert _cdp(int(debug_port), "({dialog:document.querySelector('.upload-dialog')?.getAttribute('aria-modal')==='true',source:document.body.innerText.includes('12345678-1234-5678-1234-567812345681'),profile:document.querySelector('input[aria-label=\"Ingestion Profile Set ID\"]')?.value === 'fixture-ingestion',confirmable:[...document.querySelectorAll('button')].some(x => x.textContent === '创建新 Run'),overflow:document.documentElement.scrollWidth <= innerWidth})") == {"dialog": True, "source": True, "profile": True, "confirmable": True, "overflow": True}
+        assert _cdp(int(debug_port), "({dialog:document.querySelector('.upload-dialog')?.getAttribute('aria-modal')==='true',step:document.body.innerText.includes('步骤 2 / 2 · 检测与 Profile'),source:document.body.innerText.includes('复用 Source Artifact')&&document.body.innerText.includes('12345678-1234-5678-1234-567812345681'),profile:document.body.innerText.includes('fixture-ingestion'),plan:document.body.innerText.includes('计划摘要'),confirmable:[...document.querySelectorAll('button')].some(x => x.textContent === '开始 Ingestion'&&!x.disabled),overflow:document.documentElement.scrollWidth <= innerWidth})") == {"dialog": True, "step": True, "source": True, "profile": True, "plan": True, "confirmable": True, "overflow": True}
     finally:
         _close_isolated_chrome(debug_port, browser)
         server.terminate()
@@ -2514,15 +2689,15 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
     browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'documents'}", url])
     try:
         _prepare_s022_capture_environment(debug_port, url, width)
-        preflight = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 25)); } throw new Error('Documents fixture did not become ready'); }; const opener=await wait(() => [...document.querySelectorAll('button')].find(x => x.textContent.includes('上传并预检'))); opener.click(); await wait(() => document.querySelector('input[aria-label="Ingestion Profile Set ID"]') && document.querySelector('input[type=file]')); const profile = document.querySelector('input[aria-label="Ingestion Profile Set ID"]'); profile.value = 'fixture-ingestion'; const file = document.querySelector('input[type=file]'); const transfer = new DataTransfer(); transfer.items.add(new File(['%PDF-fixture'], 'fixture.pdf', {type:'application/pdf'})); Object.defineProperty(file, 'files', {value: transfer.files, configurable: true}); [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); await wait(() => document.body.innerText.includes('Profile 解析依据')); const choices=[...document.querySelectorAll('input[name="ingestion-profile"]')]; return {automatic:choices.find(x=>x.value==='fixture-ingestion')?.checked && choices.some(x=>x.value==='fixture-default'), preserved:profile.value==='fixture-ingestion' && document.body.innerText.includes('fixture-ingestion'), matched:document.body.innerText.includes('pdf：匹配'), submit: !![...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run'), modal:document.querySelector('.upload-dialog')?.getAttribute('aria-modal')==='true', overflow: document.documentElement.scrollWidth <= innerWidth}; })()"""
+        preflight = """(async () => { const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('Documents fixture did not become ready')};const opener=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')));opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='fixture-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();await wait(()=>dialog.innerText.includes('Profile 解析依据'));const choices=[...dialog.querySelectorAll('input[name="ingestion-profile"]')];return {automatic:choices.find(x=>x.value==='fixture-ingestion')?.checked&&choices.some(x=>x.value==='fixture-default'),preserved:profile.value==='fixture-ingestion'&&dialog.innerText.includes('fixture-ingestion'),matched:dialog.innerText.includes('pdf：匹配'),submit:!![...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion'),modal:dialog.getAttribute('aria-modal')==='true',overflow:document.documentElement.scrollWidth<=innerWidth};})()"""
         assert _cdp(debug_port, preflight, await_promise=True, target_url=url) == {"automatic": True, "preserved": True, "matched": True, "submit": True, "modal": True, "overflow": True}
         assert _cdp(debug_port, "(()=>{const dialog=document.querySelector('.upload-dialog'),body=dialog.querySelector('.upload-dialog-body');return {inert:document.querySelector('#workbench-shell').hasAttribute('inert'),fit:dialog.getBoundingClientRect().height<=innerHeight-16,focus:dialog.contains(document.activeElement),bodyOverflow:['auto','scroll'].includes(getComputedStyle(body).overflowY)}})()", target_url=url) == {"inert": True, "fit": True, "focus": True, "bodyOverflow": True}
         _assert_root_scroll_locked(debug_port, target_url=url)
         _capture_cdp(debug_port, tmp_path / f"documents-preflight-automatic-{width}.png", target_url=url)
         _assert_manifest_visual(debug_port, tmp_path / f"documents-preflight-automatic-{width}.png", f"documents-preflight-automatic-{width}.png", target_url=url, baseline_root=S024_BASELINE_ROOT, story="S-024")
-        explicit = """(async()=>{const old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1),choice=[...document.querySelectorAll('input[name="ingestion-profile"]')].find(x=>x.value==='fixture-default');choice.click();const pending=![...document.querySelectorAll('button')].some(x=>x.textContent==='创建新 Run')&&!document.body.innerText.includes('解析后的阶段');for(let i=0;i<100;i++){const submit=[...document.querySelectorAll('button')].find(x=>x.textContent==='创建新 Run');if(submit){const state=await (await fetch('/api/fixture/document-preflights')).json();return {pending,checked:document.querySelector('input[value="fixture-default"]')?.checked,plugin:document.body.innerText.includes('parser.default@1'),oldInvalid:!state.tokens.includes(old),submit:!!submit}}await new Promise(r=>setTimeout(r,25))}throw new Error('Explicit candidate preview did not render')})()"""
+        explicit = """(async()=>{const dialog=document.querySelector('.upload-dialog'),old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1),choice=[...dialog.querySelectorAll('input[name="ingestion-profile"]')].find(x=>x.value==='fixture-default');choice.click();const pending=![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion')&&!dialog.innerText.includes('解析后的阶段');for(let i=0;i<100;i++){const submit=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion');if(submit){const state=await (await fetch('/api/fixture/document-preflights')).json();return {pending,checked:dialog.querySelector('input[value="fixture-default"]')?.checked,plugin:dialog.innerText.includes('parser.default@1'),oldInvalid:!state.tokens.includes(old),submit:!!submit}}await new Promise(r=>setTimeout(r,25))}throw new Error('Explicit candidate preview did not render')})()"""
         assert _cdp(debug_port, explicit, await_promise=True, target_url=url) == {"pending": True, "checked": True, "plugin": True, "oldInvalid": True, "submit": True}
-        assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run').click(); true") is True
+        assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '开始 Ingestion').click(); true") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
             if any(page.get("url", "").endswith(f"/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion") for page in pages):
@@ -2539,10 +2714,10 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
         else:
             pytest.fail("Documents did not reopen after explicit Profile submission")
 
-        external = """(async () => { [...document.querySelectorAll('button')].find(x => x.textContent.includes('上传并预检')).click(); const profile = document.querySelector('input[aria-label="Ingestion Profile Set ID"]'), file=document.querySelector('input[type=file]'), transfer=new DataTransfer(); transfer.items.add(new File(['%PDF-fixture'], 'fixture.pdf', {type:'application/pdf'})); Object.defineProperty(file, 'files', {value: transfer.files, configurable: true}); profile.value = 'external-ingestion'; [...document.querySelectorAll('button')].find(x => x.textContent === '预检').click(); for (let i = 0; i < 100; i++) { const checkbox = document.querySelector('input[aria-label="确认外部阶段披露"]'); const submit = [...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run'); if (checkbox && submit) { const blocked = submit.disabled; checkbox.click(); return {external: document.body.innerText.includes('parser.external@1'), blocked, enabled: !submit.disabled}; } await new Promise(r => setTimeout(r, 25)); } throw new Error('External disclosure did not render'); })()"""
+        external = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('External disclosure did not render')};[...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检')).click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='external-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();const checkbox=await wait(()=>dialog.querySelector('input[aria-label="确认外部阶段披露"]')),submit=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion'),blocked=submit.disabled;checkbox.click();return {external:dialog.innerText.includes('parser.external@1'),blocked,enabled:!submit.disabled};})()"""
         assert _cdp(int(debug_port), external, await_promise=True) == {"external": True, "blocked": True, "enabled": True}
 
-        assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '创建新 Run').click(); true") is True
+        assert _cdp(int(debug_port), "[...document.querySelectorAll('button')].find(x => x.textContent === '开始 Ingestion').click(); true") is True
         for _ in range(100):
             pages = httpx.get(f"http://127.0.0.1:{debug_port}/json", timeout=1).json()
             if any(page.get("url", "").endswith(f"/workbench/runs?run={_VISUAL_RUN}&legacy=ingestion") for page in pages):
@@ -2626,7 +2801,7 @@ def test_s028_document_list_paging_retry_and_actions(tmp_path: Path) -> None:
     browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's028-actions'}", url])
     try:
         _prepare_s022_capture_environment(debug_port, url, 1440)
-        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('document list timeout')};await wait(()=>document.querySelectorAll('.document-table tbody tr').length===2);const firstIds=[...document.querySelectorAll('.document-identity code')].map(x=>x.textContent);[...document.querySelectorAll('button')].find(x=>x.textContent==='加载更多').click();await wait(()=>document.body.innerText.includes('无法加载更多文档'));const retained=document.querySelectorAll('.document-table tbody tr').length===2;[...document.querySelectorAll('button')].find(x=>x.textContent==='重试').click();await wait(()=>document.querySelectorAll('.document-table tbody tr').length===4);const ids=[...document.querySelectorAll('.document-identity code')].map(x=>x.textContent),unique=new Set(ids).size===ids.length,run=document.querySelector('.document-run-link'),runUrl=new URL(run.href).pathname+new URL(run.href).search,source=document.querySelector('[aria-label="检查 Source Artifact"]');source.click();const drawer=await wait(()=>document.querySelector('.artifact-inspector'));const inspected=drawer.getAttribute('aria-label')==='Artifact 检查器';document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));const focusReturned=document.activeElement===source;document.querySelector('[aria-label="刷新文档列表"]').click();await wait(()=>document.querySelectorAll('.document-table tbody tr').length===2);return {firstIds,retained,count:ids.length,unique,runUrl,inspected,focusReturned,refreshed:document.querySelectorAll('.document-table tbody tr').length===2,upload:!![...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检'))}})()""", await_promise=True, target_url=url)
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('document list timeout')};await wait(()=>document.querySelectorAll('.document-table tbody tr').length===2);const firstIds=[...document.querySelectorAll('.document-identity code')].map(x=>x.textContent);[...document.querySelectorAll('button')].find(x=>x.textContent==='加载更多').click();await wait(()=>document.body.innerText.includes('无法加载更多文档'));const retained=document.querySelectorAll('.document-table tbody tr').length===2;[...document.querySelectorAll('button')].find(x=>x.textContent==='重试').click();await wait(()=>document.querySelectorAll('.document-table tbody tr').length===4);const ids=[...document.querySelectorAll('.document-identity code')].map(x=>x.textContent),unique=new Set(ids).size===ids.length,run=document.querySelector('.document-run-link'),runUrl=new URL(run.href).pathname+new URL(run.href).search,source=document.querySelector('[aria-label="查看文档内容与 Chunks"]');source.click();const drawer=await wait(()=>{const d=document.querySelector('.document-inspector');return d?.querySelectorAll('[role=tab]').length===6?d:null});const inspected=drawer.getAttribute('aria-label')==='文档内容与 Chunks';document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));const focusReturned=document.activeElement===source;document.querySelector('[aria-label="刷新文档列表"]').click();await wait(()=>document.querySelectorAll('.document-table tbody tr').length===2);return {firstIds,retained,count:ids.length,unique,runUrl,inspected,focusReturned,refreshed:document.querySelectorAll('.document-table tbody tr').length===2,upload:!![...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检'))}})()""", await_promise=True, target_url=url)
         assert result["retained"] and result["count"] == 4 and result["unique"] and result["inspected"] and result["focusReturned"] and result["refreshed"] and result["upload"]
         assert result["runUrl"] == f"/workbench/runs?run={_INGESTION_RUN}&legacy=ingestion"
     finally:
@@ -2667,13 +2842,152 @@ def test_s028_document_list_suppresses_stale_refresh_and_restores_output_inspect
         assert _cdp(debug_port, "(async()=>{for(let i=0;i<160;i++){if(document.body.innerText.includes('fresh-response.pdf'))return true;await new Promise(r=>setTimeout(r,25))}return false})()", await_promise=True, target_url=url) is True
         assert httpx.post(f"http://127.0.0.1:{port}/api/fixture/document-list-release", timeout=1).json() == {"released": True}
         assert wait_for_state(lambda state: 1 in state["completions"] and 2 in state["completions"])
-        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('stale list timeout')}};await wait(()=>performance.getEntriesByType('resource').filter(x=>new URL(x.name).pathname==='/api/workbench/documents'&&x.responseEnd>0).length>={initial_resources + 2});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const staleSuppressed=!document.body.innerText.includes('stale-response.pdf')&&document.body.innerText.includes('fresh-response.pdf'),output=document.querySelector('[aria-label="检查最新输出 Artifact"]');output.click();const lineage=await wait(()=>[...document.querySelectorAll('.artifact-inspector [role=tab]')].find(x=>x.textContent==='Lineage')),drawer=lineage.closest('.artifact-inspector');lineage.click();const identity=drawer.innerText.includes('当前 Artifact：{_CHUNK_ARTIFACT}');document.dispatchEvent(new KeyboardEvent('keydown',{{key:'Escape',bubbles:true}}));return {{staleSuppressed,identity,closed:!document.querySelector('.artifact-inspector'),focusReturned:document.activeElement===output}}}})()""", await_promise=True, target_url=url)
+        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('stale list timeout')}};await wait(()=>performance.getEntriesByType('resource').filter(x=>new URL(x.name).pathname==='/api/workbench/documents'&&x.responseEnd>0).length>={initial_resources + 2});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const staleSuppressed=!document.body.innerText.includes('stale-response.pdf')&&document.body.innerText.includes('fresh-response.pdf'),output=document.querySelector('[aria-label="查看文档内容与 Chunks"]');output.click();const chunks=await wait(()=>[...document.querySelectorAll('.document-inspector [role=tab]')].find(x=>x.textContent==='Chunks')),drawer=chunks.closest('.document-inspector');const identity=drawer.innerText.includes('{_QUERY_CHUNK}');document.dispatchEvent(new KeyboardEvent('keydown',{{key:'Escape',bubbles:true}}));return {{staleSuppressed,identity,closed:!document.querySelector('.document-inspector'),focusReturned:document.activeElement===output}}}})()""", await_promise=True, target_url=url)
         assert result == {"staleSuppressed": True, "identity": True, "closed": True, "focusReturned": True}
     finally:
         try:
             httpx.post(f"http://127.0.0.1:{port}/api/fixture/document-list-release", timeout=1)
         except httpx.HTTPError:
             pass
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-029 interactions",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+def test_s029_two_step_intake_and_document_chunk_inspector(tmp_path: Path, width: int) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}",
+                   "KB2_DOCUMENT_FIXTURE_STATE": "populated"}
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app",
+         "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([
+        *S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900",
+        f"--user-data-dir={tmp_path / f's029-{width}'}", url,
+    ])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, width)
+        step_one = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 file step timeout')};const opener=await wait(()=>document.querySelector('.documents-commands button:last-child'));opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));const focusables=[...dialog.querySelectorAll('button,input,select,[tabindex]:not([tabindex="-1"])')].filter(x=>!x.disabled);focusables[0].focus();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true}));const trapped=document.activeElement===focusables.at(-1),buttons=[...dialog.querySelectorAll('button')],rows=[...document.querySelectorAll('.document-table tbody tr')];return {step:dialog.innerText.includes('步骤 1 / 2 · 选择文件'),noProfile:!dialog.querySelector('[aria-label="Ingestion Profile Set ID"]'),file:file.files[0].name,next:buttons.some(x=>x.textContent==='下一步'&&!x.disabled),trapped,fit:dialog.getBoundingClientRect().height<=innerHeight-16,controls:buttons.every(x=>x.getBoundingClientRect().height>=30),rows:rows.length,oneEye:rows.every(row=>row.querySelectorAll('[aria-label="查看文档内容与 Chunks"]').length===1),noLegacyActions:!document.querySelector('[aria-label="查看 Source Artifact"], [aria-label="查看 Output Artifact"]'),noOverflow:document.documentElement.scrollWidth<=innerWidth}})()""", await_promise=True, target_url=url)
+        assert step_one == {"step": True, "noProfile": True, "file": "fixture.pdf", "next": True,
+                            "trapped": True, "fit": True, "controls": True, "rows": 4,
+                            "oneEye": True, "noLegacyActions": True, "noOverflow": True}
+        _assert_root_scroll_locked(debug_port, target_url=url)
+        _capture_s029_visual(debug_port, tmp_path / f"intake-file-{width}.png", f"intake-file-{width}.png", target_url=url)
+
+        automatic = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 automatic step timeout')};const dialog=document.querySelector('.upload-dialog');[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='fixture-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();const submit=await wait(()=>[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion'));return {step:dialog.innerText.includes('步骤 2 / 2 · 检测与 Profile'),facts:['media_type','extension','byte_size'].every(x=>dialog.innerText.includes(x)),automatic:dialog.querySelector('input[value="fixture-ingestion"]')?.checked===true,candidates:dialog.querySelectorAll('input[name="ingestion-profile"]').length===2,rules:dialog.innerText.includes('pdf：匹配'),plan:dialog.innerText.includes('d'.repeat(64)),submit:!submit.disabled,focus:document.activeElement===submit,back:[...dialog.querySelectorAll('button')].some(x=>x.textContent==='上一步'),rows:document.querySelectorAll('.document-table tbody tr').length}})()""", await_promise=True, target_url=url)
+        assert automatic == {"step": True, "facts": True, "automatic": True, "candidates": True,
+                             "rules": True, "plan": True, "submit": True, "focus": True,
+                             "back": True, "rows": 4}
+        _capture_s029_visual(debug_port, tmp_path / f"intake-automatic-{width}.png", f"intake-automatic-{width}.png", target_url=url)
+
+        explicit = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 explicit Profile timeout')};const dialog=document.querySelector('.upload-dialog'),old=(await (await fetch('/api/fixture/document-preflights')).json()).tokens.at(-1),choice=dialog.querySelector('input[value="fixture-default"]');choice.click();const authorityRemoved=![...dialog.querySelectorAll('button')].some(x=>x.textContent==='开始 Ingestion');const submit=await wait(()=>dialog.innerText.includes('parser.default@1')&&[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion'));const state=await (await fetch('/api/fixture/document-preflights')).json();return {authorityRemoved,checked:choice.checked,explicit:dialog.innerText.includes('explicit'),rotated:!state.tokens.includes(old),submit:!submit.disabled,focus:document.activeElement===submit,back:[...dialog.querySelectorAll('button')].some(x=>x.textContent==='上一步')}})()""", await_promise=True, target_url=url)
+        assert explicit == {"authorityRemoved": True, "checked": True, "explicit": True,
+                            "rotated": True, "submit": True, "focus": True, "back": True}
+        _capture_s029_visual(debug_port, tmp_path / f"intake-explicit-{width}.png", f"intake-explicit-{width}.png", target_url=url)
+        closed = _cdp(debug_port, """(async()=>{const dialog=document.querySelector('.upload-dialog'),opener=document.querySelector('.documents-commands button:last-child');dialog.querySelector('[aria-label="关闭上传对话框"]').click();for(let i=0;i<80&&document.querySelector('.upload-dialog');i++)await new Promise(r=>setTimeout(r,25));await new Promise(r=>setTimeout(r,50));return {closed:!document.querySelector('.upload-dialog'),focus:document.activeElement===opener,discarded:(await (await fetch('/api/fixture/document-preflights')).json()).tokens.length===0,rows:document.querySelectorAll('.document-table tbody tr').length,unlocked:!document.documentElement.classList.contains('modal-open')}})()""", await_promise=True, target_url=url)
+        assert closed == {"closed": True, "focus": True, "discarded": True, "rows": 4, "unlocked": True}
+
+        disclosure = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 disclosure timeout')};document.querySelector('.documents-commands button:last-child').click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='external-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();const ack=await wait(()=>dialog.querySelector('input[aria-label="确认外部阶段披露"]')),submit=[...dialog.querySelectorAll('button')].find(x=>x.textContent==='开始 Ingestion');return {external:dialog.innerText.includes('parser.external@1')&&dialog.innerText.includes('文档内容可能发送到该外部提供方'),blocked:submit.disabled,ack:!ack.checked,back:[...dialog.querySelectorAll('button')].some(x=>x.textContent==='上一步'),noOffline:!dialog.innerText.includes('不上传到任何远端')}})()""", await_promise=True, target_url=url)
+        assert disclosure == {"external": True, "blocked": True, "ack": True, "back": True, "noOffline": True}
+        _capture_s029_visual(debug_port, tmp_path / f"intake-disclosure-{width}.png", f"intake-disclosure-{width}.png", target_url=url)
+        disclosure_scroll = _cdp(debug_port, "(()=>{const body=document.querySelector('.upload-dialog-body'),ack=document.querySelector('input[aria-label=\"确认外部阶段披露\"]');body.scrollTop=body.scrollHeight;const bodyRect=body.getBoundingClientRect(),ackRect=ack.getBoundingClientRect();return {overflow:body.scrollHeight>body.clientHeight,reachable:ackRect.top>=bodyRect.top&&ackRect.bottom<=bodyRect.bottom}})()", target_url=url)
+        assert disclosure_scroll == {"overflow": True, "reachable": True}
+        assert _cdp(debug_port, "document.querySelector('.upload-dialog [aria-label=\"关闭上传对话框\"]').click();true", target_url=url) is True
+
+        pdf = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 PDF inspector timeout')};await wait(()=>!document.querySelector('.upload-dialog'));const eye=document.querySelector('[aria-label="查看文档内容与 Chunks"]');eye.click();const drawer=await wait(()=>{const value=document.querySelector('.document-inspector');return value?.innerText.includes('采购合同中的付款')?value:null}),object=drawer.querySelector('.document-pdf-preview'),workspace=drawer.querySelector('.document-inspector-workspace'),preview=drawer.querySelector('.document-preview-pane'),panel=drawer.querySelector('.document-tabpanel'),buttons=[...drawer.querySelectorAll('button')],tabLabels=[...drawer.querySelectorAll('[role=tab]')].map(x=>x.textContent);return {dialog:drawer.getAttribute('role')==='dialog'&&drawer.getAttribute('aria-modal')==='true',tabs:drawer.querySelectorAll('[role=tab]').length,tabLabels,sourceUrl:new URL(object.data).pathname==='/api/workbench/documents/12345678-1234-5678-1234-567812345681/content',pdfType:object.type==='application/pdf',objectVisible:object.getBoundingClientRect().width>200&&object.getBoundingClientRect().height>200,stacked:innerWidth>=900||getComputedStyle(workspace).gridTemplateRows.split(' ').length===2,scoped:getComputedStyle(workspace).overflow==='hidden'&&getComputedStyle(panel).overflowY==='auto'&&object.getBoundingClientRect().bottom<=preview.getBoundingClientRect().bottom+1,controls:buttons.every(x=>x.getBoundingClientRect().height>=30),noOverflow:document.documentElement.scrollWidth<=innerWidth,inert:document.querySelector('#workbench-shell').hasAttribute('inert')}})()""", await_promise=True, target_url=url)
+        assert pdf == {"dialog": True, "tabs": 6,
+                       "tabLabels": ["Canonical", "结构树", "表格", "Chunks", "元数据", "Lineage"],
+                       "sourceUrl": True, "pdfType": True,
+                       "objectVisible": True, "stacked": True, "scoped": True, "controls": True,
+                       "noOverflow": True, "inert": True}
+        _capture_s029_visual(debug_port, tmp_path / f"inspector-pdf-source-{width}.png", f"inspector-pdf-source-{width}.png", target_url=url)
+
+        structured = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}}throw new Error('S-029 structured views timeout')}},drawer=document.querySelector('.document-inspector'),select=label=>[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent===label).click();select('Canonical');let rows=await wait(()=>drawer.querySelectorAll('.document-canonical-list .document-object').length===2&&drawer.querySelectorAll('.document-canonical-list .document-object'));rows[0].click();const canonical=drawer.querySelector('.document-selected-detail').innerText.includes('类型')&&drawer.querySelector('.document-selected-detail').innerText.includes('阅读顺序')&&drawer.querySelector('.document-selected-detail').innerText.includes('采购合同条款');select('结构树');rows=await wait(()=>drawer.querySelectorAll('.document-structure-list .document-object').length===2&&drawer.querySelectorAll('.document-structure-list .document-object'));rows[1].click();let detail=drawer.querySelector('.document-selected-detail').innerText;const structure=detail.includes('父元素')&&detail.includes('elm_1111111111111111')&&detail.includes('层级')&&detail.includes('2');select('表格');const table=await wait(()=>drawer.querySelector('.document-tables-list .document-object'));table.click();detail=drawer.querySelector('.document-selected-detail').innerText;const cells=drawer.querySelectorAll('.document-table-detail .dense-table tr').length===5&&detail.includes('付款')&&detail.includes('100 万元')&&detail.includes('行跨度')&&detail.includes('表头');select('Lineage');rows=await wait(()=>drawer.querySelectorAll('.document-lineage-list .document-object').length===2&&drawer.querySelectorAll('.document-lineage-list .document-object'));rows[1].click();detail=drawer.querySelector('.document-selected-detail').innerText;const lineage=detail.includes('{_CANONICAL_ARTIFACT}')&&detail.includes('canonical.document')&&detail.includes('v1')&&detail.includes('parser.fixture@1')&&detail.includes('{_ARTIFACT}')&&detail.includes('canonical projection');select('表格');(await wait(()=>drawer.querySelector('.document-tables-list .document-object'))).click();const limits=Object.fromEntries(performance.getEntriesByType('resource').filter(x=>new URL(x.name).pathname.includes('/inspector/views/')).map(x=>{{const u=new URL(x.name);return [u.pathname.split('/').at(-1),u.searchParams.get('limit')]}}));return {{canonical,structure,cells,lineage,limits}}}})()""", await_promise=True, target_url=url)
+        assert structured == {"canonical": True, "structure": True, "cells": True, "lineage": True,
+                              "limits": {"chunks": "25", "canonical": "50", "structure": "50",
+                                         "tables": "10", "lineage": "50"}}
+        _capture_s029_visual(debug_port, tmp_path / f"inspector-structured-{width}.png", f"inspector-structured-{width}.png", target_url=url)
+
+        chunks = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 Chunk synchronization timeout')};const drawer=document.querySelector('.document-inspector'),chunksTab=[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='Chunks');chunksTab.click();await wait(()=>drawer.querySelector('.document-chunks-list .document-object'));chunksTab.focus();chunksTab.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));const keyboard=drawer.querySelector('[role=tab][aria-selected="true"]')?.textContent==='元数据';chunksTab.click();const chunk=await wait(()=>drawer.querySelector('.document-object'));chunk.click();const citations=await wait(()=>drawer.querySelectorAll('.chunk-citations button').length===2&&drawer.querySelectorAll('.chunk-citations button'));citations[0].click();const page2=drawer.querySelector('.document-page-number').textContent.includes('2')&&drawer.querySelector('.document-pdf-preview').data.endsWith('#page=2');citations[1].click();const page1=drawer.querySelector('.document-page-number').textContent.includes('1')&&drawer.querySelector('.document-pdf-preview').data.endsWith('#page=1'),facts=drawer.querySelector('.document-selected-detail').innerText;return {citations:citations.length,page2,page1,identity:facts.includes('chk_11111111111111111111111111111111:citation:2'),token:facts.includes('Token')&&facts.includes('8'),sources:facts.includes('elm_1111111111111111'),keyboard,locatorLive:drawer.querySelector('.document-locator-summary').getAttribute('aria-live')==='polite'}})()""", await_promise=True, target_url=url)
+        assert chunks == {"citations": 2, "page2": True, "page1": True, "identity": True,
+                          "token": True, "sources": True, "keyboard": True, "locatorLive": True}
+        _capture_s029_visual(debug_port, tmp_path / f"inspector-chunks-citation-{width}.png", f"inspector-chunks-citation-{width}.png", target_url=url)
+        inspector_close = _cdp(debug_port, """(async()=>{const eye=document.querySelector('[aria-label="查看文档内容与 Chunks"]');document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,30));return {closed:!document.querySelector('.document-inspector'),focus:document.activeElement===eye,unlocked:!document.documentElement.classList.contains('modal-open')}})()""", await_promise=True, target_url=url)
+        assert inspector_close == {"closed": True, "focus": True, "unlocked": True}
+
+        partial = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 partial inspector timeout')};const eye=document.querySelectorAll('[aria-label="查看文档内容与 Chunks"]')[1];eye.click();const drawer=await wait(()=>document.querySelector('.document-inspector')?.innerText.includes('CANONICAL_UNAVAILABLE')&&document.querySelector('.document-inspector'));return {initial:drawer.innerText.includes('Canonical 不可用')&&drawer.innerText.includes('源预览不可用'),tabs:drawer.querySelectorAll('[role=tab]').length,noOverflow:document.documentElement.scrollWidth<=innerWidth}})()""", await_promise=True, target_url=url)
+        assert partial == {"initial": True, "tabs": 6, "noOverflow": True}
+        _capture_s029_visual(debug_port, tmp_path / f"inspector-partial-{width}.png", f"inspector-partial-{width}.png", target_url=url)
+        remaining = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<120;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('remaining metadata unavailable')};const drawer=document.querySelector('.document-inspector');[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='元数据').click();const metadata=await wait(()=>drawer.querySelector('.metadata-grid'));return metadata.innerText.includes('scanned_mixed_zh_en')})()""", await_promise=True, target_url=url)
+        assert remaining is True
+        assert _cdp(debug_port, "document.querySelector('.document-inspector [aria-label=\"关闭文档检查器\"]').click();true", target_url=url) is True
+
+        error = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('S-029 inspector error timeout')};await wait(()=>!document.querySelector('.document-inspector'));document.querySelectorAll('[aria-label="查看文档内容与 Chunks"]')[3].click();const drawer=await wait(()=>document.querySelector('.document-inspector')?.innerText.includes('无法读取文档')&&document.querySelector('.document-inspector'));return {safe:drawer.innerText.includes('服务未返回授权的文档投影'),noException:!drawer.innerText.includes('Traceback')&&!drawer.innerText.includes('/Users/'),close:!!drawer.querySelector('[aria-label="关闭文档检查器"]'),noOverflow:document.documentElement.scrollWidth<=innerWidth}})()""", await_promise=True, target_url=url)
+        assert error == {"safe": True, "noException": True, "close": True, "noOverflow": True}
+        _capture_s029_visual(debug_port, tmp_path / f"inspector-error-{width}.png", f"inspector-error-{width}.png", target_url=url)
+        error_close = _cdp(debug_port, """(async()=>{const eye=document.querySelectorAll('[aria-label="查看文档内容与 Chunks"]')[3];document.querySelector('.document-inspector [aria-label="关闭文档检查器"]').click();await new Promise(r=>setTimeout(r,30));return {closed:!document.querySelector('.document-inspector'),focus:document.activeElement===eye,unlocked:!document.documentElement.classList.contains('modal-open')}})()""", await_promise=True, target_url=url)
+        assert error_close == {"closed": True, "focus": True, "unlocked": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-029 races",
+)
+def test_s029_back_and_tab_switch_suppress_late_profile_and_paging_responses(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {
+        **os.environ,
+        "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}",
+        "KB2_DOCUMENT_FIXTURE_STATE": "populated",
+        "KB2_WORKBENCH_FIXTURE_STATE": "s029-races",
+    }
+    server = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app",
+         "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment,
+    )
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([
+        *S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900",
+        f"--user-data-dir={tmp_path / 's029-races'}", url,
+    ])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        profile_race = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('profile race timeout')};(await wait(()=>document.querySelector('.documents-commands button:last-child'))).click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();await wait(()=>dialog.querySelector('[role=status]')?.textContent.includes('正在读取 Profile Set'));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='上一步').click();await new Promise(r=>setTimeout(r,950));const tokens=await (await fetch('/api/fixture/document-preflights')).json();return {step1:dialog.innerText.includes('步骤 1 / 2 · 选择文件'),fileOnly:!!dialog.querySelector('input[type=file]')&&!dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'),noLateStatus:!dialog.innerText.includes('请选择 Profile Set')&&!dialog.innerText.includes('正在自动检测与匹配'),noPreview:!dialog.innerText.includes('Profile 解析依据'),tokens:tokens.tokens.length}})()""", await_promise=True, target_url=url)
+        assert profile_race == {"step1": True, "fileOnly": True, "noLateStatus": True,
+                                "noPreview": True, "tokens": 0}
+        assert _cdp(debug_port, "document.querySelector('.upload-dialog [aria-label=\"关闭上传对话框\"]').click();true", target_url=url) is True
+
+        close_race = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('profile close race timeout')};await wait(()=>!document.querySelector('.upload-dialog'));const opener=document.querySelector('.documents-commands button:last-child');opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();await wait(()=>dialog.querySelector('[role=status]')?.textContent.includes('正在读取 Profile Set'));dialog.querySelector('[aria-label="关闭上传对话框"]').click();await new Promise(r=>setTimeout(r,950));const tokens=await (await fetch('/api/fixture/document-preflights')).json();return {closed:!document.querySelector('.upload-dialog'),focus:document.activeElement===opener,unlocked:!document.documentElement.classList.contains('modal-open'),tokens:tokens.tokens.length}})()""", await_promise=True, target_url=url)
+        assert close_race == {"closed": True, "focus": True, "unlocked": True, "tokens": 0}
+
+        preflight_close_race = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('preflight close race timeout')};const opener=document.querySelector('.documents-commands button:last-child'),before=(await (await fetch('/api/fixture/document-preflights')).json()).discards.length;opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='delayed-ingestion';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();await wait(()=>dialog.querySelector('[role=status]')?.textContent.includes('正在预检'));dialog.querySelector('[aria-label="关闭上传对话框"]').click();await new Promise(r=>setTimeout(r,350));const state=await (await fetch('/api/fixture/document-preflights')).json();return {closed:!document.querySelector('.upload-dialog'),focus:document.activeElement===opener,unlocked:!document.documentElement.classList.contains('modal-open'),tokens:state.tokens.length,discarded:state.discards.length-before}})()""", await_promise=True, target_url=url)
+        assert preflight_close_race == {"closed": True, "focus": True, "unlocked": True,
+                                        "tokens": 0, "discarded": 1}
+
+        selection_close_race = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('selection close race timeout')};const opener=document.querySelector('.documents-commands button:last-child'),before=(await (await fetch('/api/fixture/document-preflights')).json()).discards.length;opener.click();const dialog=await wait(()=>document.querySelector('.upload-dialog')),file=dialog.querySelector('input[type=file]'),transfer=new DataTransfer();transfer.items.add(new File(['%PDF-fixture'],'fixture.pdf',{type:'application/pdf'}));Object.defineProperty(file,'files',{value:transfer.files,configurable:true});file.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='下一步').click();const profile=await wait(()=>dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]')?.options.length>2&&dialog.querySelector('select[aria-label="Ingestion Profile Set ID"]'));profile.value='switch-local';profile.dispatchEvent(new Event('change',{bubbles:true}));[...dialog.querySelectorAll('button')].find(x=>x.textContent==='检测并匹配').click();const choice=await wait(()=>dialog.querySelector('input[value="switch-delayed"]'));choice.click();await wait(()=>dialog.querySelector('[role=status]')?.textContent.includes('正在切换 Profile 预览'));dialog.querySelector('[aria-label="关闭上传对话框"]').click();await new Promise(r=>setTimeout(r,350));const state=await (await fetch('/api/fixture/document-preflights')).json();return {closed:!document.querySelector('.upload-dialog'),focus:document.activeElement===opener,unlocked:!document.documentElement.classList.contains('modal-open'),tokens:state.tokens.length,discarded:state.discards.length-before}})()""", await_promise=True, target_url=url)
+        assert selection_close_race == {"closed": True, "focus": True, "unlocked": True,
+                                        "tokens": 0, "discarded": 1}
+
+        paging_race = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<200;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('paging race timeout')};await wait(()=>!document.querySelector('.upload-dialog'));document.querySelector('[aria-label="查看文档内容与 Chunks"]').click();const drawer=await wait(()=>document.querySelector('.document-inspector')?.querySelector('[role=tab]')&&document.querySelector('.document-inspector'));[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='Canonical').click();const more=await wait(()=>[...drawer.querySelectorAll('button')].find(x=>x.textContent==='加载更多'));more.click();[...drawer.querySelectorAll('[role=tab]')].find(x=>x.textContent==='表格').click();const table=await wait(()=>drawer.querySelector('.document-tables-list .document-object'));table.click();await new Promise(r=>setTimeout(r,500));const lateSuppressed=drawer.querySelector('[role=tab][aria-selected="true"]')?.textContent==='表格'&&drawer.querySelectorAll('.document-tables-list .document-object').length===1&&!drawer.querySelector('.document-tabpanel').innerText.includes('迟到的 Canonical');const tableMore=await wait(()=>[...drawer.querySelectorAll('button')].find(x=>x.textContent==='加载更多'));tableMore.click();await wait(()=>drawer.querySelector('.document-table-detail')?.innerText.includes('6 / 6'));const request=performance.getEntriesByType('resource').map(x=>new URL(x.name)).find(x=>x.pathname.endsWith('/inspector/views/tables')&&x.searchParams.get('cursor')==='table-next');return {lateSuppressed,tableCount:drawer.querySelectorAll('.document-tables-list .document-object').length,cellRows:drawer.querySelectorAll('.document-table-detail .dense-table tr').length,selected:drawer.querySelector('.document-tables-list .source-selected')?.dataset.stableId,locator:drawer.querySelector('.document-locator-summary').textContent.includes('tbl_1111111111111111'),tableLimit:request?.searchParams.get('limit'),active:drawer.querySelector('[role=tab][aria-selected="true"]')?.textContent}})()""", await_promise=True, target_url=url)
+        assert paging_race == {"lateSuppressed": True, "tableCount": 1, "cellRows": 7,
+                               "selected": "tbl_1111111111111111", "locator": True,
+                               "tableLimit": "10", "active": "表格"}
+    finally:
         _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)

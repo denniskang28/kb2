@@ -1,7 +1,7 @@
 # S-029: Two-Step Document Intake And Unified Document Inspector
 
 - **Parent Feature:** FEAT-005
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P1
 - **Dependencies:** S-005, S-008, S-010, S-024, S-028
@@ -174,3 +174,8 @@ lineage-query choices belong to Story design.
 - **2026-09-15:** Compiled from the user-confirmed two-step upload and unified
   file-content/RAG-Chunk inspection correction. Story boundary is confirmed
   and eligible for just-in-time design and delivery.
+- **2026-09-15:** Implemented the server-owned two-step intake, exact-source
+  document Inspector, bounded typed Canonical/table/Chunk/lineage views,
+  authorized PDF Range preview, synchronized locators, complete table-cell
+  continuation, safe observability, and responsive interaction states.
+  Independent acceptance and repaired final review passed.

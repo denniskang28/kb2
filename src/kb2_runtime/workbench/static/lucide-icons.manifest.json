@@ -50,6 +50,15 @@
       "relationship": "same geometry"
     },
     {
+      "key": "eye",
+      "sourceIcon": "eye",
+      "sourcePath": "icons/eye.svg",
+      "sourceGitBlobSha1": "e5e78706b2be5dd6510cbcf20f6207486c037c34",
+      "sourceSha256": "5bf90197dd7629cad64a2e48d1186a71559deb6121207d10e3dc5b19ebaffdcf",
+      "embeddedLineSha256": "ea5ddae399ddd3e60dd56327a17fc5ec00e92578500f4116be9672b696706e61",
+      "relationship": "adapted eye outline; circle retains upstream geometry"
+    },
+    {
       "key": "checklist",
       "sourceIcon": "list-checks",
       "sourcePath": "icons/list-checks.svg",
@@ -165,6 +174,15 @@
       "sourceSha256": "ede96d40554848eaa512664b11e73def3960cd60c260efa59ca9ccc1bbe8ec9c",
       "embeddedLineSha256": "916600f646fc38d215139171e65bdc590b09f293e3ffeeb75acc38c9db4cc059",
       "relationship": "same geometry"
+    },
+    {
+      "key": "arrow-left",
+      "sourceIcon": "arrow-left",
+      "sourcePath": "icons/arrow-left.svg",
+      "sourceGitBlobSha1": "b40bff851c85eff44f678eb7984fc6070d7ea721",
+      "sourceSha256": "c5f4b88076108eb1a0d95336e1aa7e7bb1419a3a92af96f6247d88cd3456f933",
+      "embeddedLineSha256": "7e7c1faad4cac0a8b33e06bce532d4dd01a015970a9f23450a541e4997d601fe",
+      "relationship": "adapted arrow head"
     },
     {
       "key": "arrow",

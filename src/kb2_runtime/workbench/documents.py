@@ -9,13 +9,18 @@ import asyncio
 import base64
 import binascii
 from datetime import datetime, timezone
+import hmac
 import json
+from io import BytesIO
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from kb2_runtime.ingestion_engine import IngestionEngine, SourceSubmission
+from kb2_runtime.canonical.contracts import CanonicalDocument
+from kb2_runtime.chunking.contracts import ChunkSet
 from kb2_runtime.ingestion_profiles import ProfileCompiler, ProfileParser, ProfileResolver, ResolutionRequest
 from kb2_runtime.ingestion_profiles.errors import ProfileError
 from kb2_runtime.plugins.registry import PluginRegistry
@@ -23,7 +28,14 @@ from kb2_runtime.trace.contracts import DocumentSubmissionCursor
 from kb2_runtime.trace.errors import TraceError
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.service import ArtifactService, RunService
-from .contracts import DocumentActions, DocumentLatestRun, DocumentList, DocumentListItem, DocumentPage
+from .contracts import (
+    DocumentActions, DocumentInspectorArtifact, DocumentInspectorRun,
+    DocumentInspectorSource, DocumentInspectorSummary, DocumentInspectorTab,
+    DocumentChunkCitationViewItem, DocumentChunkViewItem, DocumentElementViewItem,
+    DocumentInspectorView, DocumentLatestRun, DocumentLineageViewItem, DocumentList,
+    DocumentListItem, DocumentPage, DocumentPreview, DocumentTableCellViewItem,
+    DocumentTableViewItem, DocumentViewPage,
+)
 
 
 class ProfileReader(Protocol):
@@ -53,6 +65,7 @@ class DocumentWorkbenchService:
         self._runs, self._artifacts, self._ttl = runs, artifacts, ttl_seconds
         self._preflights: dict[str, _Preflight] = {}
         self._jobs: dict[UUID, asyncio.Event] = {}
+        self._view_cursor_key = secrets.token_bytes(32)
         self._external_capabilities = external_capabilities
         self._repository = repository or getattr(artifacts, "repository", None)
 
@@ -74,6 +87,7 @@ class DocumentWorkbenchService:
             registeredAt=row.registered_at,
             latestRun=DocumentLatestRun(id=row.run_id, state=row.run_state.value),
             actions=DocumentActions(
+                inspectDocument=True,
                 sourceArtifactId=row.source_artifact_id,
                 outputArtifactId=row.output_artifact_id,
             ),
@@ -118,6 +132,267 @@ class DocumentWorkbenchService:
     def discard_preflight(self, token: str | None) -> None:
         if token:
             self._preflights.pop(token, None)
+
+    async def document_inspector(self, source_id: UUID) -> DocumentInspectorSummary | None:
+        row, manifests = await self._document_context(source_id)
+        if row is None:
+            return None
+        source = next((item for item in manifests if item.id == source_id), None)
+        if source is None:
+            raise RuntimeError("DOCUMENT_INSPECTOR_UNAVAILABLE")
+        canonical = self._last_schema(manifests, "canonical.document", "v1")
+        chunks = self._last_schema(manifests, "chunk.set", "v1")
+        preview = await self._preview_contract(row, source)
+        canonical_reason = self._missing_view_reason(row.run_state.value, "CANONICAL_UNAVAILABLE")
+        chunks_reason = self._missing_view_reason(row.run_state.value, "CHUNKSET_UNAVAILABLE")
+        tabs = (
+            DocumentInspectorTab(id="canonical", state="available" if canonical else "unavailable",
+                                 artifactId=canonical.id if canonical else None,
+                                 reason=None if canonical else canonical_reason),
+            DocumentInspectorTab(id="structure", state="available" if canonical else "unavailable",
+                                 artifactId=canonical.id if canonical else None,
+                                 reason=None if canonical else canonical_reason),
+            DocumentInspectorTab(id="tables", state="available" if canonical else "unavailable",
+                                 artifactId=canonical.id if canonical else None,
+                                 reason=None if canonical else canonical_reason),
+            DocumentInspectorTab(id="chunks", state="available" if chunks else "unavailable",
+                                 artifactId=chunks.id if chunks else None,
+                                 reason=None if chunks else chunks_reason),
+            DocumentInspectorTab(id="metadata", state="available"),
+            DocumentInspectorTab(id="lineage", state="available"),
+        )
+        artifacts = {"source": self._inspector_artifact(source)}
+        if canonical:
+            artifacts["canonical"] = self._inspector_artifact(canonical)
+        if chunks:
+            artifacts["chunks"] = self._inspector_artifact(chunks)
+        return DocumentInspectorSummary(
+            source=DocumentInspectorSource(id=source_id, filename=row.display_filename,
+                                           mediaType=row.media_type, byteSize=row.byte_size,
+                                           registeredAt=row.registered_at),
+            latestRun=DocumentInspectorRun(id=row.run_id, state=row.run_state.value),
+            preview=preview, tabs=tabs, artifacts=artifacts,
+            metadata={"format": row.format, "documentClass": row.document_class,
+                      "profileId": row.profile_id, "mediaType": row.media_type,
+                      "byteSize": row.byte_size},
+        )
+
+    async def document_view(self, source_id: UUID, view: str, limit: int | None = None,
+                            cursor: str | None = None) -> DocumentInspectorView:
+        limits = {"canonical": (50, 100), "structure": (50, 100), "tables": (10, 20),
+                  "chunks": (25, 50), "lineage": (50, 128)}
+        if view not in limits:
+            raise ValueError("DOCUMENT_VIEW_INVALID")
+        limit = limits[view][0] if limit is None else limit
+        if not 1 <= limit <= limits[view][1]:
+            raise ValueError("DOCUMENT_VIEW_INVALID")
+        row, manifests = await self._document_context(source_id)
+        if row is None:
+            raise LookupError("DOCUMENT_NOT_FOUND")
+        selected = (self._last_schema(manifests, "chunk.set", "v1") if view == "chunks" else
+                    self._last_schema(manifests, "canonical.document", "v1") if view != "lineage" else
+                    next((item for item in manifests if item.id == source_id), None))
+        if selected is None:
+            raise PermissionError("DOCUMENT_VIEW_UNAVAILABLE")
+        position = self._decode_view_cursor(cursor, source_id, selected.id, view) if cursor else (0, 0)
+        offset, cell_offset = position
+        if view == "lineage":
+            values = [self._lineage_item(item) for item in manifests]
+        else:
+            if selected.byte_size > 64 * 1024 * 1024:
+                raise OverflowError("DOCUMENT_VIEW_TOO_LARGE")
+            try:
+                raw = await self._artifacts.read_content(selected.id)
+                if view in {"canonical", "structure", "tables"}:
+                    document = CanonicalDocument.model_validate_json(raw)
+                    if view == "tables":
+                        values = list(document.tables)
+                    else:
+                        values = [self._element_item(item) for item in document.elements]
+                else:
+                    chunk_set = ChunkSet.model_validate_json(raw)
+                    values = [self._chunk_item(item) for item in chunk_set.chunks]
+            except (TraceError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                raise PermissionError("DOCUMENT_VIEW_UNAVAILABLE") from None
+        if offset < 0 or offset > len(values):
+            raise ValueError("DOCUMENT_VIEW_INVALID")
+        if view == "tables":
+            if offset == len(values) and cell_offset != 0:
+                raise ValueError("DOCUMENT_VIEW_INVALID")
+            if offset < len(values) and not 0 <= cell_offset < len(values[offset].cells):
+                raise ValueError("DOCUMENT_VIEW_INVALID")
+            page, next_position = self._table_page(values, offset, cell_offset, limit)
+            next_cursor = (
+                self._encode_view_cursor(source_id, selected.id, view, *next_position)
+                if next_position is not None else None
+            )
+        else:
+            if cell_offset != 0:
+                raise ValueError("DOCUMENT_VIEW_INVALID")
+            page = values[offset:offset + limit]
+            next_offset = offset + len(page)
+            next_cursor = (
+                self._encode_view_cursor(source_id, selected.id, view, next_offset)
+                if next_offset < len(values) else None
+            )
+        return DocumentInspectorView(view=view, artifactId=selected.id, runId=row.run_id, items=tuple(page),
+                                     page=DocumentViewPage(limit=limit, nextCursor=next_cursor))
+
+    async def document_content(self, source_id: UUID) -> tuple[str, bytes, str, UUID]:
+        row, manifests = await self._document_context(source_id)
+        if row is None:
+            raise LookupError("DOCUMENT_NOT_FOUND")
+        source = next((item for item in manifests if item.id == source_id), None)
+        if source is None:
+            raise LookupError("SOURCE_CONTENT_UNAVAILABLE")
+        content = await self._artifacts.read_content(source_id)
+        if row.media_type == "application/pdf" and content.startswith(b"%PDF-"):
+            try:
+                from pypdf import PdfReader
+                pages = len(PdfReader(BytesIO(content)).pages)
+                if pages > 10000:
+                    raise ValueError
+            except Exception:
+                raise TypeError("PREVIEW_FORMAT_UNAVAILABLE") from None
+            return row.media_type, content, row.display_filename, row.run_id
+        if row.media_type.startswith("text/"):
+            try:
+                text = content[:256 * 1024].decode("utf-8")
+            except UnicodeDecodeError:
+                raise TypeError("PREVIEW_FORMAT_UNAVAILABLE") from None
+            return "text/plain; charset=utf-8", text.encode(), row.display_filename, row.run_id
+        raise TypeError("PREVIEW_FORMAT_UNAVAILABLE")
+
+    async def _document_context(self, source_id: UUID):
+        if self._repository is None:
+            raise RuntimeError("DOCUMENT_INSPECTOR_UNAVAILABLE")
+        rows = await self._repository.get_document_submissions_by_source_ids((source_id,), limit=1)
+        if not rows:
+            return None, ()
+        row = rows[0]
+        manifests = await self._repository.list_document_artifact_manifests(source_id, row.run_id, limit=128)
+        return row, manifests
+
+    async def _preview_contract(self, row: Any, source: Any) -> DocumentPreview:
+        if row.media_type == "application/pdf":
+            try:
+                content = await self._artifacts.read_content(source.id)
+                from pypdf import PdfReader
+                page_count = len(PdfReader(BytesIO(content)).pages)
+                if page_count > 10000:
+                    raise ValueError
+                return DocumentPreview(kind="pdf", contentUrl=f"/api/workbench/documents/{source.id}/content",
+                                       pageCount=page_count)
+            except Exception:
+                return DocumentPreview(kind="unavailable", reason="SOURCE_PREVIEW_UNAVAILABLE")
+        if row.media_type.startswith("text/"):
+            return DocumentPreview(kind="text", contentUrl=f"/api/workbench/documents/{source.id}/content")
+        return DocumentPreview(kind="unavailable", reason="SOURCE_PREVIEW_UNAVAILABLE")
+
+    @staticmethod
+    def _last_schema(manifests: tuple[Any, ...], kind: str, revision: str):
+        return next((item for item in reversed(manifests)
+                     if (item.artifact_type, item.schema_revision) == (kind, revision)), None)
+
+    @staticmethod
+    def _missing_view_reason(state: str, fallback: str) -> str:
+        return "RUN_IN_PROGRESS" if state in {"PENDING", "RUNNING"} else fallback
+
+    @staticmethod
+    def _inspector_artifact(item: Any) -> DocumentInspectorArtifact:
+        return DocumentInspectorArtifact(id=item.id, artifactType=item.artifact_type,
+                                         schemaRevision=item.schema_revision)
+
+    @staticmethod
+    def _element_item(item: Any) -> DocumentElementViewItem:
+        text = item.text or item.alt_text or " ".join(x.text for x in (item.items or ()))
+        return DocumentElementViewItem(
+            id=item.id, kind=item.kind, readingOrder=item.reading_order,
+            parentId=item.parent_id, level=item.level, text=text[:2048],
+            truncated=len(text) > 2048, locator=item.locator,
+        )
+
+    @staticmethod
+    def _table_item(item: Any, cell_offset: int = 0, cell_limit: int = 512) -> DocumentTableViewItem:
+        end = min(len(item.cells), cell_offset + cell_limit)
+        return DocumentTableViewItem(
+            id=item.id, elementId=item.element_id, rows=item.rows, columns=item.columns,
+            locator=item.locator, cellOffset=cell_offset, totalCells=len(item.cells),
+            hasMoreCells=end < len(item.cells),
+            cells=tuple(DocumentTableCellViewItem(
+                id=cell.id, text=cell.text[:2048], row=cell.row, column=cell.column,
+                rowSpan=cell.row_span, columnSpan=cell.column_span, isHeader=cell.is_header,
+            ) for cell in item.cells[cell_offset:end]),
+        )
+
+    @classmethod
+    def _table_page(cls, tables: list[Any], table_offset: int, cell_offset: int,
+                    table_limit: int) -> tuple[list[DocumentTableViewItem], tuple[int, int] | None]:
+        page: list[DocumentTableViewItem] = []
+        cell_budget = 512
+        index = table_offset
+        current_cell_offset = cell_offset
+        while index < len(tables) and len(page) < table_limit and cell_budget:
+            table = tables[index]
+            remaining = len(table.cells) - current_cell_offset
+            take = min(remaining, cell_budget)
+            page.append(cls._table_item(table, current_cell_offset, take))
+            cell_budget -= take
+            next_cell_offset = current_cell_offset + take
+            if next_cell_offset < len(table.cells):
+                return page, (index, next_cell_offset)
+            index += 1
+            current_cell_offset = 0
+        return page, (index, 0) if index < len(tables) else None
+
+    @staticmethod
+    def _chunk_item(item: Any) -> DocumentChunkViewItem:
+        content = item.content[:4096]
+        return DocumentChunkViewItem(
+            id=item.chunk_id, content=content, truncated=len(item.content) > len(content),
+            tokenCount=item.token_count, sourceElementIds=item.source_element_ids,
+            parentChunkId=item.parent_chunk_id, childChunkIds=item.child_chunk_ids,
+            citations=tuple(DocumentChunkCitationViewItem(
+                elementId=citation.element_id, locator=citation.locator,
+            ) for citation in item.citations),
+        )
+
+    @staticmethod
+    def _lineage_item(item: Any) -> DocumentLineageViewItem:
+        return DocumentLineageViewItem(
+            id=item.id, artifactType=item.artifact_type,
+            schemaRevision=item.schema_revision, producer=item.producing_plugin_id,
+            parents=item.parent_artifact_ids, summary=item.summary,
+        )
+
+    def _encode_view_cursor(self, source_id: UUID, artifact_id: UUID, view: str, offset: int,
+                            cell_offset: int = 0) -> str:
+        payload = json.dumps(
+            [2, str(source_id), str(artifact_id), view, offset, cell_offset],
+            separators=(",", ":"),
+        ).encode()
+        signature = hmac.digest(self._view_cursor_key, payload, "sha256")
+        return base64.urlsafe_b64encode(payload + b"." + signature).decode().rstrip("=")
+
+    def _decode_view_cursor(self, value: str, source_id: UUID, artifact_id: UUID,
+                            view: str) -> tuple[int, int]:
+        if not value or len(value) > 512:
+            raise ValueError("DOCUMENT_VIEW_INVALID")
+        try:
+            raw = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+            if len(raw) <= 33 or raw[-33:-32] != b".":
+                raise ValueError
+            encoded, signature = raw[:-33], raw[-32:]
+            if not hmac.compare_digest(signature, hmac.digest(self._view_cursor_key, encoded, "sha256")):
+                raise ValueError
+            payload = json.loads(encoded)
+            if (not isinstance(payload, list) or len(payload) != 6 or payload[:4] !=
+                    [2, str(source_id), str(artifact_id), view] or
+                    type(payload[4]) is not int or type(payload[5]) is not int):
+                raise ValueError
+            return payload[4], payload[5]
+        except (ValueError, TypeError, json.JSONDecodeError, binascii.Error):
+            raise ValueError("DOCUMENT_VIEW_INVALID") from None
 
     async def select_candidate(self, token: str, profile_id: str) -> dict[str, Any]:
         item = self._claim_preflight(token)

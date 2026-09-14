@@ -155,9 +155,9 @@ def test_s022_pinned_assets_and_visual_baseline_manifest_are_complete() -> None:
 
     script = (static_root / "workbench.js").read_text(encoding="utf-8")
     declarations = script.split("const LUCIDE={\n", 1)[1].split("\n};", 1)[0].splitlines()
-    embedded = {line.strip().split(":", 1)[0]: hashlib.sha256(line.strip().encode()).hexdigest() for line in declarations}
+    embedded = {line.strip().split(":", 1)[0].strip("'\""): hashlib.sha256(line.strip().encode()).hexdigest() for line in declarations}
     icons = lucide_manifest["icons"]
-    assert len(icons) == 18
+    assert len(icons) == 20
     assert set(embedded) == {icon["key"] for icon in icons}
     for icon in icons:
         assert embedded[icon["key"]] == icon["embeddedLineSha256"]

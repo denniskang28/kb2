@@ -4,6 +4,7 @@ const LUCIDE={
   file:[['path',{d:'M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'}],['polyline',{points:'14 2 14 8 20 8'}],['line',{x1:8,y1:13,x2:16,y2:13}],['line',{x1:8,y1:17,x2:16,y2:17}]],
   sliders:[['line',{x1:21,y1:4,x2:14,y2:4}],['line',{x1:10,y1:4,x2:3,y2:4}],['line',{x1:21,y1:12,x2:12,y2:12}],['line',{x1:8,y1:12,x2:3,y2:12}],['line',{x1:21,y1:20,x2:16,y2:20}],['line',{x1:12,y1:20,x2:3,y2:20}],['line',{x1:14,y1:2,x2:14,y2:6}],['line',{x1:8,y1:10,x2:8,y2:14}],['line',{x1:16,y1:18,x2:16,y2:22}]],
   search:[['circle',{cx:11,cy:11,r:8}],['path',{d:'m21 21-4.3-4.3'}]],
+  eye:[['path',{d:'M2.1 12a10.9 10.9 0 0 1 19.8 0 10.9 10.9 0 0 1-19.8 0'}],['circle',{cx:12,cy:12,r:3}]],
   checklist:[['path',{d:'m3 17 2 2 4-4'}],['path',{d:'m3 7 2 2 4-4'}],['path',{d:'M13 6h8'}],['path',{d:'M13 12h8'}],['path',{d:'M13 18h8'}]],
   compare:[['circle',{cx:18,cy:18,r:3}],['circle',{cx:6,cy:6,r:3}],['path',{d:'M13 6h3a2 2 0 0 1 2 2v7'}],['path',{d:'M11 18H8a2 2 0 0 1-2-2V9'}]],
   layers:[['path',{d:'m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z'}],['path',{d:'m22 12.5-9.17 4.17a2 2 0 0 1-1.66 0L2 12.5'}],['path',{d:'m22 17.5-9.17 4.17a2 2 0 0 1-1.66 0L2 17.5'}]],
@@ -140,7 +141,7 @@ const signalValue=value=>value===undefined||value===null||(Array.isArray(value)&
 const definitionRows=(entries,className='definition-grid')=>{const list=el('dl','',{class:className});for(const [label,value] of entries){list.append(el('dt',label),el('dd',displayValue(value),typeof value==='string'&&value.length>28?{class:'mono'}:{}))}return list};
 const modalKeys=(surface,dismiss,event)=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();dismiss();return}if(event.key!=='Tab')return;const nodes=[...surface.querySelectorAll('button,input,select,textarea,[tabindex]:not([tabindex="-1"])')].filter(node=>!node.disabled),first=nodes[0],last=nodes.at(-1);if(!first)return;if((event.shiftKey&&document.activeElement===first)||(!event.shiftKey&&document.activeElement===last)){event.preventDefault();(event.shiftKey?last:first).focus()}};
 const setModalScrollLock=locked=>{document.documentElement.classList.toggle('modal-open',locked);document.body.classList.toggle('modal-open',locked)};
-function createDialogShell(label,origin){const backdrop=el('div','',{class:'modal-backdrop'}),dialog=el('section','',{class:'upload-dialog',role:'dialog','aria-modal':'true','aria-label':label,tabindex:'-1'}),background=document.querySelector('#workbench-shell');let closed=false;const dismiss=()=>{if(closed)return;closed=true;document.removeEventListener('keydown',onKey,true);backdrop.remove();background?.removeAttribute('inert');setModalScrollLock(false);origin?.focus()},onKey=event=>modalKeys(dialog,dismiss,event);backdrop.addEventListener('click',event=>{if(event.target===backdrop)dismiss()});document.addEventListener('keydown',onKey,true);background?.setAttribute('inert','');setModalScrollLock(true);backdrop.append(dialog);document.body.append(backdrop);return {dialog,dismiss,focus(){dialog.focus()}}}
+function createDialogShell(label,origin){const backdrop=el('div','',{class:'modal-backdrop'}),dialog=el('section','',{class:'upload-dialog',role:'dialog','aria-modal':'true','aria-label':label,tabindex:'-1'}),background=document.querySelector('#workbench-shell'),dismissHooks=[];let closed=false;const dismiss=()=>{if(closed)return;closed=true;dismissHooks.forEach(hook=>hook());document.removeEventListener('keydown',onKey,true);backdrop.remove();background?.removeAttribute('inert');setModalScrollLock(false);origin?.focus()},onKey=event=>modalKeys(dialog,dismiss,event);backdrop.addEventListener('click',event=>{if(event.target===backdrop)dismiss()});document.addEventListener('keydown',onKey,true);background?.setAttribute('inert','');setModalScrollLock(true);backdrop.append(dialog);document.body.append(backdrop);return {dialog,dismiss,onDismiss(hook){dismissHooks.push(hook)},focus(){dialog.focus()}}}
 function registryCatalog(){
  const params=new URL(location).searchParams,main=el('main','',{class:'registry-page'}),tools=el('section','',{class:'registry-tools','aria-label':'Plugin Registry 筛选'}),searchLabel=el('label','',{class:'registry-search'}),query=el('input','',{placeholder:'搜索 Plugin ID / 能力','aria-label':'搜索 Plugin ID 或能力',maxlength:'64'}),kindBar=el('div','',{class:'registry-kinds',role:'group','aria-label':'Plugin 类型'}),list=el('section','',{class:'registry-catalog','aria-label':'Plugin Registry','aria-live':'polite'});let selectedKind=/^[a-z][a-z0-9_.-]{0,47}$/.test(params.get('kind')||'')?params.get('kind'):'',requestVersion=0,timer=null,kinds=[];query.value=(params.get('q')||'').slice(0,64);
  const schemaText=values=>(values||[]).join(', ')||'—',capabilityText=values=>(values||[]).join(', ')||'—',kindLabel=value=>value.split(/[-_.]/).map(part=>part?part[0].toUpperCase()+part.slice(1):part).join(' '),syncUrl=()=>{const url=new URL(location);url.searchParams.delete('q');url.searchParams.delete('kind');if(query.value.trim())url.searchParams.set('q',query.value.trim());if(selectedKind)url.searchParams.set('kind',selectedKind);history.replaceState(null,'',url)};
@@ -155,7 +156,7 @@ function registryCatalog(){
 }
 const plugins=registryCatalog;
 const locatorLabel=locator=>{if(!locator||!Object.keys(locator).length)return '定位不可用';const parts=[locator.kind,locator.page_number!=null?`第 ${locator.page_number} 页`:null,locator.sheet_name?`工作表 ${locator.sheet_name}`:null,locator.slide_number!=null?`第 ${locator.slide_number} 张`:null,locator.section?`章节 ${locator.section}`:null,locator.cell_range||locator.range].filter(Boolean);return parts.join(' / ')||JSON.stringify(locator)};
-const tabLabel=tab=>({raw:'原始文本',canonical:'Canonical',tree:'结构树',table:'表格',chunks:'Chunks',metadata:'元数据',lineage:'Lineage'}[tab]||tab);
+const tabLabel=tab=>({raw:'原始文本',canonical:'Canonical',tree:'结构树',structure:'结构树',table:'表格',tables:'表格',chunks:'Chunks',metadata:'元数据',lineage:'Lineage'}[tab]||tab);
 function inspector(id, returnFocus, selectedLocator) {
   trigger = returnFocus;
   const overlay = el("div", "", { class: "artifact-overlay" }),
@@ -464,6 +465,24 @@ function inspector(id, returnFocus, selectedLocator) {
       drawer.focus();
     });
 }
+function documentInspector(sourceId, returnFocus) {
+  const overlay=el('div','',{class:'artifact-overlay'}),scrim=el('div','',{class:'artifact-scrim'}),drawer=el('aside','',{class:'document-inspector inspector-drawer open',role:'dialog','aria-modal':'true','aria-label':'文档内容与 Chunks',tabindex:'-1'}),background=document.querySelector('#workbench-shell');
+  let closed=false,generation=0,summary=null,active=null,page=1,selectedStableId=null;
+  const dismiss=()=>{if(closed)return;closed=true;generation++;document.removeEventListener('keydown',onKey,true);overlay.remove();background?.removeAttribute('inert');setModalScrollLock(false);returnFocus?.focus()},onKey=event=>modalKeys(drawer,dismiss,event),close=iconButton('close','关闭文档检查器',dismiss);
+  document.addEventListener('keydown',onKey,true);background?.setAttribute('inert','');setModalScrollLock(true);scrim.addEventListener('click',dismiss);overlay.append(scrim,drawer);document.body.append(overlay);
+  const header=el('header','',{class:'document-inspector-header'});header.append(el('div','正在加载文档…'),close);drawer.append(header,el('div','正在读取文档内容与处理产物…',{class:'artifact-loading','aria-live':'polite'}));drawer.focus();
+  const selectLocator=(stableId,locator,detail)=>{selectedStableId=stableId;drawer.querySelectorAll('[data-stable-id]').forEach(node=>node.classList.toggle('source-selected',node.dataset.stableId===stableId));const locatorSummary=drawer.querySelector('.document-locator-summary');if(locatorSummary)locatorSummary.textContent=`${stableId} · ${locatorLabel(locator)}`;if(locator?.kind==='pdf'&&locator.page_number){page=locator.page_number;const object=drawer.querySelector('.document-pdf-preview');if(object&&summary?.preview?.contentUrl)object.data=`${summary.preview.contentUrl}#page=${page}`;const counter=drawer.querySelector('.document-page-number');if(counter)counter.textContent=`第 ${page} 页`;}const selected=drawer.querySelector('.document-selected-detail');if(selected){selected.replaceChildren(el('h3','所选对象'),el('code',stableId),detail||el('p',locatorLabel(locator)));}};
+  const sourcePane=()=>{const pane=el('section','',{class:'document-preview-pane','aria-label':'源文件预览'}),toolbar=el('div','',{class:'document-preview-toolbar'}),locatorSummary=el('p','尚未选择来源定位',{class:'document-locator-summary','aria-live':'polite'});toolbar.append(el('strong','源文件'),el('span','第 1 页',{class:'document-page-number'}));pane.append(toolbar,locatorSummary);if(summary.preview.kind==='pdf'){pane.append(el('object','',{class:'document-pdf-preview',data:`${summary.preview.contentUrl}#page=1`,type:'application/pdf','aria-label':`${summary.source.filename} PDF 预览`}));}else if(summary.preview.kind==='text'){pane.append(el('object','',{class:'document-text-preview',data:summary.preview.contentUrl,type:'text/plain','aria-label':`${summary.source.filename} 文本预览`}));}else pane.append(emptyState('源预览不可用',summary.preview.reason||'该格式没有安全预览。'));return pane};
+  const viewLimit=view=>({canonical:50,structure:50,tables:10,chunks:25,lineage:50}[view]||25);
+  const elementDetail=(item,structure)=>{const body=el('div','',{class:'document-element-detail'});body.append(el('p',item.text||'无文本内容'),definitionRows([['类型',item.kind],['阅读顺序',item.readingOrder],['父元素',item.parentId||'根节点'],['层级',item.level??(structure?'未标注':'不适用')]]));return body};
+  const tableDetail=item=>{const body=el('div','',{class:'document-table-detail'}),wrap=el('div','',{class:'table-wrap',role:'region','aria-label':`${item.id} 单元格`,tabindex:'0'}),table=el('table','',{class:'dense-table'}),head=el('tr');['行','列','内容','行跨度','列跨度','表头'].forEach(label=>head.append(el('th',label,{scope:'col'})));table.append(head);for(const cell of item.cells||[]){const row=el('tr');[cell.row,cell.column,cell.text,cell.rowSpan,cell.columnSpan,cell.isHeader?'是':'否'].forEach(value=>row.append(el('td',displayValue(value))));table.append(row)}wrap.append(table);body.append(definitionRows([['表格 ID',item.id],['元素 ID',item.elementId],['尺寸',`${item.rows} 行 × ${item.columns} 列`],['已加载单元格',`${(item.cells||[]).length} / ${item.totalCells??(item.cells||[]).length}`],['加载状态',item.hasMoreCells?'可继续加载':'已完整加载']]),wrap);return body};
+  const lineageDetail=item=>definitionRows([['Artifact ID',item.id],['类型',item.artifactType],['Schema',item.schemaRevision],['Producer',item.producer],['Parents',(item.parents||[]).join(', ')||'无'],['摘要',item.summary||'无']]);
+  const chunkDetail=item=>{const body=el('div','',{class:'chunk-detail'});body.append(el('p',item.content||''),definitionRows([['Token',item.tokenCount],['Source elements',(item.sourceElementIds||[]).join(', ')],['Parent',item.parentChunkId],['Children',(item.childChunkIds||[]).join(', ')]]));const citations=el('div','',{class:'chunk-citations'});(item.citations||[]).forEach((citation,index)=>citations.append(button(`Citation ${index+1} · ${locatorLabel(citation.locator)}`,()=>selectLocator(`${item.id}:citation:${index+1}`,citation.locator,body))));body.append(citations);return body};
+  const mergeViewItems=(view,current,incoming)=>{if(view!=='tables')return [...current,...incoming];const merged=current.map(item=>({...item,cells:[...(item.cells||[])]})),byId=new Map(merged.map(item=>[item.id,item]));for(const item of incoming){const existing=byId.get(item.id);if(!existing){const copy={...item,cells:[...(item.cells||[])]};merged.push(copy);byId.set(copy.id,copy);continue}const seen=new Set(existing.cells.map(cell=>cell.id));for(const cell of item.cells||[])if(!seen.has(cell.id)){existing.cells.push(cell);seen.add(cell.id)}existing.totalCells=item.totalCells;existing.hasMoreCells=item.hasMoreCells;}return merged};
+  const renderItems=(view,result,panel)=>{const list=el('div','',{class:`document-object-list document-${view}-list`}),detail=el('section','',{class:'document-selected-detail'});detail.append(emptyState('未选择对象','选择一条记录以查看详情并同步来源定位。'));for(const item of result.items||[]){const locator=item.locator||item.citations?.[0]?.locator||{},body=view==='chunks'?chunkDetail(item):view==='tables'?tableDetail(item):view==='lineage'?lineageDetail(item):elementDetail(item,view==='structure'),control=button('',()=>selectLocator(item.id,locator,body)),summaryText=view==='chunks'?(item.content||'').slice(0,180):view==='tables'?`${item.rows} 行 × ${item.columns} 列 · ${(item.cells||[]).length} / ${item.totalCells??(item.cells||[]).length} 个单元格`:view==='lineage'?`${item.artifactType} / ${item.schemaRevision} · ${item.producer}`:view==='structure'?`${item.kind} · 父元素 ${item.parentId||'根节点'} · 层级 ${item.level??'未标注'}`:item.text||`${item.kind} · 阅读顺序 ${item.readingOrder}`;control.className='document-object';control.dataset.stableId=item.id;control.append(el('strong',item.id),el('span',summaryText),el('small',view==='lineage'?(item.summary||'无摘要'):locatorLabel(locator)));list.append(control)}if(!list.children.length)list.append(emptyState('没有可显示的对象','当前页为空。'));const layout=el('div','',{class:'document-view-layout'});layout.append(list,detail);panel.replaceChildren(layout);const selected=[...list.querySelectorAll('[data-stable-id]')].find(node=>node.dataset.stableId===selectedStableId);if(selected)selected.click();if(result.page?.nextCursor){const cursor=result.page.nextCursor,more=button('加载更多',async()=>{const request=++generation;more.disabled=true;try{const next=await api(`/api/workbench/documents/${sourceId}/inspector/views/${view}?limit=${viewLimit(view)}&cursor=${encodeURIComponent(cursor)}`);if(closed||request!==generation||active!==view||!panel.isConnected)return;renderItems(view,{items:mergeViewItems(view,result.items||[],next.items||[]),page:next.page},panel)}catch{if(request===generation&&active===view&&panel.isConnected){more.textContent='加载失败，可重试';more.disabled=false}}});panel.append(more)}};
+  const build=()=>{const tabs=el('div','',{class:'document-inspector-tabs',role:'tablist','aria-label':'文档视图'}),workspace=el('div','',{class:'document-inspector-workspace'}),diagnostic=el('section','',{class:'document-diagnostic-pane'}),panel=el('section','',{class:'document-tabpanel',role:'tabpanel',tabindex:'0'});const render=async tab=>{active=tab.id;const request=++generation;tabs.querySelectorAll('[role=tab]').forEach(control=>{const selected=control.dataset.tab===active;control.setAttribute('aria-selected',String(selected));control.tabIndex=selected?0:-1});panel.replaceChildren(skeletonRows(5));if(tab.state!=='available'){panel.replaceChildren(emptyState(`${tabLabel(tab.id)} 不可用`,tab.reason||'该处理产物尚不可用。'));return}if(tab.id==='metadata'){panel.replaceChildren(definitionRows(Object.entries(summary.metadata||{}),'definition-grid metadata-grid'));return}try{const data=await api(`/api/workbench/documents/${sourceId}/inspector/views/${tab.id}?limit=${viewLimit(tab.id)}`);if(closed||request!==generation||active!==tab.id||!panel.isConnected)return;renderItems(tab.id,data,panel)}catch(problem){if(!closed&&request===generation&&active===tab.id&&panel.isConnected)panel.replaceChildren(notice('failure','视图不可用',problem.code||'DOCUMENT_VIEW_UNAVAILABLE',[button('重试',()=>render(tab))]))}};for(const tab of summary.tabs||[]){const control=button(tabLabel(tab.id),()=>render(tab));control.dataset.tab=tab.id;control.setAttribute('role','tab');control.setAttribute('aria-selected','false');control.setAttribute('title',tab.reason||tabLabel(tab.id));tabs.append(control)}tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const controls=[...tabs.querySelectorAll('[role=tab]')],focused=controls.indexOf(event.target),index=focused>=0?focused:controls.findIndex(x=>x.dataset.tab===active),next=event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowLeft'?-1:1)+controls.length)%controls.length;controls[next].focus();controls[next].click()});diagnostic.append(tabs,panel);workspace.append(sourcePane(),diagnostic);const identity=el('div');identity.append(el('span','DOCUMENT INSPECTOR',{class:'eyebrow'}),el('h2',summary.source.filename),el('code',summary.source.id,{class:'artifact-identity'}),statusTag(statusLabel(summary.latestRun.state),statusTone(summary.latestRun.state)));header.replaceChildren(identity,close);drawer.replaceChildren(header,workspace);render((summary.tabs||[]).find(tab=>tab.id==='chunks'&&tab.state==='available')||(summary.tabs||[])[0]);drawer.focus()};
+  api(`/api/workbench/documents/${sourceId}/inspector`).then(value=>{if(closed)return;summary=value;build()}).catch(()=>{header.replaceChildren(el('h2','文档检查器不可用'),close);drawer.replaceChildren(header,notice('failure','无法读取文档','服务未返回授权的文档投影。'));drawer.focus()});
+}
 function documents() {
   const main = el("main", "", { class: "documents-page" }),
     surface = el("section", "", {
@@ -606,16 +625,10 @@ function documents() {
           title: row.profileId || "不可用",
         }),
         actions = el("div", "", { class: "document-actions" });
-      if (row.actions?.sourceArtifactId)
+      if (row.actions?.inspectDocument)
         actions.append(
-          iconButton("file", "检查 Source Artifact", (event) =>
-            inspector(row.actions.sourceArtifactId, event.currentTarget),
-          ),
-        );
-      if (row.actions?.outputArtifactId)
-        actions.append(
-          iconButton("search", "检查最新输出 Artifact", (event) =>
-            inspector(row.actions.outputArtifactId, event.currentTarget),
+          iconButton("eye", "查看文档内容与 Chunks", (event) =>
+            documentInspector(row.sourceArtifactId, event.currentTarget),
           ),
         );
       const state = row.latestRun?.state || "PENDING",
@@ -725,8 +738,7 @@ function documents() {
       body = el("div", "", { class: "upload-dialog-body" }),
       foot = el("footer", "", { class: "dialog-actions" }),
       close = iconButton("close", "关闭上传对话框", modal.dismiss),
-      profile = el("input", "", {
-        placeholder: "Ingestion Profile Set ID",
+      profile = el("select", "", {
         "aria-label": "Ingestion Profile Set ID",
       }),
       file = el("input", "", { type: "file", "aria-label": "选择文档" }),
@@ -743,13 +755,18 @@ function documents() {
         role: "status",
         "aria-live": "polite",
       }),
-      headCopy = el("div"),
+      headCopy = el("div", "", {class:"upload-title-copy"}),
+      stepLabel = el("span", "步骤 1 / 2 · 选择文件", {class:"upload-step-label"}),
       fileLabel = el("label", "文档"),
       profileLabel = el("label", "Profile Set"),
       source = el("section", "", { class: "upload-source-step" });
     let generation = 0,
       currentPreview = null,
-      replacementToken = null;
+      replacementToken = null,
+      primaryControl = null,
+      intakeStep = 1;
+    const discardToken=token=>token?fetch(`/api/workbench/documents/preflights/${encodeURIComponent(token)}`,{method:'DELETE',keepalive:true}).catch(()=>{}):Promise.resolve();
+    modal.onDismiss(()=>{generation+=1;const token=currentPreview?.token||replacementToken;currentPreview=null;replacementToken=null;primaryControl=null;discardToken(token)});
     const cancel = () => button("取消", modal.dismiss),
       resetCurrent = (message) => {
         current.hidden = false;
@@ -774,7 +791,7 @@ function documents() {
       result.replaceChildren();
       alert.replaceChildren();
       requestStatus.textContent = "";
-      foot.replaceChildren(cancel());
+      if(intakeStep===2)stepTwoFooter();
       preflight.disabled = false;
       resetCurrent();
     };
@@ -812,7 +829,7 @@ function documents() {
           replacementToken = null;
           result.replaceChildren();
           alert.replaceChildren();
-          foot.replaceChildren(cancel());
+          stepTwoFooter();
           requestStatus.textContent = "正在切换 Profile 预览…";
           preflight.disabled = true;
           resetCurrent("正在切换 Profile 预览");
@@ -825,7 +842,7 @@ function documents() {
                 body: JSON.stringify({ profileId: id }),
               },
             );
-            if (requestGeneration !== generation) return;
+            if (requestGeneration !== generation){discardToken(next?.token);return}
             await render(next, fileName);
             requestStatus.textContent = "Profile 预览已更新";
           } catch {
@@ -839,7 +856,10 @@ function documents() {
               ),
             );
           } finally {
-            if (requestGeneration === generation) preflight.disabled = false;
+            if (requestGeneration === generation) {
+              preflight.disabled = false;
+              restoreStepTwoFocus();
+            }
           }
         });
       }
@@ -911,7 +931,7 @@ function documents() {
         disclosure.append(warning, label);
       }
       const run = button(
-        "创建新 Run",
+        "开始 Ingestion",
         async () => {
           if (currentPreview !== p) return;
           run.disabled = true;
@@ -939,7 +959,7 @@ function documents() {
         external.length > 0,
       );
       ack.addEventListener("change", () => (run.disabled = !ack.checked));
-      foot.replaceChildren(cancel(), run);
+      stepTwoFooter(run);
       result.replaceChildren(
         factSection,
         resolution,
@@ -953,7 +973,7 @@ function documents() {
       );
       renderCurrent(p, fileName);
     };
-    const preflight = button("预检", async () => {
+    const preflight = button("检测并匹配", async () => {
       const selectedFile = file.files?.[0];
       if (!selectedFile || !profile.value) return;
       const oldToken = currentPreview?.token || replacementToken,
@@ -962,7 +982,7 @@ function documents() {
       replacementToken = null;
       result.replaceChildren();
       alert.replaceChildren();
-      foot.replaceChildren(cancel());
+      stepTwoFooter();
       resetCurrent("正在预检");
       preflight.disabled = true;
       requestStatus.textContent = "正在预检…";
@@ -978,7 +998,7 @@ function documents() {
           headers,
           body: selectedFile,
         });
-        if (requestGeneration !== generation) return;
+        if (requestGeneration !== generation){discardToken(next?.token);return}
         await render(next, selectedFile.name);
         requestStatus.textContent = "预检完成";
       } catch {
@@ -988,33 +1008,36 @@ function documents() {
           notice("failure", "预检失败", "请检查 Profile Set 和文档后重试。"),
         );
       } finally {
-        if (requestGeneration === generation) preflight.disabled = false;
+        if (requestGeneration === generation) {
+          preflight.disabled = false;
+          restoreStepTwoFocus();
+        }
       }
     });
-    profile.addEventListener("input", clearPreview);
-    file.addEventListener("change", clearPreview);
+    profile.addEventListener("change", clearPreview);
+    file.addEventListener("change",()=>{clearPreview();showStepOne()});
     headCopy.append(
-      el("span", "NEW INGESTION", { class: "eyebrow" }),
-      el("h2", "上传并预检文档"),
+      el("h2", "上传文档"),
+      stepLabel,
     );
     head.append(headCopy, close);
     fileLabel.append(file);
     profileLabel.append(profile);
-    source.append(fileLabel, profileLabel, preflight, requestStatus);
     body.append(source, result, alert);
-    foot.append(cancel());
     dialog.append(head, body, foot);
+    const backToFile=()=>{const token=currentPreview?.token||replacementToken;generation+=1;currentPreview=null;replacementToken=null;preflight.disabled=false;file.disabled=false;result.replaceChildren();alert.replaceChildren();requestStatus.textContent='';resetCurrent();showStepOne();discardToken(token)},
+      restoreStepTwoFocus=()=>{if(intakeStep!==2||!dialog.isConnected||dialog.contains(document.activeElement))return;const target=primaryControl?.isConnected&&!primaryControl.disabled?primaryControl:preflight;if(target?.isConnected&&!target.disabled)target.focus()},
+      stepTwoFooter=primary=>{primaryControl=primary||null;const controls=[button('上一步',backToFile),cancel()];if(primary)controls.push(primary);foot.replaceChildren(...controls)},
+      showStepOne=()=>{intakeStep=1;stepLabel.textContent='步骤 1 / 2 · 选择文件';source.className='upload-source-step upload-file-step';source.replaceChildren(fileLabel);result.replaceChildren();alert.replaceChildren();requestStatus.textContent='';foot.replaceChildren(cancel(),next);next.disabled=!file.files?.length;file.focus()},
+      showStepTwo=async()=>{const requestGeneration=++generation;intakeStep=2;stepLabel.textContent='步骤 2 / 2 · 检测与 Profile';source.className='upload-source-step upload-profile-step';profile.replaceChildren(el('option','选择 Profile Set',{value:''}));requestStatus.textContent='正在读取 Profile Set…';source.replaceChildren(el('div',file.files?.[0]?.name||'复用 Source Artifact',{class:'selected-file-summary'}),profileLabel,preflight,requestStatus);stepTwoFooter();try{const profiles=await api('/api/workbench/profiles?kind=ingestion');if(requestGeneration!==generation||intakeStep!==2||!dialog.isConnected)return;const valid=(profiles||[]).filter(item=>item.validationState==='VALID');for(const item of profiles||[])profile.append(el('option',`${item.profileId}${item.validationState==='VALID'?'':'（不可用）'}`,{value:item.profileId,disabled:item.validationState==='VALID'?null:'true'}));if(valid.length===1){profile.value=valid[0].profileId;requestStatus.textContent='正在自动检测与匹配…';preflight.click()}else requestStatus.textContent=valid.length?'请选择 Profile Set 后检测':'没有可用的 Ingestion Profile Set';}catch{if(requestGeneration!==generation||intakeStep!==2||!dialog.isConnected)return;requestStatus.textContent='Profile Set 暂不可用';alert.replaceChildren(notice('failure','无法读取 Profile Set','请稍后重试。'))}},
+      next=button('下一步',showStepTwo,true);
+    showStepOne();
     if (handoff) {
       profile.value = handoff.workspaceProfileId || "";
       file.disabled = true;
-      source.insertBefore(
-        notice(
-          "info",
-          "复用 Source Artifact",
-          handoff.sourceArtifactId || "Source Artifact 不可用。",
-        ),
-        file.closest("label"),
-      );
+      intakeStep = 2;
+      stepLabel.textContent='步骤 2 / 2 · 检测与 Profile';
+      source.replaceChildren(notice("info","复用 Source Artifact",handoff.sourceArtifactId || "Source Artifact 不可用。"),profileLabel,requestStatus);
       render(handoff, handoff.sourceArtifactId);
     }
     modal.focus();

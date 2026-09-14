@@ -10,7 +10,7 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-028 Implemented; S-029 Confirmed
+- **Stories:** S-001 through S-029 Implemented
 - **Active Story:** None
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
@@ -30,8 +30,10 @@
   no-publication failures, deterministic answer, citation, and decision metrics
   with exact fact spans, strict Evidence identity, explicit applicability
   states, frozen decision cohorts, bounded failure lineage, a persisted
-  source-submission catalog with a safe paged document projection and
-  responsive document-list diagnostics, a
+  source-submission catalog with a safe paged document projection,
+  server-owned two-step intake, and a unified exact-lineage document Inspector
+  with authorized PDF preview, typed Canonical/table/Chunk views, and
+  responsive document diagnostics, a
   Docker-backed Artifact trace persistence/restart regression, and an isolated
   lifecycle regression
 
@@ -63,7 +65,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-029 through the Story Pipeline.
+No Story is currently active. Select the next confirmed product or UI parity
+change before starting another delivery pipeline.
 
 ## Change History
 
@@ -280,3 +283,10 @@ Deliver S-029 through the Story Pipeline.
   server-owned upload/preflight/Profile flow and a unified document Inspector
   with real source preview, applicable Canonical/table views, related RAG
   Chunks, and synchronized source locators.
+- **2026-09-15:** S-029 completed a two-step file/preflight/Profile intake and
+  one eye-action document Inspector with authorized PDF content, exact related
+  Artifact lineage, typed bounded Canonical/structure/table/Chunk views,
+  complete cell continuation, synchronized citations, safe observability, and
+  eighteen reviewed desktop/narrow visual baselines. Independent acceptance
+  and repaired final review passed; Docker PostgreSQL execution remains blocked
+  before the fixture by the known local `LOCAL_START_FAILED` condition.

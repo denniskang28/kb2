@@ -82,7 +82,7 @@ def compose(project: str, state: Path, *arguments: str) -> subprocess.CompletedP
 
 CREATE_FIXTURE = r'''
 import asyncio, hashlib, json
-from uuid import UUID
+from uuid import UUID, uuid4
 from kb2_runtime.config import Settings
 from kb2_runtime.trace.contracts import ArtifactInput, DocumentSubmissionInput, EngineKind, IngestionEvidence, Metric, QualitySignal, SafeError, StageResult
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
@@ -206,6 +206,11 @@ async def main():
     assert {item["display_filename"] for item in equal_submissions} == {"restart-sample.pdf"}
     assert len({item["content_digest"] for item in equal_submissions}) == 1
     await repository.connection.execute(
+        "INSERT INTO artifact_lineage (artifact_id, ordinal, parent_artifact_id) VALUES (%s,%s,%s)",
+        (duplicate_source_ids[1], 0, parent_id),
+    )
+    await repository.connection.commit()
+    await repository.connection.execute(
         "UPDATE document_submissions SET registered_at='2026-09-14T08:00:00Z' WHERE source_artifact_id=ANY(%s)",
         ([parent_id, *duplicate_source_ids],),
     )
@@ -273,6 +278,37 @@ async def main():
             retryable=True,
         ),
     )
+    failed_descendant_id = uuid4()
+    await repository.connection.execute(
+        """INSERT INTO artifacts (
+            id, artifact_type, schema_revision, content_digest, byte_size, storage_locator,
+            producing_run_id, producing_stage_attempt_id, producing_plugin_id,
+            configuration_digest, summary
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+        (failed_descendant_id, "failed.fixture", "v1", "f" * 64, 1, "sha256/ff/failed-fixture",
+         run_id, failed_retry, "test.failed", "e" * 64, "failed descendant"),
+    )
+    await repository.connection.execute(
+        "INSERT INTO artifact_lineage (artifact_id, ordinal, parent_artifact_id) VALUES (%s,%s,%s)",
+        (failed_descendant_id, 0, parent_id),
+    )
+    await repository.connection.commit()
+    exact_manifests = await repository.list_document_artifact_manifests(parent_id, run_id)
+    assert [item.id for item in exact_manifests] == [parent_id, child_id]
+    assert all(item.producing_run_id == run_id for item in exact_manifests)
+    assert later_source_id not in {item.id for item in exact_manifests}
+    assert duplicate_source_ids[1] not in {item.id for item in exact_manifests}
+    assert failed_descendant_id not in {item.id for item in exact_manifests}
+    assert await repository.list_document_artifact_manifests(parent_id, duplicate_run_ids[1]) == ()
+    assert await repository.list_document_artifact_manifests(later_source_id, run_id) == ()
+    duplicate_manifests = [
+        await repository.list_document_artifact_manifests(source_id, duplicate_run)
+        for source_id, duplicate_run in zip(duplicate_source_ids, duplicate_run_ids, strict=True)
+    ]
+    assert [[item.id for item in manifests] for manifests in duplicate_manifests] == [
+        [duplicate_source_ids[0]], [duplicate_source_ids[1]],
+    ]
+    assert duplicate_source_ids[0] != duplicate_source_ids[1]
     recovered_retry, recovered_number = await runs.start_attempt(run_id, "retry.stage")
     await runs.complete_attempt(recovered_retry, "recovered")
     retry_trace = await runs.get_run_trace(run_id)

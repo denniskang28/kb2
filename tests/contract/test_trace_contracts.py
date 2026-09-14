@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, DocumentSubmissionInput, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult, metadata_contains_sensitive_text
+from kb2_runtime.trace.contracts import ArtifactInput, ArtifactManifest, ArtifactReference, DocumentSubmissionInput, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult, metadata_contains_sensitive_text
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.schemas import schema_is_supported
@@ -297,6 +297,63 @@ def test_exact_document_registration_lookup_is_empty_safe_deduplicated_and_bound
     assert "d.source_artifact_id=ANY(%s)" in statement
     assert parameters is not None and len(parameters[0]) == 64
     assert len(set(parameters[0])) == 64
+
+
+def test_document_artifact_manifest_query_is_exact_run_scoped_and_success_only() -> None:
+    async def capture() -> tuple[CapturingConnection, object, object]:
+        source_id, run_id = uuid4(), uuid4()
+        connection = CapturingConnection([])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        assert await repository.list_document_artifact_manifests(source_id, run_id, limit=999) == ()
+        return connection, source_id, run_id
+
+    connection, source_id, run_id = asyncio.run(capture())
+    statement, parameters = connection.cursor_instance.executions[0]
+    normalized = " ".join(statement.split())
+    assert normalized.startswith("WITH RECURSIVE descendants AS")
+    assert "d.source_artifact_id=%s AND d.run_id=%s" in normalized
+    assert "a.producing_run_id=%s AND s.run_id=%s" in normalized
+    assert "child.producing_run_id=%s AND s.run_id=%s" in normalized
+    assert normalized.count("s.state='SUCCEEDED' AND s.result='SUCCEEDED'") == 2
+    assert "JOIN artifact_lineage l ON l.parent_artifact_id=parent.id" in normalized
+    assert "ORDER BY a.created_at, a.id LIMIT %s" in normalized
+    assert "content_digest" not in normalized and "display_filename" not in normalized
+    assert parameters == (source_id, run_id, run_id, run_id, run_id, run_id, 128)
+
+
+def test_document_artifact_manifest_query_consumes_fetched_ids_and_filters_missing_rows() -> None:
+    async def exercise() -> tuple[tuple[ArtifactManifest, ...], list[object]]:
+        source_id, run_id, first_id, missing_id, second_id = (uuid4() for _ in range(5))
+
+        class ResultsCursor(CapturingCursor):
+            async def fetchall(self) -> list[dict[str, Any]]:
+                return [{"id": first_id}, {"id": missing_id}, {"id": second_id}]
+
+        connection = CapturingConnection([])
+        connection.cursor_instance = ResultsCursor([])
+
+        def projected(identifier: object) -> ArtifactManifest:
+            return ArtifactManifest(
+                id=identifier, artifact_type="opaque.bytes", schema_revision="v1",
+                content_digest="a" * 64, byte_size=1, storage_locator=f"sha256/aa/{identifier}",
+                producing_run_id=run_id, producing_stage_attempt_id=uuid4(),
+                producing_plugin_id="fixture@1", configuration_digest="b" * 64, summary="fixture",
+            )
+
+        class Repository(TraceRepository):
+            requested: list[object] = []
+
+            async def get_artifact_manifest(self, artifact_id):
+                self.requested.append(artifact_id)
+                return None if artifact_id == missing_id else projected(artifact_id)
+
+        repository = Repository(connection)  # type: ignore[arg-type]
+        result = await repository.list_document_artifact_manifests(source_id, run_id)
+        return result, repository.requested
+
+    result, requested = asyncio.run(exercise())
+    assert [item.id for item in result] == [requested[0], requested[2]]
+    assert len(requested) == 3
 
 
 def test_artifact_service_rolls_back_when_document_catalog_insert_fails() -> None:

@@ -286,6 +286,39 @@ class TraceRepository:
             rows = await cursor.fetchall()
         return tuple(DocumentSubmissionRecord.model_validate(row) for row in rows)
 
+    async def list_document_artifact_manifests(
+        self, source_id: UUID, run_id: UUID, *, limit: int = 128,
+    ) -> tuple[ArtifactManifest, ...]:
+        """Return succeeded descendants of one registered source in its exact Run."""
+        bounded = min(max(limit, 1), 128)
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                """WITH RECURSIVE descendants AS (
+                    SELECT a.id FROM document_submissions d
+                    JOIN artifacts a ON a.id=d.source_artifact_id
+                    JOIN stage_attempts s ON s.id=a.producing_stage_attempt_id
+                    WHERE d.source_artifact_id=%s AND d.run_id=%s
+                      AND a.producing_run_id=%s AND s.run_id=%s
+                      AND s.state='SUCCEEDED' AND s.result='SUCCEEDED'
+                    UNION
+                    SELECT child.id FROM descendants parent
+                    JOIN artifact_lineage l ON l.parent_artifact_id=parent.id
+                    JOIN artifacts child ON child.id=l.artifact_id
+                    JOIN stage_attempts s ON s.id=child.producing_stage_attempt_id
+                    WHERE child.producing_run_id=%s AND s.run_id=%s
+                      AND s.state='SUCCEEDED' AND s.result='SUCCEEDED'
+                ) SELECT a.id FROM descendants d JOIN artifacts a ON a.id=d.id
+                  ORDER BY a.created_at, a.id LIMIT %s""",
+                (source_id, run_id, run_id, run_id, run_id, run_id, bounded),
+            )
+            identifiers = [row["id"] for row in await cursor.fetchall()]
+        manifests = []
+        for identifier in identifiers:
+            manifest = await self.get_artifact_manifest(identifier)
+            if manifest is not None:
+                manifests.append(manifest)
+        return tuple(manifests)
+
     async def eligible_artifact_location(self, artifact_id: UUID) -> tuple[str, str] | None:
         locations = await self.eligible_artifact_locations(artifact_id)
         return locations[0] if locations else None

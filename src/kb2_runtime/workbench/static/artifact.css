@@ -27,9 +27,44 @@
 .metadata-grid { max-width: 820px; }
 .lineage-list { margin: 0; padding: 0; list-style: none; border-top: 2px solid var(--color-ink); }
 .lineage-list li { padding: 8px 10px; border-bottom: 1px solid var(--color-rule); overflow-wrap: anywhere; }
+.document-inspector { position: absolute; inset: 0 0 0 auto; display: grid; grid-template-rows: auto minmax(0,1fr); width: min(1180px, calc(100vw - 32px)); min-width: 0; background: var(--color-surface); border-left: 2px solid var(--color-ink); }
+.document-inspector-header { display: flex; align-items: flex-start; gap: 12px; min-height: 72px; padding: 11px 14px; border-bottom: 2px solid var(--color-ink); }
+.document-inspector-header > div { min-width: 0; }
+.document-inspector-header h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.document-inspector-header .icon-button { margin-left: auto; }
+.document-inspector-workspace { display: grid; grid-template-columns: minmax(340px,44%) minmax(0,56%); min-width: 0; min-height: 0; overflow: hidden; }
+.document-preview-pane, .document-diagnostic-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.document-preview-pane { border-right: 1px solid var(--color-rule); background: var(--color-ground); }
+.document-preview-toolbar { display: flex; justify-content: space-between; align-items: center; min-height: 39px; padding: 7px 10px; border-bottom: 1px solid var(--color-rule); background: var(--color-surface); }
+.document-locator-summary { min-height: 42px; margin: 0; padding: 7px 10px; border-bottom: 1px solid var(--color-rule); color: var(--color-muted); font-size: 10.5px; overflow-wrap: anywhere; }
+.document-pdf-preview, .document-text-preview { flex: 1; width: 100%; min-height: 480px; border: 0; background: #fff; }
+.document-inspector-tabs { display: flex; min-height: 39px; overflow-x: auto; border-bottom: 2px solid var(--color-ink); }
+.document-inspector-tabs button { flex: 0 0 auto; min-height: 38px; border: 0; border-right: 1px solid var(--color-rule); white-space: nowrap; }
+.document-inspector-tabs button[aria-selected="true"] { border-bottom: 3px solid var(--color-accent); background: #fff2ef; font-weight: 700; }
+.document-tabpanel { min-width: 0; min-height: 0; padding: 10px; overflow: auto; }
+.document-view-layout { display: grid; grid-template-columns: minmax(220px,.75fr) minmax(260px,1fr); min-height: 420px; border: 1px solid var(--color-rule); }
+.document-object-list { min-width: 0; overflow-y: auto; border-right: 1px solid var(--color-rule); }
+.document-object { display: grid; gap: 3px; width: 100%; min-height: 68px; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--color-rule-soft); text-align: left; }
+.document-object strong, .document-object span, .document-object small { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.document-object strong { font: 10.5px ui-monospace, monospace; white-space: nowrap; }
+.document-object span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.document-object small { color: var(--color-muted); white-space: nowrap; }
+.document-selected-detail { min-width: 0; padding: 10px 12px; overflow: auto; overflow-wrap: anywhere; }
+.document-selected-detail code { display: block; margin: 5px 0 10px; }
+.chunk-detail > p { max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.chunk-citations { display: grid; gap: 5px; margin-top: 9px; }
+.chunk-citations button { text-align: left; }
 @media (max-width: 899px) {
   .artifact-inspector.inspector-drawer.open { width: 100vw; border-left: 0; }
   .artifact-header { min-height: 66px; }
   .artifact-source-grid { grid-template-columns: 1fr; }
   .inspector-list { border-right: 0; border-bottom: 2px solid var(--color-ink); }
+  .document-inspector { width: 100vw; border-left: 0; }
+  .document-inspector-header { min-height: 66px; }
+  .document-inspector-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(260px,42%) minmax(0,58%); overflow: hidden; }
+  .document-preview-pane { border-right: 0; border-bottom: 2px solid var(--color-ink); }
+  .document-pdf-preview, .document-text-preview { min-height: 180px; }
+  .document-view-layout { grid-template-columns: 1fr; min-height: 0; }
+  .document-object-list { max-height: 220px; border-right: 0; border-bottom: 1px solid var(--color-rule); }
+  .document-selected-detail { min-height: 180px; }
 }

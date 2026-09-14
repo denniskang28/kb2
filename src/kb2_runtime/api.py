@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+import time
+from urllib.parse import quote
 
 from fastapi import FastAPI, Header, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from kb2_runtime.config import CapabilityCatalog, Settings
 from kb2_runtime.health.contracts import LivenessReport
@@ -28,6 +31,31 @@ from kb2_runtime.workbench.evaluation import EvaluationWorkbenchService
 from kb2_runtime.workbench.diagnosis import ComparisonWorkbenchService, RunHistoryWorkbenchService
 from kb2_runtime.evaluation.datasets.repository import DatasetRepository
 from uuid import UUID
+
+
+logger = logging.getLogger(__name__)
+
+
+def _log_document_inspector(
+    started_ns: int, source_id: UUID, view: str, outcome: str, code: str, *,
+    run_id: UUID | None = None, artifact_id: UUID | None = None,
+    item_count: int = 0, byte_count: int = 0,
+) -> None:
+    logger.info(
+        "workbench_document_inspector",
+        extra={
+            "kb2_event": "workbench_document_inspector",
+            "kb2_source_id": str(source_id),
+            "kb2_run_id": str(run_id) if run_id else None,
+            "kb2_view": view,
+            "kb2_artifact_id": str(artifact_id) if artifact_id else None,
+            "kb2_item_count": item_count,
+            "kb2_byte_count": byte_count,
+            "kb2_duration_ms": max(0, (time.monotonic_ns() - started_ns) // 1_000_000),
+            "kb2_outcome": outcome,
+            "kb2_code": code,
+        },
+    )
 
 
 def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | None = None) -> FastAPI:
@@ -422,6 +450,11 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         except (ValueError, ProfileError):
             return problem("PREFLIGHT_SELECTION_INVALID", 422)
 
+    @app.delete("/api/workbench/documents/preflights/{token}", status_code=204)
+    async def document_preflight_discard(token: str) -> Response:
+        (await documents()).discard_preflight(token)
+        return Response(status_code=204)
+
     @app.post("/api/workbench/documents/preflights/{token}/runs")
     async def document_submit(token: str, payload: dict[str, object]) -> JSONResponse:
         try:
@@ -435,6 +468,119 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
             return problem("INGESTION_SUBMISSION_UNAVAILABLE", 503)
         except (ValueError, ProfileError):
             return problem("INGESTION_SUBMISSION_INVALID", 422)
+
+    @app.get("/api/workbench/documents/{source_id}/inspector")
+    async def document_inspector(source_id: UUID) -> JSONResponse:
+        started_ns = time.monotonic_ns()
+        try:
+            result = await (await documents()).document_inspector(source_id)
+            if result is None:
+                _log_document_inspector(started_ns, source_id, "summary", "failure", "DOCUMENT_NOT_FOUND")
+                return problem("DOCUMENT_NOT_FOUND", 404)
+            _log_document_inspector(
+                started_ns, source_id, "summary", "success", "OK",
+                run_id=result.latestRun.id, artifact_id=source_id, item_count=len(result.tabs),
+            )
+            return JSONResponse(result.model_dump(mode="json", exclude_none=True))
+        except Exception:
+            _log_document_inspector(
+                started_ns, source_id, "summary", "failure", "DOCUMENT_INSPECTOR_UNAVAILABLE",
+            )
+            return problem("DOCUMENT_INSPECTOR_UNAVAILABLE", 503)
+
+    @app.get("/api/workbench/documents/{source_id}/inspector/views/{view}")
+    async def document_inspector_view(source_id: UUID, view: str, limit: str | None = Query(default=None),
+                                      cursor: str | None = Query(default=None)) -> JSONResponse:
+        started_ns = time.monotonic_ns()
+        logged_view = view if view in {"canonical", "structure", "tables", "chunks", "lineage"} else "invalid"
+        try:
+            if limit is not None and (not limit.isascii() or not limit.isdigit()):
+                raise ValueError("DOCUMENT_VIEW_INVALID")
+            result = await (await documents()).document_view(source_id, view, int(limit) if limit is not None else None, cursor)
+            _log_document_inspector(
+                started_ns, source_id, logged_view, "success", "OK", run_id=result.runId,
+                artifact_id=result.artifactId, item_count=len(result.items),
+            )
+            return JSONResponse(result.model_dump(mode="json"))
+        except LookupError:
+            _log_document_inspector(started_ns, source_id, logged_view, "failure", "DOCUMENT_NOT_FOUND")
+            return problem("DOCUMENT_NOT_FOUND", 404)
+        except PermissionError:
+            _log_document_inspector(started_ns, source_id, logged_view, "failure", "DOCUMENT_VIEW_UNAVAILABLE")
+            return problem("DOCUMENT_VIEW_UNAVAILABLE", 409)
+        except OverflowError:
+            _log_document_inspector(started_ns, source_id, logged_view, "failure", "DOCUMENT_VIEW_TOO_LARGE")
+            return problem("DOCUMENT_VIEW_TOO_LARGE", 413)
+        except ValueError:
+            _log_document_inspector(started_ns, source_id, logged_view, "failure", "DOCUMENT_VIEW_INVALID")
+            return problem("DOCUMENT_VIEW_INVALID", 422)
+        except Exception:
+            _log_document_inspector(
+                started_ns, source_id, logged_view, "failure", "DOCUMENT_INSPECTOR_UNAVAILABLE",
+            )
+            return problem("DOCUMENT_INSPECTOR_UNAVAILABLE", 503)
+
+    @app.get("/api/workbench/documents/{source_id}/content")
+    async def document_source_content(source_id: UUID, request: Request) -> Response:
+        started_ns = time.monotonic_ns()
+        try:
+            media_type, content, filename, run_id = await (await documents()).document_content(source_id)
+        except LookupError as exc:
+            code = "SOURCE_CONTENT_UNAVAILABLE" if str(exc) == "SOURCE_CONTENT_UNAVAILABLE" else "DOCUMENT_NOT_FOUND"
+            _log_document_inspector(started_ns, source_id, "content", "failure", code)
+            return problem(code, 404)
+        except TypeError:
+            _log_document_inspector(started_ns, source_id, "content", "failure", "PREVIEW_FORMAT_UNAVAILABLE")
+            return problem("PREVIEW_FORMAT_UNAVAILABLE", 415)
+        except Exception:
+            _log_document_inspector(started_ns, source_id, "content", "failure", "SOURCE_CONTENT_UNAVAILABLE")
+            return problem("SOURCE_CONTENT_UNAVAILABLE", 404)
+        headers = {
+            "Accept-Ranges": "bytes", "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin",
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename, safe='')}",
+        }
+        value = request.headers.get("range")
+        if not value:
+            _log_document_inspector(
+                started_ns, source_id, "content", "success", "OK", run_id=run_id,
+                artifact_id=source_id, byte_count=len(content),
+            )
+            return Response(content, media_type=media_type, headers=headers)
+        def range_problem() -> JSONResponse:
+            _log_document_inspector(
+                started_ns, source_id, "content", "failure", "SOURCE_RANGE_INVALID",
+                run_id=run_id, artifact_id=source_id,
+            )
+            return JSONResponse(
+                {"contractVersion": "workbench-problem/v1", "code": "SOURCE_RANGE_INVALID"},
+                status_code=416, headers={**headers, "Content-Range": f"bytes */{len(content)}"},
+            )
+        if "," in value or not value.startswith("bytes="):
+            return range_problem()
+        try:
+            start_text, end_text = value[6:].split("-", 1)
+            if not start_text:
+                suffix = min(int(end_text), 1024 * 1024)
+                if suffix <= 0:
+                    raise ValueError
+                start, end = max(0, len(content) - suffix), len(content) - 1
+            else:
+                start = int(start_text)
+                end = int(end_text) if end_text else min(len(content) - 1, start + 1024 * 1024 - 1)
+            end = min(end, len(content) - 1, start + 1024 * 1024 - 1)
+            if start < 0 or start >= len(content) or end < start:
+                raise ValueError
+        except (ValueError, TypeError):
+            return range_problem()
+        body = content[start:end + 1]
+        _log_document_inspector(
+            started_ns, source_id, "content", "success", "OK", run_id=run_id,
+            artifact_id=source_id, byte_count=len(body),
+        )
+        return Response(body, status_code=206, media_type=media_type,
+                        headers={**headers, "Content-Range": f"bytes {start}-{end}/{len(content)}",
+                                 "Content-Length": str(len(body))})
 
     @app.get("/api/workbench/ingestion-runs/{run_id}")
     async def ingestion_run(run_id: UUID) -> JSONResponse:

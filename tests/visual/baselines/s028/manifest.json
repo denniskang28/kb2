@@ -28,7 +28,7 @@
   },
   "comparison": {"colorSpace": "RGBA", "channelTolerance": 12, "maximumDifferingPixelRatio": 0.005, "baselineUpdatesAutomatic": false},
   "baselines": [
-    {"file": "documents-populated-1440.png", "scenario": "populated", "viewport": [1440, 900], "sha256": "14ac377717496a609d81e3726b98d642cfa6adf334d4ed151c1f6b9d1120bad4"},
+    {"file": "documents-populated-1440.png", "scenario": "populated", "viewport": [1440, 900], "sha256": "7d647d0df04df53b44cf7efc0d02e72a022edc48efbbec6ad42c573d615d6096"},
     {"file": "documents-populated-644.png", "scenario": "populated", "viewport": [644, 900], "sha256": "6428c61e81d960cebcb641a04d676a636cb520b72f3692f2d1fc1781ebec6f38"},
     {"file": "documents-empty-1440.png", "scenario": "empty", "viewport": [1440, 900], "sha256": "0ec5f963c8489645613ac9f58efef5f4266272482f0c700f06c8543316e8aa4e"},
     {"file": "documents-empty-644.png", "scenario": "empty", "viewport": [644, 900], "sha256": "c88083b41fd85b23ae4b7c82072794690a7394d3acd7459c7c11610b88c6010c"},

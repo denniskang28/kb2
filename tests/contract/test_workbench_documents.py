@@ -2,20 +2,29 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from io import BytesIO
+import hashlib
 import json
 from types import SimpleNamespace
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from kb2_runtime.api import create_app
 from kb2_runtime.config import CapabilityCatalog, Settings
 from kb2_runtime.workbench.documents import DocumentWorkbenchService
+from kb2_runtime.workbench.contracts import DocumentElementViewItem, DocumentInspectorView
 from kb2_runtime.plugins.registry import PluginRegistration
-from kb2_runtime.canonical.contracts import ProviderFixture
+from kb2_runtime.canonical.contracts import (
+    CanonicalDocument, CanonicalElement, CanonicalTable, PdfLocator, Provenance,
+    ProviderFixture, TableCell,
+)
 from kb2_runtime.canonical.normalizer import normalize_fixture
+from kb2_runtime.chunking.contracts import ChunkerConfig
+from kb2_runtime.chunking.processor import canonical_bytes, process
 from kb2_runtime.trace.contracts import ArtifactManifest, DocumentSubmissionCursor, DocumentSubmissionRecord, RunState
 from tests.contract.test_ingestion_engine import profile, registry
 from tests.contract.test_canonical_document import fixture as canonical_fixture
@@ -56,6 +65,86 @@ def _candidate_service(default: str = "local") -> tuple[DocumentWorkbenchService
         profiles, current, object(), object(), object(),  # type: ignore[arg-type]
         external_capabilities=frozenset({"external.fixture"}),
     ), profiles
+
+
+def _table_inspector_service(table_sizes: tuple[int, ...]):
+    source_id, canonical_id, run_id = uuid4(), uuid4(), uuid4()
+    locator = PdfLocator(page_number=1, x0=0, y0=0, x1=1, y1=1)
+    elements = []
+    tables = []
+    for table_index, size in enumerate(table_sizes):
+        assert size > 0 and size <= 512 * 512
+        rows = 1 if size <= 512 else 2
+        assert size % rows == 0
+        columns = size // rows
+        element_id = f"elm_{table_index + 1:016x}"
+        table_id = f"tbl_{table_index + 1:016x}"
+        elements.append(CanonicalElement(
+            id=element_id, kind="table", reading_order=table_index,
+            table_id=table_id, locator=locator,
+        ))
+        cells = tuple(TableCell(
+            id=f"cel_{table_index + 1:02x}{cell_index + 1:014x}", text=f"cell {cell_index}",
+            row=cell_index // columns, column=cell_index % columns,
+            row_span=1, column_span=1,
+        ) for cell_index in range(size))
+        tables.append(CanonicalTable(
+            id=table_id, element_id=element_id, rows=rows, columns=columns,
+            locator=locator, cells=cells,
+        ))
+    if not elements:
+        elements.append(CanonicalElement(
+            id="elm_0000000000000001", kind="paragraph", reading_order=0,
+            text="no tables", locator=locator,
+        ))
+    document = CanonicalDocument(
+        document_id="doc_0000000000000001",
+        provenance=Provenance(
+            source_artifact_id=str(source_id), source_content_digest="a" * 64,
+            adapter_id="fixture.adapter@1",
+        ),
+        elements=tuple(elements), tables=tuple(tables),
+    )
+    content = document.model_dump_json().encode()
+    registered = datetime(2026, 9, 15, 3, 0, tzinfo=timezone.utc)
+
+    def manifest(identifier: UUID, artifact_type: str, payload: bytes, parents=()):
+        return ArtifactManifest(
+            id=identifier, artifact_type=artifact_type, schema_revision="v1",
+            content_digest=hashlib.sha256(payload).hexdigest(), byte_size=len(payload),
+            summary="safe", storage_locator="not-projected", producing_run_id=run_id,
+            producing_stage_attempt_id=uuid4(), producing_plugin_id="fixture.plugin@1",
+            configuration_digest="b" * 64, parent_artifact_ids=parents,
+        )
+
+    manifests = (
+        manifest(source_id, "opaque.bytes", b"source"),
+        manifest(canonical_id, "canonical.document", content, (source_id,)),
+    )
+    row = DocumentSubmissionRecord(
+        source_artifact_id=source_id, run_id=run_id, display_filename="table.txt",
+        media_type="text/plain", registered_at=registered, byte_size=6, format="txt",
+        document_class=None, profile_id="complete", run_state=RunState.SUCCEEDED,
+        output_artifact_id=canonical_id,
+    )
+
+    class Repository:
+        async def get_document_submissions_by_source_ids(self, source_ids, *, limit=64):
+            return (row,) if tuple(source_ids) == (source_id,) else ()
+
+        async def list_document_artifact_manifests(self, requested_source, requested_run, *, limit=128):
+            return manifests if (requested_source, requested_run) == (source_id, run_id) else ()
+
+    class Artifacts:
+        repository = Repository()
+
+        async def read_content(self, identifier):
+            return content if identifier == canonical_id else b"source"
+
+    service = DocumentWorkbenchService(
+        _Profiles(), registry(), object(), object(), Artifacts(),  # type: ignore[arg-type]
+    )
+    return service, source_id, canonical_id, document
 
 
 def test_preflight_returns_detector_facts_automatic_resolution_stages_and_local_disclosure() -> None:
@@ -171,7 +260,7 @@ def test_document_list_projection_is_strict_paged_and_safe(settings: Settings, c
     assert set(payload) == {"contractVersion", "items", "page"}
     assert set(payload["items"][0]) == {"sourceArtifactId", "filename", "mediaType", "format", "byteSize", "documentClass", "profileId", "registeredAt", "latestRun", "actions"}
     assert payload["items"][0]["documentClass"] is None
-    assert payload["items"][0]["actions"] == {"sourceArtifactId": str(source_id), "outputArtifactId": str(output_id)}
+    assert payload["items"][0]["actions"] == {"inspectDocument": True, "sourceArtifactId": str(source_id), "outputArtifactId": str(output_id)}
     assert not any(key in str(payload).lower() for key in ("storage_locator", "contentdigest", "providerpayload", "filesystem"))
     second = asyncio.run(service.documents_page(1, first.page.nextCursor))
     assert second.items[0].sourceArtifactId == source_id
@@ -209,6 +298,370 @@ def test_preflight_is_bounded_and_requires_a_saved_ingestion_profile() -> None:
         with pytest.raises(ValueError, match="PREFLIGHT_INVALID"):
             await _service().preflight(b"", "x.txt", "text/plain", "complete")
     asyncio.run(exercise())
+
+
+def test_preflight_discard_is_idempotent_and_revokes_submission_authority(
+    settings: Settings, catalog: CapabilityCatalog,
+) -> None:
+    service = _service()
+    preview = asyncio.run(service.preflight(b"fixture", "fixture.txt", "text/plain", "complete"))
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = service
+    client = TestClient(app)
+    assert client.delete(f"/api/workbench/documents/preflights/{preview['token']}").status_code == 204
+    assert client.delete(f"/api/workbench/documents/preflights/{preview['token']}").status_code == 204
+    response = client.post(f"/api/workbench/documents/preflights/{preview['token']}/runs", json={})
+    assert response.status_code == 404 and response.json()["code"] == "PREFLIGHT_UNAVAILABLE"
+
+
+def test_document_inspector_is_exact_source_paged_safe_and_range_capable(
+    settings: Settings, catalog: CapabilityCatalog,
+) -> None:
+    from pypdf import PdfWriter
+
+    source_id, canonical_id, chunks_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    registered = datetime(2026, 9, 15, 2, 0, tzinfo=timezone.utc)
+    pdf = BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.write(pdf)
+    pdf_bytes = pdf.getvalue()
+    canonical_document = normalize_fixture(ProviderFixture.model_validate(canonical_fixture()), str(source_id))
+    canonical_content = canonical_document.model_dump_json().encode()
+    chunk_content = canonical_bytes(process(canonical_content, ChunkerConfig(strategy="parent_child", max_tokens=64)))
+
+    def manifest(identifier, artifact_type, content, parents=()):
+        return ArtifactManifest(
+            id=identifier, artifact_type=artifact_type, schema_revision="v1",
+            content_digest=hashlib.sha256(content).hexdigest(), byte_size=len(content), summary="safe summary",
+            storage_locator="private/path/not-projected", producing_run_id=run_id,
+            producing_stage_attempt_id=uuid4(), producing_plugin_id="fixture.plugin@1",
+            configuration_digest="b" * 64, parent_artifact_ids=parents,
+        )
+
+    manifests = (
+        manifest(source_id, "opaque.bytes", pdf_bytes),
+        manifest(canonical_id, "canonical.document", canonical_content, (source_id,)),
+        manifest(chunks_id, "chunk.set", chunk_content, (canonical_id,)),
+    )
+    row = DocumentSubmissionRecord(
+        source_artifact_id=source_id, run_id=run_id, display_filename="sample report.pdf",
+        media_type="application/pdf", registered_at=registered, byte_size=len(pdf_bytes), format="pdf",
+        document_class="native_long", profile_id="complete", run_state=RunState.SUCCEEDED,
+        output_artifact_id=chunks_id,
+    )
+
+    class Repository:
+        async def get_document_submissions_by_source_ids(self, source_ids, *, limit=64):
+            return (row,) if tuple(source_ids) == (source_id,) else ()
+
+        async def list_document_artifact_manifests(self, requested_source, requested_run, *, limit=128):
+            assert (requested_source, requested_run) == (source_id, run_id)
+            return manifests
+
+    class Artifacts:
+        repository = Repository()
+
+        async def read_content(self, identifier):
+            return {source_id: pdf_bytes, canonical_id: canonical_content, chunks_id: chunk_content}[identifier]
+
+    service = DocumentWorkbenchService(_Profiles(), registry(), object(), object(), Artifacts())  # type: ignore[arg-type]
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = service
+    client = TestClient(app)
+
+    summary_response = client.get(f"/api/workbench/documents/{source_id}/inspector")
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["preview"] == {"kind": "pdf", "contentUrl": f"/api/workbench/documents/{source_id}/content", "pageCount": 1}
+    assert [tab["id"] for tab in summary["tabs"]] == ["canonical", "structure", "tables", "chunks", "metadata", "lineage"]
+    assert all(tab["state"] == "available" for tab in summary["tabs"])
+    assert set(summary) == {"contractVersion", "source", "latestRun", "preview", "tabs", "artifacts", "metadata"}
+    assert "storage" not in str(summary).lower() and "private/path" not in str(summary)
+    unknown = uuid4()
+    assert client.get(f"/api/workbench/documents/{unknown}/inspector").status_code == 404
+    assert client.get(f"/api/workbench/documents/{unknown}/content").status_code == 404
+    assert client.get(f"/api/workbench/documents/{unknown}/inspector/views/chunks").status_code == 404
+
+    chunks = client.get(f"/api/workbench/documents/{source_id}/inspector/views/chunks?limit=1").json()
+    assert chunks["items"][0]["tokenCount"] >= 1
+    assert chunks["items"][0]["sourceElementIds"] and chunks["items"][0]["citations"]
+    assert set(chunks["items"][0]) == {"id", "content", "truncated", "tokenCount", "sourceElementIds", "parentChunkId", "childChunkIds", "citations"}
+    assert client.get(f"/api/workbench/documents/{source_id}/inspector/views/chunks?cursor=forged").status_code == 422
+    assert client.get(f"/api/workbench/documents/{source_id}/inspector/views/chunks?limit=51").status_code == 422
+    assert client.get(f"/api/workbench/documents/{source_id}/inspector/views/raw").status_code == 422
+
+    canonical = client.get(f"/api/workbench/documents/{source_id}/inspector/views/canonical?limit=1").json()
+    assert set(canonical["items"][0]) == {"id", "kind", "readingOrder", "parentId", "level", "text", "truncated", "locator"}
+    typed_canonical = asyncio.run(service.document_view(source_id, "canonical", 1))
+    assert isinstance(typed_canonical.items[0], DocumentElementViewItem)
+    with pytest.raises(ValidationError, match="document view items do not match"):
+        DocumentInspectorView(
+            view="tables", artifactId=canonical_id, runId=run_id,
+            items=typed_canonical.items, page=typed_canonical.page,
+        )
+    if canonical["page"]["nextCursor"]:
+        mismatch = client.get(
+            f"/api/workbench/documents/{source_id}/inspector/views/chunks",
+            params={"cursor": canonical["page"]["nextCursor"]},
+        )
+        assert mismatch.status_code == 422
+    structure = client.get(f"/api/workbench/documents/{source_id}/inspector/views/structure?limit=100").json()
+    assert any(item["parentId"] for item in structure["items"])
+    assert any(item["level"] for item in structure["items"])
+    tables = client.get(f"/api/workbench/documents/{source_id}/inspector/views/tables").json()
+    assert set(tables["items"][0]) == {
+        "id", "elementId", "rows", "columns", "locator", "cellOffset",
+        "totalCells", "hasMoreCells", "cells",
+    }
+    assert tables["items"][0]["cells"]
+    assert all(set(cell) == {"id", "text", "row", "column", "rowSpan", "columnSpan", "isHeader"}
+               for cell in tables["items"][0]["cells"])
+    lineage = client.get(f"/api/workbench/documents/{source_id}/inspector/views/lineage").json()
+    assert len(lineage["items"]) == 3
+    assert all(set(item) == {"id", "artifactType", "schemaRevision", "producer", "parents", "summary"}
+               for item in lineage["items"])
+    assert lineage["items"][1] == {
+        "id": str(canonical_id), "artifactType": "canonical.document", "schemaRevision": "v1",
+        "producer": "fixture.plugin@1", "parents": [str(source_id)], "summary": "safe summary",
+    }
+    serialized_views = json.dumps((canonical, tables, chunks, lineage)).lower()
+    assert all(secret not in serialized_views for secret in
+               ("private/path", "storage_locator", "configuration_digest", "providerpayload", "embedding", "vector"))
+
+    complete = client.get(f"/api/workbench/documents/{source_id}/content")
+    assert complete.content == pdf_bytes and complete.headers["cache-control"] == "private, no-store"
+    assert complete.headers["x-content-type-options"] == "nosniff"
+    assert complete.headers["cross-origin-resource-policy"] == "same-origin"
+    assert complete.headers["accept-ranges"] == "bytes"
+    assert complete.headers["content-disposition"].startswith("inline; filename*=UTF-8''sample%20report.pdf")
+    partial = client.get(f"/api/workbench/documents/{source_id}/content", headers={"Range": "bytes=0-9"})
+    assert partial.status_code == 206 and partial.content == pdf_bytes[:10]
+    assert partial.headers["content-range"] == f"bytes 0-9/{len(pdf_bytes)}"
+    chrome_range = client.get(
+        f"/api/workbench/documents/{source_id}/content",
+        headers={"Range": "bytes=0-1048575"},
+    )
+    assert chrome_range.status_code == 206 and chrome_range.content == pdf_bytes
+    assert chrome_range.headers["content-range"] == f"bytes 0-{len(pdf_bytes) - 1}/{len(pdf_bytes)}"
+    assert chrome_range.headers["content-length"] == str(len(pdf_bytes))
+    beyond_eof = client.get(
+        f"/api/workbench/documents/{source_id}/content",
+        headers={"Range": f"bytes=1-{len(pdf_bytes) + 4096}"},
+    )
+    assert beyond_eof.status_code == 206 and beyond_eof.content == pdf_bytes[1:]
+    assert beyond_eof.headers["content-range"] == f"bytes 1-{len(pdf_bytes) - 1}/{len(pdf_bytes)}"
+    assert beyond_eof.headers["content-length"] == str(len(pdf_bytes) - 1)
+    suffix = client.get(f"/api/workbench/documents/{source_id}/content", headers={"Range": "bytes=-8"})
+    assert suffix.status_code == 206 and suffix.content == pdf_bytes[-8:]
+    assert client.get(f"/api/workbench/documents/{source_id}/content", headers={"Range": "items=0-1"}).status_code == 416
+    assert client.get(f"/api/workbench/documents/{source_id}/content", headers={"Range": f"bytes={len(pdf_bytes)}-"}).status_code == 416
+    assert client.get(f"/api/workbench/documents/{source_id}/content", headers={"Range": "bytes=0-1,3-4"}).status_code == 416
+    assert "private/path" not in str(dict(complete.headers))
+
+    element = service._element_item(canonical_document.elements[0])
+    with pytest.raises(ValidationError) as unsafe:
+        DocumentElementViewItem(**element.model_dump(mode="python"), storageLocator="private/path")
+    assert any(error["type"] == "extra_forbidden" and error["loc"] == ("storageLocator",)
+               for error in unsafe.value.errors())
+
+
+@pytest.mark.parametrize(
+    ("table_sizes", "expected_page_sizes"),
+    [((500, 20), ((500, 12), (8,))), ((520,), ((512,), (8,))), ((), ((),)), ((4,), ((4,),))],
+)
+def test_table_view_cursor_reaches_every_cell_once_with_stable_table_identity(
+    table_sizes: tuple[int, ...], expected_page_sizes: tuple[tuple[int, ...], ...],
+) -> None:
+    service, source_id, _, document = _table_inspector_service(table_sizes)
+
+    async def exercise() -> None:
+        cursor = None
+        pages = []
+        collected: dict[str, list[str]] = {}
+        offsets: dict[str, list[int]] = {}
+        while True:
+            result = await service.document_view(source_id, "tables", 20, cursor)
+            pages.append(tuple(len(item.cells) for item in result.items))
+            assert sum(len(item.cells) for item in result.items) <= 512
+            for item in result.items:
+                collected.setdefault(item.id, []).extend(cell.id for cell in item.cells)
+                offsets.setdefault(item.id, []).append(item.cellOffset)
+                assert item.totalCells == next(
+                    len(table.cells) for table in document.tables if table.id == item.id
+                )
+                assert item.hasMoreCells == (
+                    item.cellOffset + len(item.cells) < item.totalCells
+                )
+            cursor = result.page.nextCursor
+            if cursor is None:
+                break
+        assert tuple(pages) == expected_page_sizes
+        assert set(collected) == {table.id for table in document.tables}
+        for table in document.tables:
+            expected = [cell.id for cell in table.cells]
+            assert collected[table.id] == expected
+            assert len(collected[table.id]) == len(set(collected[table.id]))
+            assert offsets[table.id][0] == 0
+
+    asyncio.run(exercise())
+
+
+def test_table_view_rejects_mismatched_malformed_and_out_of_schema_cursors(
+    settings: Settings, catalog: CapabilityCatalog,
+) -> None:
+    service, source_id, canonical_id, _ = _table_inspector_service((520,))
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = service
+    client = TestClient(app)
+    first = client.get(
+        f"/api/workbench/documents/{source_id}/inspector/views/tables?limit=20"
+    )
+    assert first.status_code == 200
+    cursor = first.json()["page"]["nextCursor"]
+    assert cursor
+    continued = client.get(
+        f"/api/workbench/documents/{source_id}/inspector/views/tables",
+        params={"limit": 20, "cursor": cursor},
+    )
+    assert continued.status_code == 200
+    assert continued.json()["items"][0]["cellOffset"] == 512
+    assert client.get(
+        f"/api/workbench/documents/{source_id}/inspector/views/canonical",
+        params={"cursor": cursor},
+    ).status_code == 422
+    middle = len(cursor) // 2
+    tampered = cursor[:middle] + ("A" if cursor[middle] != "A" else "B") + cursor[middle + 1:]
+    for forged in (
+        "forged",
+        tampered,
+        service._encode_view_cursor(source_id, canonical_id, "tables", 0, 521),
+        service._encode_view_cursor(source_id, canonical_id, "tables", -1, 0),
+        service._encode_view_cursor(uuid4(), canonical_id, "tables", 0, 0),
+    ):
+        response = client.get(
+            f"/api/workbench/documents/{source_id}/inspector/views/tables",
+            params={"limit": 20, "cursor": forged},
+        )
+        assert response.status_code == 422
+        assert response.json() == {
+            "contractVersion": "workbench-problem/v1", "code": "DOCUMENT_VIEW_INVALID",
+        }
+
+
+def test_document_inspector_observability_is_structured_complete_and_safe(
+    settings: Settings, catalog: CapabilityCatalog, caplog: pytest.LogCaptureFixture,
+) -> None:
+    service, source_id, canonical_id, _ = _table_inspector_service((520,))
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = service
+    client = TestClient(app)
+    caplog.set_level("INFO", logger="kb2_runtime.api")
+
+    assert client.get(f"/api/workbench/documents/{source_id}/inspector").status_code == 200
+    assert client.get(
+        f"/api/workbench/documents/{source_id}/inspector/views/tables?limit=20"
+    ).status_code == 200
+    assert client.get(
+        f"/api/workbench/documents/{source_id}/content", headers={"Range": "bytes=1-3"},
+    ).status_code == 206
+    assert client.get(
+        f"/api/workbench/documents/{source_id}/content", headers={"Range": "bytes=99-"},
+    ).status_code == 416
+    malicious_view = "credential%3Dsecret-path-content"
+    assert client.get(
+        f"/api/workbench/documents/{source_id}/inspector/views/{malicious_view}"
+    ).status_code == 422
+    unknown = uuid4()
+    assert client.get(f"/api/workbench/documents/{unknown}/inspector").status_code == 404
+
+    records = [record for record in caplog.records
+               if getattr(record, "kb2_event", None) == "workbench_document_inspector"]
+    assert len(records) == 6
+    projected = [{
+        "source": record.kb2_source_id,
+        "run": record.kb2_run_id,
+        "view": record.kb2_view,
+        "artifact": record.kb2_artifact_id,
+        "items": record.kb2_item_count,
+        "bytes": record.kb2_byte_count,
+        "outcome": record.kb2_outcome,
+        "code": record.kb2_code,
+    } for record in records]
+    assert projected[0]["source"] == str(source_id)
+    assert projected[0]["view"] == "summary" and projected[0]["items"] == 6
+    assert projected[0]["artifact"] == str(source_id)
+    assert projected[0]["run"] is not None
+    assert projected[1] == {
+        "source": str(source_id), "run": projected[0]["run"], "view": "tables",
+        "artifact": str(canonical_id), "items": 1, "bytes": 0,
+        "outcome": "success", "code": "OK",
+    }
+    assert projected[2] == {
+        "source": str(source_id), "run": projected[0]["run"], "view": "content",
+        "artifact": str(source_id), "items": 0, "bytes": 3,
+        "outcome": "success", "code": "OK",
+    }
+    assert projected[3] == {
+        "source": str(source_id), "run": projected[0]["run"], "view": "content",
+        "artifact": str(source_id), "items": 0, "bytes": 0,
+        "outcome": "failure", "code": "SOURCE_RANGE_INVALID",
+    }
+    assert projected[4] == {
+        "source": str(source_id), "run": None, "view": "invalid", "artifact": None,
+        "items": 0, "bytes": 0, "outcome": "failure", "code": "DOCUMENT_VIEW_INVALID",
+    }
+    assert projected[5] == {
+        "source": str(unknown), "run": None, "view": "summary", "artifact": None,
+        "items": 0, "bytes": 0, "outcome": "failure", "code": "DOCUMENT_NOT_FOUND",
+    }
+    assert all(record.kb2_duration_ms >= 0 for record in records)
+    safe_log_text = " ".join(
+        record.getMessage() + repr(projected[index]) for index, record in enumerate(records)
+    ).lower()
+    assert all(secret not in safe_log_text for secret in (
+        "table.txt", "cell 0", "not-projected", "storage_locator", "providerpayload",
+        "credential", "secret", "path", "/private/",
+    ))
+    assert all("credential=secret" not in repr(record.__dict__).lower() for record in records)
+
+
+def test_document_inspector_observability_never_logs_exception_text(
+    settings: Settings, catalog: CapabilityCatalog, caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "private filename.pdf /private/provider-payload credential=unsafe"
+
+    class BrokenInspector:
+        async def document_inspector(self, source_id):
+            raise RuntimeError(secret)
+
+        async def document_view(self, source_id, view, limit, cursor):
+            raise RuntimeError(secret)
+
+        async def document_content(self, source_id):
+            raise RuntimeError(secret)
+
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = BrokenInspector()
+    client = TestClient(app)
+    caplog.set_level("INFO", logger="kb2_runtime.api")
+    source_id = uuid4()
+
+    assert client.get(f"/api/workbench/documents/{source_id}/inspector").status_code == 503
+    assert client.get(
+        f"/api/workbench/documents/{source_id}/inspector/views/tables"
+    ).status_code == 503
+    assert client.get(f"/api/workbench/documents/{source_id}/content").status_code == 404
+
+    records = [record for record in caplog.records
+               if getattr(record, "kb2_event", None) == "workbench_document_inspector"]
+    assert [record.kb2_code for record in records] == [
+        "DOCUMENT_INSPECTOR_UNAVAILABLE", "DOCUMENT_INSPECTOR_UNAVAILABLE",
+        "SOURCE_CONTENT_UNAVAILABLE",
+    ]
+    assert all(record.kb2_outcome == "failure" for record in records)
+    assert secret not in " ".join(record.getMessage() for record in records)
+    assert all(secret not in repr(record.__dict__) for record in records)
 
 
 def test_preflight_keeps_workspace_profile_set_while_automatic_selection_uses_inner_profile_id() -> None:
