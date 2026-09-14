@@ -479,6 +479,20 @@ class TraceRepository:
             )
             return tuple(await cursor.fetchall())
 
+    async def list_plugin_contract_test_summaries(self, plugin_ids: tuple[str, ...]) -> tuple[dict[str, Any], ...]:
+        """Latest evaluation lifecycle fact per Plugin for the Registry table."""
+        if not plugin_ids:
+            return ()
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT DISTINCT ON (s.plugin_id) s.plugin_id,r.id,r.state,r.terminal_state,r.created_at "
+                "FROM stage_attempts s JOIN runs r ON r.id=s.run_id "
+                "WHERE r.engine_kind='evaluation' AND s.plugin_id=ANY(%s) "
+                "ORDER BY s.plugin_id,r.created_at DESC,r.id DESC",
+                (list(plugin_ids),),
+            )
+            return tuple(await cursor.fetchall())
+
     async def list_profile_workspaces(self, kind: str | None = None, query: str = "") -> tuple[dict[str, Any], ...]:
         """Mutable local workbench values; deliberately no revision/history table."""
         async with self.connection.cursor() as cursor:

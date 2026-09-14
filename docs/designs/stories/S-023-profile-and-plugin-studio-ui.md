@@ -236,6 +236,43 @@ disabled with an accessible explanation; validation failure sends no request.
 - [ ] Add API, persistence, component/accessibility, responsive/overflow, and
   visual-regression coverage; run focused and existing regression suites.
 
+## UI-007 Parity Repair
+
+The 2026-09-14 delivered Registry populated-state repair restored real rows but
+left the screen in a permanent list/detail split.  That split contradicts the
+adopted UI-007 hierarchy: the Registry is a full-width dense catalog and a
+selected Plugin opens a modal detail drawer over the catalog.  The user
+confirmed the following bounded correction on 2026-09-14:
+
+- Render the full Registry as a ruled table with Plugin ID, kind, runner,
+  accepted and output schemas, capabilities, local availability,
+  implementation digest, and contract-test summary.  Extend the existing
+  `RegistryPlugin` read model with those descriptor-owned summaries so the
+  browser never performs one detail request per row.
+- Replace the free-text kind field and secondary runner/readiness controls with
+  an `All` plus actual-kind single-select chip set.  Keep server-owned filtering
+  and stable ordering; make `q` case-insensitively match Plugin ID, kind, and
+  capabilities.  Preserve only `q` and `kind` in the URL so reload and browser
+  navigation restore the visible result.
+- Open every selected Plugin in the same labelled modal drawer at desktop and
+  narrow widths.  The drawer groups typed contracts, configuration schema,
+  schema-derived safe configuration, and recent Runs; it traps focus, closes
+  with Escape or its scrim/close control, returns focus to the selected row,
+  and resets its scroll position for each selection.
+- Display only authoritative states.  `runnable` maps to AVAILABLE or
+  UNAVAILABLE with its safe reason code.  DEGRADED remains absent until an
+  engine-owned readiness contract supplies that state.  Missing contract-test
+  or Run history is an explicit empty state and never becomes a synthetic PASS.
+- Keep wide-table overflow inside a labelled table region at 1440 x 900 and
+  644 x 900.  The page itself must not overflow horizontally; the modal drawer
+  must fit the viewport and leave every command reachable.
+
+Verification adds service/API assertions for summary projection, capability
+search, kind combinations, and absent run history, plus browser assertions and
+captures for the full-width populated table, filtering, modal focus/close, and
+desktop/narrow geometry.  No migration, Registry mutation, package operation,
+or Profile behavior changes.
+
 ## Open Questions
 
 None. The pipeline may proceed directly to development.
@@ -245,8 +282,13 @@ None. The pipeline may proceed directly to development.
 Approved by the S-023 `story-pipeline` invocation on 2026-09-12; no separate
 product decision is required.
 
+The UI-007 parity repair above was explicitly confirmed by the user on
+2026-09-14 and is approved for implementation.
+
 ## Change History
 
 - **2026-09-12:** Created just-in-time implementation design from confirmed
   S-023, its exact anchors, delivered dependency contracts, and current
   workbench code.
+- **2026-09-14:** Added the confirmed full-width Registry table, actual-kind
+  filters, capability search, and modal contract-detail parity repair.

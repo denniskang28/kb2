@@ -79,6 +79,8 @@ _PLUGIN = {
     "runnable": False,
     "reason": "RUNNER_UNAVAILABLE",
     "implementationDigest": "a" * 64,
+    "inputSchemas": ["query.question/v1"],
+    "outputSchemas": ["retrieval.candidates/v1"],
     "inputPorts": [{"name": "question", "artifactType": "query.question", "schemaRevision": "v1", "minItems": 1, "maxItems": 1}],
     "outputPorts": [{"name": "candidates", "artifactType": "retrieval.candidates", "schemaRevision": "v1", "minItems": 1, "maxItems": 1}],
     "configurationSchema": {"type": "object", "properties": {
@@ -87,7 +89,8 @@ _PLUGIN = {
         "enabled": {"type": "boolean", "default": True},
         "labels": {"type": "object", "properties": {"corpus": {"type": "string"}}},
     }},
-    "capabilities": [], "resourceHints": {"cpu": 1}, "timeoutSeconds": 30,
+    "capabilities": ["retrieval.keyword"], "resourceHints": {"cpu": 1}, "timeoutSeconds": 30,
+    "contractTestState": "SUCCEEDED", "contractTestRunId": "12345678-1234-5678-1234-567812345678",
     "safeExample": {"limit": 8}, "contractTests": [{"state": "SUCCEEDED"}], "recentRuns": [{"state": "FAILED"}],
 }
 
@@ -375,7 +378,7 @@ async def fixture_profile_action(action: str) -> JSONResponse:
 
 @fixture_app.get("/api/workbench/plugins")
 async def fixture_plugins() -> JSONResponse:
-    return JSONResponse([{key: _PLUGIN[key] for key in ("pluginId", "kind", "runner", "runnable", "reason")}])
+    return JSONResponse([{key: _PLUGIN[key] for key in ("pluginId", "kind", "runner", "runnable", "reason", "implementationDigest", "inputSchemas", "outputSchemas", "capabilities", "contractTestState", "contractTestRunId")}])
 
 
 @fixture_app.post("/api/workbench/plugins/compatible")
@@ -1864,11 +1867,10 @@ def test_fixture_backed_studio_and_registry_states_are_reachable_without_overflo
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
-        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Registry fixture did not become ready'); }; const row = await wait(() => [...document.querySelectorAll('button')].find(x => x.textContent.includes('retriever.keyword@1'))); row.click(); const d = await wait(() => { const detail = document.querySelector('.registry-detail'); return detail?.innerText.includes('输出端口') ? detail : null; }); return {unavailable: d.innerText.includes('不可运行: RUNNER_UNAVAILABLE'), detail: d.innerText.includes('输出端口') && d.innerText.includes('安全示例'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: innerWidth >= 900 || d.getAttribute('role') === 'dialog'}; })()"""
-        assert _cdp(int(debug_port), expression, await_promise=True) == {"unavailable": True, "detail": True, "overflow": True, "modal": True}
+        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 100; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Registry fixture did not become ready'); }; const row = await wait(() => [...document.querySelectorAll('.registry-table tbody tr')].find(x => x.textContent.includes('retriever.keyword@1'))); row.click(); const d = await wait(() => { const detail = document.querySelector('.registry-dialog'); return detail?.innerText.includes('TYPED CONTRACTS') ? detail : null; }); return {columns: document.querySelectorAll('.registry-table th').length, chips: [...document.querySelectorAll('.registry-kind')].some(x => x.textContent === 'Retrieve'), unavailable: d.innerText.includes('UNAVAILABLE') && d.innerText.includes('RUNNER_UNAVAILABLE'), detail: d.innerText.includes('CONFIGURATION SCHEMA') && d.innerText.includes('EXAMPLE SAFE CONFIGURATION'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: d.getAttribute('role') === 'dialog'}; })()"""
+        assert _cdp(int(debug_port), expression, await_promise=True) == {"columns": 9, "chips": True, "unavailable": True, "detail": True, "overflow": True, "modal": True}
         _capture_cdp(int(debug_port), tmp_path / f"registry-unavailable-detail-{width}.png")
-        if width < 900:
-            assert _cdp(int(debug_port), "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); await new Promise(r => setTimeout(r, 30)); return {closed: !document.querySelector('.registry-detail').classList.contains('open'), focusReturned: document.activeElement.textContent.includes('retriever.keyword@1')}; })()", await_promise=True) == {"closed": True, "focusReturned": True}
+        assert _cdp(int(debug_port), "(async () => { document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true})); await new Promise(r => setTimeout(r, 30)); return {closed: !document.querySelector('.registry-dialog'), focusReturned: document.activeElement.textContent.includes('retriever.keyword@1')}; })()", await_promise=True) == {"closed": True, "focusReturned": True}
     finally:
         browser.terminate()
         browser.wait(timeout=10)
@@ -1899,7 +1901,10 @@ def test_real_app_registry_remains_populated_without_database_run_history(tmp_pa
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
-        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 120; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Real Registry did not become ready'); }; const rows = await wait(() => { const values = [...document.querySelectorAll('.registry-select')]; return values.length > 1 ? values : null; }); rows.find(x => x.textContent === 'retriever.keyword@1').click(); const detail = await wait(() => { const value = document.querySelector('.registry-detail'); return value?.innerText.includes('输出端口') ? value : null; }); return {rows: rows.length, actualDescriptor: rows.some(x => x.textContent === 'retriever.keyword@1'), detail: detail.innerText.includes('配置 Schema') && detail.innerText.includes('安全示例'), failureAbsent: !document.body.innerText.includes('PLUGIN_REGISTRY_UNAVAILABLE'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: innerWidth >= 900 || detail.getAttribute('role') === 'dialog'}; })()"""
+        filters = """(async () => { const wait = async predicate => { for (let i = 0; i < 120; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Registry filters did not settle'); }; const input=await wait(()=>document.querySelector('input[aria-label="搜索 Plugin ID 或能力"]')); input.value='generation.default';input.dispatchEvent(new Event('input',{bubbles:true}));const searched=await wait(()=>{const rows=[...document.querySelectorAll('.registry-table tbody tr')];return rows.length===1&&rows[0].textContent.includes('generator.deepseek@1')?rows:null});input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));const retriever=await wait(()=>[...document.querySelectorAll('.registry-kind')].find(x=>x.textContent==='Retriever'));retriever.click();const typed=await wait(()=>{const rows=[...document.querySelectorAll('.registry-table tbody tr')];return rows.length>1&&rows.every(row=>row.children[1].textContent==='Retriever')?rows:null});const kindInUrl=new URL(location).searchParams.get('kind')==='retriever';[...document.querySelectorAll('.registry-kind')].find(x=>x.textContent==='All').click();await wait(()=>document.querySelectorAll('.registry-table tbody tr').length>typed.length);return {capabilitySearch:searched.length===1,kindFilter:typed.length>1,kindInUrl,overflow:document.documentElement.scrollWidth<=innerWidth};})()"""
+        assert _cdp(int(debug_port), filters, await_promise=True) == {"capabilitySearch": True, "kindFilter": True, "kindInUrl": True, "overflow": True}
+        _capture_cdp(int(debug_port), tmp_path / f"real-registry-list-{width}.png")
+        expression = """(async () => { const wait = async predicate => { for (let i = 0; i < 120; i++) { const value = predicate(); if (value) return value; await new Promise(r => setTimeout(r, 50)); } throw new Error('Real Registry did not become ready'); }; const rows = await wait(() => { const values = [...document.querySelectorAll('.registry-table tbody tr')]; return values.length > 1 ? values : null; }); rows.find(x => x.textContent.includes('retriever.keyword@1')).click(); const detail = await wait(() => { const value = document.querySelector('.registry-dialog'); return value?.innerText.includes('TYPED CONTRACTS') ? value : null; }); return {rows: rows.length, actualDescriptor: rows.some(x => x.textContent.includes('retriever.keyword@1')), detail: detail.innerText.includes('CONFIGURATION SCHEMA') && detail.innerText.includes('EXAMPLE SAFE CONFIGURATION'), failureAbsent: !document.body.innerText.includes('PLUGIN_REGISTRY_UNAVAILABLE'), overflow: document.documentElement.scrollWidth <= innerWidth, modal: detail.getAttribute('role') === 'dialog'}; })()"""
         result = _cdp(int(debug_port), expression, await_promise=True)
         assert result["rows"] > 1
         assert result == {"rows": result["rows"], "actualDescriptor": True, "detail": True, "failureAbsent": True, "overflow": True, "modal": True}

@@ -167,14 +167,18 @@ class RegistryPlugin(OverviewContract):
     runner: str
     runnable: bool
     reason: str | None = None
+    implementationDigest: str
+    inputSchemas: tuple[str, ...]
+    outputSchemas: tuple[str, ...]
+    capabilities: tuple[str, ...]
+    contractTestState: Literal["PENDING", "RUNNING", "SUCCEEDED", "FAILED"] | None = None
+    contractTestRunId: str | None = None
 
 
 class RegistryPluginDetail(RegistryPlugin):
-    implementationDigest: str
     inputPorts: tuple[RegistryPort, ...]
     outputPorts: tuple[RegistryPort, ...]
     configurationSchema: dict[str, Any]
-    capabilities: tuple[str, ...]
     resourceHints: dict[str, Any]
     timeoutSeconds: float
     safeExample: dict[str, Any]

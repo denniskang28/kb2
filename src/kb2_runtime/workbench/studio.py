@@ -23,6 +23,7 @@ class ProfileWorkspaceRepository(Protocol):
     async def get_profile_workspace(self, profile_id: str) -> dict[str, Any] | None: ...
     async def save_profile_workspace(self, profile_id: str, kind: str, document: dict[str, Any]) -> dict[str, Any]: ...
     async def list_plugin_workbench_runs(self, plugin_id: str, limit: int = 8) -> tuple[dict[str, Any], ...]: ...
+    async def list_plugin_contract_test_summaries(self, plugin_ids: tuple[str, ...]) -> tuple[dict[str, Any], ...]: ...
 
 
 class QueryDryRunner(Protocol):
@@ -148,7 +149,8 @@ class StudioService:
     async def list_plugins(self, kind: str | None = None, runner: str | None = None, readiness: str | None = None, query: str = "") -> tuple[RegistryPlugin, ...]:
         registry = await self._registry()
         statuses = {x.plugin_id: x for x in registry.inspect()}
-        result = []
+        candidates = []
+        needle = query.casefold()
         for plugin_id in sorted(statuses):
             descriptor = registry.get(plugin_id).descriptor
             status = statuses[plugin_id]
@@ -156,10 +158,32 @@ class StudioService:
                 continue
             if readiness == "available" and not status.runnable or readiness == "unavailable" and status.runnable:
                 continue
-            if query.lower() not in plugin_id.lower() and query.lower() not in descriptor.kind.lower():
+            searchable = (plugin_id, descriptor.kind, *descriptor.capabilities)
+            if needle and not any(needle in value.casefold() for value in searchable):
                 continue
-            result.append(RegistryPlugin(pluginId=plugin_id, kind=descriptor.kind, runner=descriptor.runner.value, runnable=status.runnable, reason=status.reason))
-        return tuple(result[:128])
+            candidates.append((descriptor, status))
+        candidates = candidates[:128]
+        tests: dict[str, dict[str, Any]] = {}
+        if candidates and self._repository is not None and hasattr(self._repository, "list_plugin_contract_test_summaries"):
+            rows = await self._repository.list_plugin_contract_test_summaries(tuple(item.plugin_id for item, _ in candidates))
+            tests = {row["plugin_id"]: row for row in rows}
+        result = []
+        for descriptor, status in candidates:
+            test = tests.get(descriptor.plugin_id)
+            result.append(RegistryPlugin(
+                pluginId=descriptor.plugin_id,
+                kind=descriptor.kind,
+                runner=descriptor.runner.value,
+                runnable=status.runnable,
+                reason=status.reason,
+                implementationDigest=descriptor.implementation_digest,
+                inputSchemas=tuple(f"{artifact_type}/{revision}" for artifact_type, revision in descriptor.input_schemas),
+                outputSchemas=tuple(f"{artifact_type}/{revision}" for artifact_type, revision in descriptor.output_schemas),
+                capabilities=descriptor.capabilities,
+                contractTestState=(test["terminal_state"] or test["state"]) if test else None,
+                contractTestRunId=str(test["id"]) if test else None,
+            ))
+        return tuple(result)
 
     async def compatible_plugins(self, stage_kind: str, available_schemas: tuple[tuple[str, str], ...] = ()) -> tuple[RegistryPlugin, ...]:
         """Server-owned selector: slot label plus every required named port must fit."""
@@ -180,7 +204,16 @@ class StudioService:
             available = Counter(available_schemas)
             if available_schemas and any(available[schema] < minimum for schema, minimum in required.items()):
                 continue
-            result.append(RegistryPlugin(pluginId=status.plugin_id, kind=descriptor.kind, runner=descriptor.runner.value, runnable=True))
+            result.append(RegistryPlugin(
+                pluginId=status.plugin_id,
+                kind=descriptor.kind,
+                runner=descriptor.runner.value,
+                runnable=True,
+                implementationDigest=descriptor.implementation_digest,
+                inputSchemas=tuple(f"{artifact_type}/{revision}" for artifact_type, revision in descriptor.input_schemas),
+                outputSchemas=tuple(f"{artifact_type}/{revision}" for artifact_type, revision in descriptor.output_schemas),
+                capabilities=descriptor.capabilities,
+            ))
         return tuple(sorted(result, key=lambda item: item.pluginId))
 
     async def compatible_for_document(self, kind: str, document: dict[str, Any] | None, stage_id: str, source: str | None = None, media_type: str = "application/json") -> tuple[RegistryPlugin, ...] | ProfileValidation:
@@ -230,6 +263,13 @@ class StudioService:
             for row in await self._repository.list_plugin_workbench_runs(plugin_id)
         )
         tests = tuple(item for item in runs if item["engineKind"] == "evaluation")
+        latest_test = next((item for item in tests), None)
         return RegistryPluginDetail(pluginId=plugin_id, kind=descriptor.kind, runner=descriptor.runner.value, runnable=status.runnable, reason=status.reason,
-            implementationDigest=descriptor.implementation_digest, inputPorts=tuple(port(x) for x in descriptor.input_ports), outputPorts=tuple(port(x) for x in descriptor.output_ports),
-            configurationSchema=schema, capabilities=descriptor.capabilities, resourceHints=descriptor.resource_hints.model_dump(mode="json"), timeoutSeconds=descriptor.timeout_seconds, safeExample=example, contractTests=tests, recentRuns=runs)
+            implementationDigest=descriptor.implementation_digest,
+            inputSchemas=tuple(f"{artifact_type}/{revision}" for artifact_type, revision in descriptor.input_schemas),
+            outputSchemas=tuple(f"{artifact_type}/{revision}" for artifact_type, revision in descriptor.output_schemas),
+            capabilities=descriptor.capabilities,
+            contractTestState=(latest_test["terminalState"] or latest_test["state"]) if latest_test else None,
+            contractTestRunId=latest_test["runId"] if latest_test else None,
+            inputPorts=tuple(port(x) for x in descriptor.input_ports), outputPorts=tuple(port(x) for x in descriptor.output_ports),
+            configurationSchema=schema, resourceHints=descriptor.resource_hints.model_dump(mode="json"), timeoutSeconds=descriptor.timeout_seconds, safeExample=example, contractTests=tests, recentRuns=runs)

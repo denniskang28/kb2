@@ -208,10 +208,23 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
 
     @app.get("/api/workbench/plugins")
     async def workbench_plugins(kind: str | None = Query(default=None, max_length=48), runner: str | None = Query(default=None, pattern="^(|in_process|container)$"), readiness: str | None = Query(default=None, pattern="^(|available|unavailable)$"), q: str = Query(default="", max_length=64)) -> JSONResponse:
+        repository = None
         try:
             items = await (await registry()).list_plugins(kind or None, runner or None, readiness or None, q)
         except Exception:
             return problem("PLUGIN_REGISTRY_UNAVAILABLE", 503)
+        try:
+            repository = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+            items = await StudioService(repository=repository, readiness=registry_readiness).list_plugins(kind or None, runner or None, readiness or None, q)
+        except Exception:
+            # Descriptor summaries remain useful without optional Run history.
+            pass
+        finally:
+            if repository is not None:
+                try:
+                    await repository.close()
+                except Exception:
+                    pass
         return JSONResponse([x.model_dump(mode="json", exclude_none=True) for x in items])
 
     @app.get("/api/workbench/plugins/compatible")

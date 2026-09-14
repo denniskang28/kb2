@@ -150,12 +150,27 @@ def test_registry_compatibility_is_server_owned_and_detail_projects_bounded_run_
                 {"id": UUID(int=2), "engine_kind": "query", "state": "FAILED", "terminal_state": "FAILED", "created_at": now},
             )
 
+        async def list_plugin_contract_test_summaries(self, plugin_ids: tuple[str, ...]):
+            return ({"plugin_id": "retriever.keyword@1", "id": UUID(int=1), "state": "SUCCEEDED", "terminal_state": "SUCCEEDED", "created_at": datetime(2026, 9, 12, tzinfo=timezone.utc)},) if "retriever.keyword@1" in plugin_ids else ()
+
     async def exercise() -> None:
         service = StudioService(repository=Repository())
         compatible = await service.compatible_plugins("retrieve")
         assert compatible
         assert all(item.kind == "retriever" and item.runnable for item in compatible)
         assert {item.pluginId for item in compatible} >= {"retriever.keyword@1"}
+
+        listed = await service.list_plugins(query="retriever.keyword")
+        assert [item.pluginId for item in listed] == ["retriever.keyword@1"]
+        summary = listed[0]
+        assert summary.inputSchemas == ("opaque.bytes/v1", "search.index.result/v1")
+        assert summary.outputSchemas == ("retrieval.candidate.set/v1",)
+        assert summary.implementationDigest == "6" * 64
+        assert summary.contractTestState == "SUCCEEDED"
+        assert summary.contractTestRunId == str(UUID(int=1))
+
+        capability = await service.list_plugins(query="generation.default")
+        assert [item.pluginId for item in capability] == ["generator.deepseek@1"]
 
         detail = await service.plugin_detail("retriever.keyword@1")
         assert detail is not None
@@ -180,6 +195,14 @@ def test_real_registry_routes_accept_empty_filters_and_survive_run_history_unava
     assert response.status_code == 200
     assert len(response.json()) > 1
     assert {item["pluginId"] for item in response.json()} >= {"retriever.keyword@1"}
+    keyword = next(item for item in response.json() if item["pluginId"] == "retriever.keyword@1")
+    assert keyword["inputSchemas"] == ["opaque.bytes/v1", "search.index.result/v1"]
+    assert keyword["outputSchemas"] == ["retrieval.candidate.set/v1"]
+    assert len(keyword["implementationDigest"]) == 64
+
+    capability = client.get("/api/workbench/plugins?q=generation.default")
+    assert capability.status_code == 200
+    assert {item["pluginId"] for item in capability.json()} == {"generator.deepseek@1"}
 
     detail = client.get("/api/workbench/plugins/retriever.keyword@1")
     assert detail.status_code == 200
