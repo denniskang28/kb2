@@ -83,7 +83,7 @@ def compose(project: str, state: Path, *arguments: str) -> subprocess.CompletedP
 CREATE_FIXTURE = r'''
 import asyncio, hashlib, json
 from kb2_runtime.config import Settings
-from kb2_runtime.trace.contracts import ArtifactInput, EngineKind, IngestionEvidence, Metric, QualitySignal, SafeError, StageResult
+from kb2_runtime.trace.contracts import ArtifactInput, DocumentSubmissionInput, EngineKind, IngestionEvidence, Metric, QualitySignal, SafeError, StageResult
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.service import ArtifactService, RunService, plan_digest
@@ -128,7 +128,7 @@ async def main():
             plan_digest=plan_digest(plan),
         ),
     )
-    parent_attempt, _ = await runs.start_attempt(run_id, "parent")
+    parent_attempt, _ = await runs.start_attempt(run_id, "ingestion.source")
     parent_content = b"parent-content"
     parent = ArtifactInput(
         artifact_type="opaque.bytes", schema_revision="v1",
@@ -137,7 +137,10 @@ async def main():
         metrics=(Metric(name="z_metric", value=2.0), Metric(name="a_metric", value=1.0)),
         quality_signals=(QualitySignal(name="z_signal", status="PASS"), QualitySignal(name="a_signal", status="WARN")),
     )
-    parent_id = (await artifacts.complete_with_outputs(run_id, parent_attempt, [(parent, parent_content)]))[0]
+    parent_id = (await artifacts.complete_with_outputs(
+        run_id, parent_attempt, [(parent, parent_content)],
+        document_submission=DocumentSubmissionInput(display_filename="restart-sample.pdf", media_type="application/pdf"),
+    ))[0]
     child_attempt, _ = await runs.start_attempt(run_id, "child", (parent_id,))
     child_content = b"child-content"
     child = ArtifactInput(
@@ -147,6 +150,99 @@ async def main():
         parent_artifact_ids=(parent_id,),
     )
     child_id = (await artifacts.complete_with_outputs(run_id, child_attempt, [(child, child_content)]))[0]
+    later_source_attempt, _ = await runs.start_attempt(run_id, "ingestion.source")
+    later_source_content = b"later-source-content"
+    later_source = ArtifactInput(
+        artifact_type="opaque.bytes", schema_revision="v1",
+        content_digest=hashlib.sha256(later_source_content).hexdigest(), byte_size=len(later_source_content),
+        producing_plugin_id="test.parent", configuration_digest=hashlib.sha256(b"parent-config").hexdigest(),
+    )
+    later_source_id = (await artifacts.complete_with_outputs(
+        run_id, later_source_attempt, [(later_source, later_source_content)],
+    ))[0]
+    await repository.connection.execute(
+        "UPDATE artifacts SET created_at=(SELECT created_at + INTERVAL '1 second' FROM artifacts WHERE id=%s) WHERE id=%s",
+        (child_id, later_source_id),
+    )
+    await repository.connection.commit()
+    projected, _ = await repository.list_document_submissions(25)
+    assert next(item for item in projected if item.run_id == run_id).output_artifact_id == child_id
+    duplicate_run_ids = []
+    duplicate_source_ids = []
+    for _ in range(2):
+        duplicate_run = await runs.create_run(EngineKind.INGESTION, plan)
+        await runs.record_ingestion_evidence(
+            duplicate_run,
+            IngestionEvidence(
+                candidate_profile_ids=("native",), evaluated_rules=(),
+                observables={"extension": "pdf", "document_class": "native"},
+                selected_profile_id="native", selection_tier="default", plan_digest=plan_digest(plan),
+            ),
+        )
+        duplicate_attempt, _ = await runs.start_attempt(duplicate_run, "ingestion.source")
+        duplicate_source = (await artifacts.complete_with_outputs(
+            duplicate_run, duplicate_attempt, [(parent, parent_content)],
+            document_submission=DocumentSubmissionInput(display_filename="restart-sample.pdf", media_type="application/pdf"),
+        ))[0]
+        duplicate_run_ids.append(duplicate_run)
+        duplicate_source_ids.append(duplicate_source)
+    before_refresh, _ = await repository.list_document_submissions(25)
+    assert next(item for item in before_refresh if item.run_id == duplicate_run_ids[0]).run_state.value == "RUNNING"
+    await runs.finish_run(duplicate_run_ids[0], False)
+    after_refresh, _ = await repository.list_document_submissions(25)
+    assert next(item for item in after_refresh if item.run_id == duplicate_run_ids[0]).run_state.value == "FAILED"
+    digest_rows = await repository.connection.execute(
+        "SELECT d.source_artifact_id, d.display_filename, a.content_digest FROM document_submissions d JOIN artifacts a ON a.id=d.source_artifact_id WHERE d.source_artifact_id=ANY(%s)",
+        ([parent_id, *duplicate_source_ids],),
+    )
+    equal_submissions = await digest_rows.fetchall()
+    assert len(equal_submissions) == 3
+    assert {item["display_filename"] for item in equal_submissions} == {"restart-sample.pdf"}
+    assert len({item["content_digest"] for item in equal_submissions}) == 1
+    await repository.connection.execute(
+        "UPDATE document_submissions SET registered_at='2026-09-14T08:00:00Z' WHERE source_artifact_id=ANY(%s)",
+        ([parent_id, *duplicate_source_ids],),
+    )
+    await repository.connection.commit()
+    traversed = []
+    cursor = None
+    while True:
+        page, cursor = await repository.list_document_submissions(1, cursor)
+        traversed.extend(item.source_artifact_id for item in page)
+        if cursor is None:
+            break
+    assert traversed == sorted([parent_id, *duplicate_source_ids], reverse=True)
+    assert len(traversed) == len(set(traversed)) == 3
+
+    rollback_run = await runs.create_run(EngineKind.INGESTION, plan)
+    await runs.record_ingestion_evidence(
+        rollback_run,
+        IngestionEvidence(
+            candidate_profile_ids=("native",), evaluated_rules=(), observables={"extension": "pdf"},
+            selected_profile_id="native", selection_tier="default", plan_digest=plan_digest(plan),
+        ),
+    )
+    rollback_attempt, _ = await runs.start_attempt(rollback_run, "ingestion.source")
+    await repository.connection.execute(
+        "INSERT INTO document_submissions (source_artifact_id, run_id, display_filename, media_type) VALUES (%s,%s,%s,%s)",
+        (child_id, rollback_run, "constraint-fixture.pdf", "application/pdf"),
+    )
+    await repository.connection.commit()
+    count_result = await repository.connection.execute("SELECT COUNT(*) AS count FROM artifacts")
+    count_before_catalog_failure = (await count_result.fetchone())["count"]
+    try:
+        await artifacts.complete_with_outputs(
+            rollback_run, rollback_attempt, [(parent, parent_content)],
+            document_submission=DocumentSubmissionInput(display_filename="rollback.pdf", media_type="application/pdf"),
+        )
+        raise AssertionError("catalog uniqueness failure did not reject source publication")
+    except TraceError as error:
+        assert error.code is TraceErrorCode.TRACE_STORAGE_FAILURE
+    count_result = await repository.connection.execute("SELECT COUNT(*) AS count FROM artifacts")
+    assert (await count_result.fetchone())["count"] == count_before_catalog_failure
+    await repository.connection.execute("DELETE FROM document_submissions WHERE run_id=%s", (rollback_run,))
+    await repository.connection.commit()
+    await runs.finish_run(rollback_run, False)
     duplicate_input_attempt, _ = await runs.start_attempt(run_id, "duplicate-input", (parent_id, parent_id))
     await runs.complete_attempt(duplicate_input_attempt, "same artifact bound to two ports")
     manifest = await artifacts.get_artifact_manifest(parent_id)
@@ -202,7 +298,7 @@ async def main():
         assert error.code is TraceErrorCode.STAGE_TRANSITION_INVALID
     artifact_count = await repository.connection.execute("SELECT COUNT(*) AS count FROM artifacts")
     assert (await artifact_count.fetchone())["count"] == count_before
-    print(json.dumps({"run_id": str(run_id), "parent_id": str(parent_id), "child_id": str(child_id), "synthetic_runs": synthetic_runs, "plan_digest": plan_digest(plan)}))
+    print(json.dumps({"run_id": str(run_id), "parent_id": str(parent_id), "child_id": str(child_id), "synthetic_runs": synthetic_runs, "duplicate_sources": [str(item) for item in duplicate_source_ids], "plan_digest": plan_digest(plan)}))
     await repository.close()
 
 asyncio.run(main())
@@ -245,6 +341,18 @@ async def main():
     assert trace.ingestion_evidence
     assert trace.ingestion_evidence.selected_profile_id == "native"
     assert trace.ingestion_evidence.evaluated_rules[0]["matched"] is True
+    documents, next_cursor = await repository.list_document_submissions(25)
+    assert next_cursor is None and len(documents) == 3
+    assert parent_id in {document.source_artifact_id for document in documents}
+    assert documents[0].display_filename == "restart-sample.pdf"
+    assert documents[0].media_type == "application/pdf"
+    assert documents[0].profile_id == "native"
+    assert len(documents) == 3
+    assert len({item.source_artifact_id for item in documents}) == 3
+    assert {item.display_filename for item in documents} == {"restart-sample.pdf"}
+    assert [item.source_artifact_id for item in documents] == sorted(
+        [item.source_artifact_id for item in documents], reverse=True
+    )
     synthetic_traces = [await RunService(repository).get_run_trace(run_id) for run_id in (query_run_id, evaluation_run_id)]
     assert all(trace and len(trace.stages) == 1 and trace.stages[0].outputs == () for trace in synthetic_traces)
     assert {trace.engine_kind.value for trace in synthetic_traces if trace} == {"query", "evaluation"}

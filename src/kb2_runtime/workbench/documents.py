@@ -6,6 +6,9 @@ The ingestion engine remains the sole owner of plan creation and execution.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+from datetime import datetime, timezone
 import json
 import time
 from dataclasses import dataclass
@@ -16,8 +19,11 @@ from kb2_runtime.ingestion_engine import IngestionEngine, SourceSubmission
 from kb2_runtime.ingestion_profiles import ProfileCompiler, ProfileParser, ProfileResolver, ResolutionRequest
 from kb2_runtime.ingestion_profiles.errors import ProfileError
 from kb2_runtime.plugins.registry import PluginRegistry
+from kb2_runtime.trace.contracts import DocumentSubmissionCursor
 from kb2_runtime.trace.errors import TraceError
+from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.service import ArtifactService, RunService
+from .contracts import DocumentActions, DocumentLatestRun, DocumentList, DocumentListItem, DocumentPage
 
 
 class ProfileReader(Protocol):
@@ -42,12 +48,62 @@ class DocumentWorkbenchService:
 
     def __init__(self, profiles: ProfileReader, registry: PluginRegistry, engine: IngestionEngine,
                  runs: RunService, artifacts: ArtifactService, *, ttl_seconds: int = 300,
-                 external_capabilities: frozenset[str] = frozenset()) -> None:
+                 external_capabilities: frozenset[str] = frozenset(), repository: TraceRepository | None = None) -> None:
         self._profiles, self._registry, self._engine = profiles, registry, engine
         self._runs, self._artifacts, self._ttl = runs, artifacts, ttl_seconds
         self._preflights: dict[str, _Preflight] = {}
         self._jobs: dict[UUID, asyncio.Event] = {}
         self._external_capabilities = external_capabilities
+        self._repository = repository or getattr(artifacts, "repository", None)
+
+    async def documents_page(self, limit: int = 25, cursor: str | None = None) -> DocumentList:
+        if not 1 <= limit <= 50:
+            raise ValueError("DOCUMENT_PAGE_INVALID")
+        if self._repository is None:
+            raise RuntimeError("DOCUMENT_LIST_UNAVAILABLE")
+        position = self._decode_cursor(cursor) if cursor else None
+        rows, next_position = await self._repository.list_document_submissions(limit, position)
+        items = tuple(DocumentListItem(
+            sourceArtifactId=row.source_artifact_id,
+            filename=row.display_filename,
+            mediaType=row.media_type,
+            format=row.format,
+            byteSize=row.byte_size,
+            documentClass=row.document_class,
+            profileId=row.profile_id,
+            registeredAt=row.registered_at,
+            latestRun=DocumentLatestRun(id=row.run_id, state=row.run_state.value),
+            actions=DocumentActions(
+                sourceArtifactId=row.source_artifact_id,
+                outputArtifactId=row.output_artifact_id,
+            ),
+        ) for row in rows)
+        return DocumentList(
+            items=items,
+            page=DocumentPage(limit=limit, nextCursor=self._encode_cursor(next_position) if next_position else None),
+        )
+
+    @staticmethod
+    def _encode_cursor(cursor: DocumentSubmissionCursor) -> str:
+        timestamp = cursor.registered_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        raw = json.dumps([1, timestamp, str(cursor.source_artifact_id)], separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(value: str) -> DocumentSubmissionCursor:
+        if not value or len(value) > 256:
+            raise ValueError("DOCUMENT_CURSOR_INVALID")
+        try:
+            raw = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+            payload = json.loads(raw)
+            if not isinstance(payload, list) or len(payload) != 3 or payload[0] != 1:
+                raise ValueError
+            timestamp = datetime.fromisoformat(str(payload[1]).replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                raise ValueError
+            return DocumentSubmissionCursor(registered_at=timestamp, source_artifact_id=UUID(str(payload[2])))
+        except (ValueError, TypeError, json.JSONDecodeError, binascii.Error):
+            raise ValueError("DOCUMENT_CURSOR_INVALID") from None
 
     async def preflight(self, content: bytes, filename: str, media_type: str, profile_id: str,
                         replaces_token: str | None = None) -> dict[str, Any]:
@@ -131,7 +187,7 @@ class DocumentWorkbenchService:
                 created.set_result(run_id)
         task = asyncio.create_task(self._engine.submit(
             compiled,
-            SourceSubmission(content=item.content, source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+            SourceSubmission(content=item.content, source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename=item.filename, media_type=item.media_type),
             request, cancellation, on_created,
         ))
         done, _ = await asyncio.wait({created, task}, return_when=asyncio.FIRST_COMPLETED)

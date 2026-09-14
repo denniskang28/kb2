@@ -134,6 +134,51 @@ class ArtifactInput(Contract):
         return value
 
 
+class DocumentSubmissionInput(Contract):
+    """Safe display metadata registered atomically with an ingestion source."""
+
+    display_filename: str = Field(min_length=1, max_length=255)
+    media_type: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+
+    @field_validator("display_filename", mode="before")
+    @classmethod
+    def safe_leaf_filename(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("filename must be text")
+        normalized = " ".join(value.split())
+        if not normalized or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("filename must be a non-empty display leaf")
+        if "/" in normalized or "\\" in normalized:
+            raise ValueError("filename must not contain a path")
+        return safe_metadata_text(normalized)
+
+    @field_validator("media_type", mode="before")
+    @classmethod
+    def normalize_media_type(cls, value: object) -> str:
+        if not isinstance(value, str):
+            raise ValueError("media type must be text")
+        return value.strip().lower()
+
+
+class DocumentSubmissionCursor(Contract):
+    registered_at: datetime
+    source_artifact_id: UUID
+
+
+class DocumentSubmissionRecord(Contract):
+    source_artifact_id: UUID
+    run_id: UUID
+    display_filename: str = Field(min_length=1, max_length=255)
+    media_type: str = Field(min_length=1, max_length=128)
+    registered_at: datetime
+    byte_size: int = Field(ge=0)
+    format: str | None = Field(default=None, max_length=32)
+    document_class: str | None = Field(default=None, max_length=64)
+    profile_id: str = Field(min_length=1, max_length=64)
+    run_state: RunState
+    output_artifact_id: UUID | None = None
+
+
 class ArtifactReference(Contract):
     id: UUID
     artifact_type: str

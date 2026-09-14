@@ -149,7 +149,7 @@ def test_engine_executes_explicit_sub_stages_with_pinned_evidence_and_ordered_in
     current = registry()
     compiled = ProfileCompiler(current).compile(ProfileParser.parse(json.dumps(profile()), "application/json"))
     runtime, runs = engine(current)
-    receipt = asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}), ResolutionRequest(explicit_profile_id="complete")))
+    receipt = asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"), ResolutionRequest(explicit_profile_id="complete")))
     assert receipt.profile_id == "complete" and receipt.outputs["indexing.main.result"]
     assert runs.finished is True and runs.evidence.plan_digest == receipt.plan_digest
     assert [item["key"] for item in runs.attempts] == [
@@ -160,12 +160,33 @@ def test_engine_executes_explicit_sub_stages_with_pinned_evidence_and_ordered_in
     assert all(item["signals"][-1].name == "engine.candidate-selection" for item in runs.attempts[1:])
 
 
+def test_source_publication_carries_document_registration_only_once() -> None:
+    current = registry()
+    compiled = ProfileCompiler(current).compile(ProfileParser.parse(json.dumps(profile()), "application/json"))
+    runtime, _ = engine(current)
+    registrations = []
+    original = runtime.artifacts.complete_with_outputs
+
+    async def capture(*args, **kwargs):
+        if kwargs.get("document_submission") is not None:
+            registrations.append(kwargs["document_submission"])
+        return await original(*args, **kwargs)
+
+    runtime.artifacts.complete_with_outputs = capture
+    asyncio.run(runtime.submit(
+        compiled,
+        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="report.pdf", media_type="application/pdf"),
+        ResolutionRequest(),
+    ))
+    assert [(item.display_filename, item.media_type) for item in registrations] == [("report.pdf", "application/pdf")]
+
+
 def test_engine_rejects_mismatched_source_schema_before_creating_a_run() -> None:
     current = registry()
     compiled = ProfileCompiler(current).compile(ProfileParser.parse(json.dumps(profile()), "application/json"))
     runtime, runs = engine(current)
     with pytest.raises(IngestionError) as raised:
-        asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "canonical.document", "schema_revision": "v1"}), ResolutionRequest()))
+        asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "canonical.document", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"), ResolutionRequest()))
     assert raised.value.code is IngestionErrorCode.SOURCE_SCHEMA_MISMATCH and not runs.attempts
 
 
@@ -173,7 +194,7 @@ def test_engine_records_quality_rejection_then_declared_fallback_without_dispatc
     current = registry()
     compiled = ProfileCompiler(current).compile(ProfileParser.parse(json.dumps(profile(fallback=True)), "application/json"))
     runtime, runs = engine(current)
-    asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}), ResolutionRequest()))
+    asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"), ResolutionRequest()))
     extraction = [item for item in runs.attempts if item["key"].startswith("extraction.parse")]
     assert [item["key"] for item in extraction] == ["extraction.parse.candidate-1", "extraction.parse.candidate-2"]
     assert extraction[0]["signals"][-1].value == "rejected" and extraction[1]["signals"][-1].value == "accepted"
@@ -189,7 +210,7 @@ def test_engine_records_condition_skip_separately_from_the_selected_fallback() -
     runtime, runs = engine(current)
     asyncio.run(runtime.submit(
         compiled,
-        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"),
         ResolutionRequest(extension="txt"),
     ))
     extraction = [item for item in runs.attempts if item["key"].startswith("extraction.parse")]
@@ -202,7 +223,7 @@ def test_engine_fails_a_pinned_run_when_registry_implementation_has_drifted() ->
     compiled = ProfileCompiler(registry("a" * 64)).compile(ProfileParser.parse(json.dumps(profile()), "application/json"))
     runtime, runs = engine(registry("b" * 64))
     with pytest.raises(IngestionError) as raised:
-        asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}), ResolutionRequest()))
+        asyncio.run(runtime.submit(compiled, SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"), ResolutionRequest()))
     assert raised.value.code is IngestionErrorCode.PLAN_IMPLEMENTATION_DRIFT and runs.finished is False
     assert runs.attempts[-1]["error"].code is TraceErrorCode.PLAN_IMPLEMENTATION_DRIFT
 
@@ -216,7 +237,7 @@ def test_engine_records_a_cancelled_stage_without_attempting_a_fallback() -> Non
     with pytest.raises(IngestionError) as raised:
         asyncio.run(runtime.submit(
             compiled,
-            SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+            SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"),
             ResolutionRequest(),
             cancellation,
         ))
@@ -246,7 +267,7 @@ def test_engine_invalidates_manifest_mismatch_before_declared_fallback() -> None
     runtime = IngestionEngine(current, ManifestMismatchThenSuccessExecutor(delegate, runs), runs, artifacts)  # type: ignore[arg-type]
     asyncio.run(runtime.submit(
         compiled,
-        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"),
         ResolutionRequest(),
     ))
     rejected = next(item for item in runs.attempts if item["key"] == "extraction.parse.candidate-1")
@@ -298,7 +319,7 @@ def test_engine_retries_only_the_same_pinned_candidate_after_a_retryable_failure
     runtime = IngestionEngine(current, executor, runs, artifacts)  # type: ignore[arg-type]
     receipt = asyncio.run(runtime.submit(
         compiled,
-        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+        SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain"),
         ResolutionRequest(),
     ))
     attempts = [item for item in runs.attempts if item["key"] == "extraction.parse.candidate-1"]
@@ -331,7 +352,7 @@ def test_changed_profile_configuration_compiles_to_a_new_pinned_plan_and_run() -
     runs, artifacts = MultiRunRuns(), Artifacts()
     executor = PluginExecutor(current, {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)  # type: ignore[arg-type]
     runtime = IngestionEngine(current, executor, runs, artifacts)
-    source = SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"})
+    source = SourceSubmission(content=b"fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="fixture.txt", media_type="text/plain")
     first_receipt = asyncio.run(runtime.submit(first, source, ResolutionRequest()))
     second_receipt = asyncio.run(runtime.submit(second, source, ResolutionRequest()))
     assert first_receipt.plan_digest != second_receipt.plan_digest

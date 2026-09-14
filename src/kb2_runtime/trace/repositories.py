@@ -10,7 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .contracts import ArtifactInput, ArtifactManifest, ArtifactReference, EngineKind, IngestionEvidence, Metric, QualitySignal, RunState, RunTrace, SafeError, StageResult, StageState, StageTrace, metadata_contains_sensitive_text, safe_metadata_text
+from .contracts import ArtifactInput, ArtifactManifest, ArtifactReference, DocumentSubmissionCursor, DocumentSubmissionInput, DocumentSubmissionRecord, EngineKind, IngestionEvidence, Metric, QualitySignal, RunState, RunTrace, SafeError, StageResult, StageState, StageTrace, metadata_contains_sensitive_text, safe_metadata_text
 from .errors import TraceError, TraceErrorCode
 
 
@@ -162,11 +162,11 @@ class TraceRepository:
             )
         await self.connection.commit()
 
-    async def complete_outputs(self, attempt_id: UUID, run_id: UUID, items: Sequence[tuple[UUID, ArtifactInput, str]], summary: str, metrics: Sequence[Metric] = (), signals: Sequence[QualitySignal] = ()) -> None:
+    async def complete_outputs(self, attempt_id: UUID, run_id: UUID, items: Sequence[tuple[UUID, ArtifactInput, str]], summary: str, metrics: Sequence[Metric] = (), signals: Sequence[QualitySignal] = (), document_submission: DocumentSubmissionInput | None = None) -> None:
         summary = safe_metadata_text(summary)
         async with self.connection.cursor() as cursor:
             await cursor.execute(
-                """SELECT s.state, s.run_id, r.terminal_state FROM stage_attempts s
+                """SELECT s.state, s.run_id, r.terminal_state, s.stage_key, r.engine_kind FROM stage_attempts s
                 JOIN runs r ON r.id=s.run_id WHERE s.id=%s FOR UPDATE""",
                 (attempt_id,),
             )
@@ -178,6 +178,15 @@ class TraceRepository:
                 or attempt["terminal_state"] is not None
             ):
                 raise TraceError(TraceErrorCode.STAGE_TRANSITION_INVALID)
+            if document_submission is not None:
+                document_submission = DocumentSubmissionInput.model_validate(document_submission.model_dump(mode="python"))
+                if (
+                    attempt["engine_kind"] != EngineKind.INGESTION.value
+                    or attempt["stage_key"] != "ingestion.source"
+                    or len(items) != 1
+                    or (items[0][1].artifact_type, items[0][1].schema_revision) != ("opaque.bytes", "v1")
+                ):
+                    raise TraceError(TraceErrorCode.STAGE_OUTPUT_INVALID)
             for ordinal, (artifact_id, manifest, locator) in enumerate(items):
                 manifest = self._safe_artifact(manifest)
                 await cursor.execute("INSERT INTO artifacts (id, artifact_type, schema_revision, content_digest, byte_size, storage_locator, producing_run_id, producing_stage_attempt_id, producing_plugin_id, configuration_digest, summary) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (artifact_id, manifest.artifact_type, manifest.schema_revision, manifest.content_digest, manifest.byte_size, locator, run_id, attempt_id, manifest.producing_plugin_id, manifest.configuration_digest, manifest.summary))
@@ -189,10 +198,60 @@ class TraceRepository:
                 await self._metrics(cursor, "artifact_metrics", "artifact_id", artifact_id, manifest.metrics)
                 await self._signals(cursor, "artifact_quality_signals", "artifact_id", artifact_id, manifest.quality_signals)
                 await cursor.execute("INSERT INTO stage_attempt_outputs (stage_attempt_id, ordinal, artifact_id) VALUES (%s,%s,%s)", (attempt_id, ordinal, artifact_id))
+            if document_submission is not None:
+                await cursor.execute(
+                    "INSERT INTO document_submissions (source_artifact_id, run_id, display_filename, media_type) VALUES (%s,%s,%s,%s)",
+                    (items[0][0], run_id, document_submission.display_filename, document_submission.media_type),
+                )
             await cursor.execute("UPDATE stage_attempts SET state='SUCCEEDED', result='SUCCEEDED', summary=%s, ended_at=CURRENT_TIMESTAMP WHERE id=%s", (summary, attempt_id))
             await self._metrics(cursor, "stage_attempt_metrics", "stage_attempt_id", attempt_id, metrics)
             await self._signals(cursor, "stage_attempt_quality_signals", "stage_attempt_id", attempt_id, signals)
         await self.connection.commit()
+
+    async def list_document_submissions(
+        self, limit: int, cursor: DocumentSubmissionCursor | None = None,
+    ) -> tuple[tuple[DocumentSubmissionRecord, ...], DocumentSubmissionCursor | None]:
+        bounded = min(max(limit, 1), 50)
+        cursor_time = cursor.registered_at if cursor else None
+        cursor_id = cursor.source_artifact_id if cursor else None
+        async with self.connection.cursor() as db_cursor:
+            await db_cursor.execute(
+                """SELECT d.source_artifact_id, d.run_id, d.display_filename, d.media_type,
+                    d.registered_at, source.byte_size, r.state AS run_state,
+                    NULLIF(evidence.resolution_json->'observables'->>'extension', '') AS format,
+                    NULLIF(evidence.resolution_json->'observables'->>'document_class', '') AS document_class,
+                    evidence.resolution_json->>'selected_profile_id' AS profile_id,
+                    latest.id AS output_artifact_id
+                FROM document_submissions d
+                JOIN artifacts source ON source.id=d.source_artifact_id
+                JOIN runs r ON r.id=d.run_id AND r.engine_kind='ingestion'
+                JOIN ingestion_run_evidence evidence ON evidence.run_id=r.id
+                JOIN stage_attempts source_attempt ON source_attempt.id=source.producing_stage_attempt_id
+                  AND source_attempt.run_id=r.id AND source_attempt.stage_key='ingestion.source'
+                  AND source_attempt.state='SUCCEEDED' AND source_attempt.result='SUCCEEDED'
+                JOIN stage_attempt_outputs source_output ON source_output.stage_attempt_id=source_attempt.id
+                  AND source_output.artifact_id=source.id
+                LEFT JOIN LATERAL (
+                    SELECT candidate.id FROM artifacts candidate
+                    JOIN stage_attempts attempt ON attempt.id=candidate.producing_stage_attempt_id
+                    WHERE candidate.producing_run_id=r.id AND candidate.id<>source.id
+                      AND attempt.run_id=r.id AND attempt.stage_key<>'ingestion.source'
+                      AND attempt.state='SUCCEEDED' AND attempt.result='SUCCEEDED'
+                    ORDER BY candidate.created_at DESC, candidate.id DESC LIMIT 1
+                ) latest ON TRUE
+                WHERE (%s::timestamptz IS NULL OR d.registered_at < %s::timestamptz
+                  OR (d.registered_at = %s::timestamptz AND d.source_artifact_id < %s::uuid))
+                ORDER BY d.registered_at DESC, d.source_artifact_id DESC LIMIT %s""",
+                (cursor_time, cursor_time, cursor_time, cursor_id, bounded + 1),
+            )
+            rows = list(await db_cursor.fetchall())
+        has_more = len(rows) > bounded
+        records = tuple(DocumentSubmissionRecord.model_validate(row) for row in rows[:bounded])
+        next_cursor = None
+        if has_more and records:
+            last = records[-1]
+            next_cursor = DocumentSubmissionCursor(registered_at=last.registered_at, source_artifact_id=last.source_artifact_id)
+        return records, next_cursor
 
     async def eligible_artifact_location(self, artifact_id: UUID) -> tuple[str, str] | None:
         locations = await self.eligible_artifact_locations(artifact_id)

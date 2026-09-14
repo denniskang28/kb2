@@ -30,7 +30,7 @@ def test_three_document_classes_reuse_registered_components_through_distinct_res
         runtime, runs = engine(current)
         receipt = asyncio.run(runtime.submit(
             compiled,
-            SourceSubmission(content=document_class.encode(), source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+            SourceSubmission(content=document_class.encode(), source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename=f"{document_class}.txt", media_type="text/plain"),
             ResolutionRequest(document_class=document_class),
         ))
         results.append((receipt, runs))
@@ -47,7 +47,7 @@ def test_new_document_strategy_runs_from_plugin_registration_and_profile_data_on
     runtime, runs = engine(current)
     receipt = asyncio.run(runtime.submit(
         compiled,
-        SourceSubmission(content=b"synthetic fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}),
+        SourceSubmission(content=b"synthetic fixture", source_schema={"artifact_type": "opaque.bytes", "schema_revision": "v1"}, filename="synthetic.txt", media_type="text/plain"),
         ResolutionRequest(explicit_profile_id="synthetic"),
     ))
     assert receipt.profile_id == "synthetic" and runs.finished is True

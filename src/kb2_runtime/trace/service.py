@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import Any
 from uuid import UUID, uuid4
 
-from .contracts import ArtifactInput, ArtifactManifest, EngineKind, IngestionEvidence, Metric, QualitySignal, RunTrace, SafeError, StageResult
+from .contracts import ArtifactInput, ArtifactManifest, DocumentSubmissionInput, EngineKind, IngestionEvidence, Metric, QualitySignal, RunTrace, SafeError, StageResult
 from .errors import TraceError, TraceErrorCode
 from .repositories import TraceRepository
 from .schemas import schema_is_supported
@@ -91,6 +91,7 @@ class ArtifactService:
         summary: str = "",
         metrics: Sequence[Metric] = (),
         quality_signals: Sequence[QualitySignal] = (),
+        document_submission: DocumentSubmissionInput | None = None,
     ) -> tuple[UUID, ...]:
         if not outputs:
             raise TraceError(TraceErrorCode.STAGE_OUTPUT_INVALID)
@@ -101,8 +102,9 @@ class ArtifactService:
                     raise TraceError(TraceErrorCode.ARTIFACT_SCHEMA_UNSUPPORTED)
                 locator = self.store.publish(content, manifest.content_digest, manifest.byte_size)
                 published.append((uuid4(), manifest, locator))
+            registration = {"document_submission": document_submission} if document_submission is not None else {}
             await self.repository.complete_outputs(
-                attempt_id, run_id, published, summary, metrics, quality_signals
+                attempt_id, run_id, published, summary, metrics, quality_signals, **registration
             )
         except TraceError as exc:
             await self.repository.connection.rollback()

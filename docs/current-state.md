@@ -10,7 +10,7 @@
 - **Claude Design Prompt:** Ready - 2026-09-10
 - **UI Prototype / Reference:** Confirmed - 2026-09-11 (`UI-001` through
   `UI-013`)
-- **Stories:** S-001 through S-027 Implemented; S-028 Confirmed
+- **Stories:** S-001 through S-028 Implemented
 - **Active Story:** None
 - **Application/Test Baseline:** Python/FastAPI runtime, Docker Compose,
   PostgreSQL/pgvector, optional external DeepSeek capability boundary, Plugin
@@ -26,7 +26,9 @@
   external generation with validated final states and bounded repair, safe
   no-publication failures, deterministic answer, citation, and decision metrics
   with exact fact spans, strict Evidence identity, explicit applicability
-  states, frozen decision cohorts, and bounded failure lineage, a
+  states, frozen decision cohorts, bounded failure lineage, a persisted
+  source-submission catalog with a safe paged document projection and
+  responsive document-list diagnostics, a
   Docker-backed Artifact trace persistence/restart regression, and an isolated
   lifecycle regression
 
@@ -58,8 +60,8 @@ flows, diagnostic states, responsive behavior, and visual direction.
 
 ## Recommended Next Action
 
-Deliver S-028 through the Story Pipeline, beginning with just-in-time technical
-design against the confirmed Story contract and current code.
+No confirmed undelivered Story remains. Use the next approved planning workflow
+when another product change is confirmed.
 
 ## Change History
 
@@ -248,3 +250,8 @@ design against the confirmed Story contract and current code.
   boundary awaits explicit confirmation.
 - **2026-09-14:** User explicitly confirmed the S-028 Story boundary; it is
   eligible for just-in-time technical design and delivery.
+- **2026-09-14:** S-028 completed an atomic persisted source-submission catalog,
+  bounded keyset document-list API, authoritative Run/Artifact diagnosis,
+  responsive populated and exceptional states, and eight desktop/narrow visual
+  baselines. Independent acceptance and repaired final review passed; the
+  existing Docker Compose startup residual remains environment-limited.

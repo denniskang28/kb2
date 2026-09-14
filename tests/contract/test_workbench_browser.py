@@ -19,7 +19,7 @@ import httpx
 import pytest
 import websocket
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 from kb2_runtime.evaluation.datasets.contracts import DEFAULT_TAXONOMY, DatasetContent
 from kb2_runtime.evaluation.ingestion import MetricReport, MetricStatus, metric_report_bytes
@@ -48,6 +48,7 @@ S024_MANIFEST = json.loads((S024_BASELINE_ROOT / "manifest.json").read_text(enco
 S025_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s025"
 S026_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s026"
 S027_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s027"
+S028_BASELINE_ROOT = Path(__file__).parents[2] / "tests" / "visual" / "baselines" / "s028"
 S022_CHROME_FLAGS = (
     f"--headless={S022_CAPTURE['browser']['headlessMode']}",
     "--no-sandbox",
@@ -134,6 +135,11 @@ _retry_preflight_attempts = 0
 _preflight_serial = 0
 _fixture_preflights: dict[str, dict[str, object]] = {}
 _fixture_preflight_receipts: list[dict[str, object]] = []
+_document_list_requests = 0
+_document_list_stale_armed = False
+_document_list_stale_requests = 0
+_document_list_completions: list[int] = []
+_document_list_release = asyncio.Event()
 _ingestion_stop_requests: list[str] = []
 _INGESTION_RUN = "12345678-1234-5678-1234-567812345680"
 _ARTIFACT = "12345678-1234-5678-1234-567812345681"
@@ -248,6 +254,72 @@ async def fixture_document_submit(token: str, request: Request) -> JSONResponse:
 @fixture_app.get("/api/fixture/document-preflights")
 async def fixture_document_preflights() -> JSONResponse:
     return JSONResponse({"tokens": list(_fixture_preflights), "receipts": _fixture_preflight_receipts})
+
+
+def _document_list_fixture() -> list[dict[str, object]]:
+    return [
+        {"sourceArtifactId": _ARTIFACT, "filename": "contract-framework-sample.pdf", "mediaType": "application/pdf", "format": "pdf", "byteSize": 4404019, "documentClass": "native_long_hierarchical", "profileId": "ing.contract-long@3", "registeredAt": "2026-09-14T08:05:00Z", "latestRun": {"id": _INGESTION_RUN, "state": "SUCCEEDED"}, "actions": {"sourceArtifactId": _ARTIFACT, "outputArtifactId": _CHUNK_ARTIFACT}},
+        {"sourceArtifactId": "22345678-1234-5678-1234-567812345681", "filename": "equipment-maintenance-scan.pdf", "mediaType": "application/pdf", "format": "pdf", "byteSize": 13421773, "documentClass": "scanned_mixed_zh_en", "profileId": "ing.ocr-mixed@2", "registeredAt": "2026-09-14T08:04:00Z", "latestRun": {"id": _VISUAL_RUN, "state": "FAILED"}, "actions": {"sourceArtifactId": "22345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
+        {"sourceArtifactId": "32345678-1234-5678-1234-567812345681", "filename": "quarterly-operations-data.xlsx", "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "format": "xlsx", "byteSize": 901120, "documentClass": "table_heavy_multi_sheet", "profileId": "ing.table-heavy@1", "registeredAt": "2026-09-14T08:03:00Z", "latestRun": {"id": "32345678-1234-5678-1234-567812345680", "state": "RUNNING"}, "actions": {"sourceArtifactId": "32345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
+        {"sourceArtifactId": "42345678-1234-5678-1234-567812345681", "filename": "product-architecture-deck.pptx", "mediaType": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "format": "pptx", "byteSize": 6396313, "documentClass": None, "profileId": "ing.slide-object@1", "registeredAt": "2026-09-14T08:02:00Z", "latestRun": {"id": "42345678-1234-5678-1234-567812345680", "state": "PENDING"}, "actions": {"sourceArtifactId": "42345678-1234-5678-1234-567812345681", "outputArtifactId": None}},
+    ]
+
+
+@fixture_app.get("/api/workbench/documents")
+async def fixture_document_list(cursor: str = "") -> JSONResponse:
+    global _document_list_requests, _document_list_stale_requests
+    _document_list_requests += 1
+    state = os.getenv("KB2_DOCUMENT_FIXTURE_STATE", "empty")
+    request_number = _document_list_requests
+    stale_request_number = None
+    if state == "stale" and _document_list_stale_armed:
+        _document_list_stale_requests += 1
+        stale_request_number = _document_list_stale_requests
+    if state == "loading":
+        await asyncio.sleep(5)
+    if stale_request_number == 1:
+        return RedirectResponse("/api/fixture/document-list-stale-pending", status_code=307)
+    if state == "error" or (state == "paging" and cursor and _document_list_requests == 2):
+        return JSONResponse({"contractVersion": "workbench-problem/v1", "code": "DOCUMENT_LIST_UNAVAILABLE"}, status_code=503)
+    rows = _document_list_fixture() if state in {"populated", "paging", "stale"} else []
+    if state == "stale":
+        rows = [{**rows[0], "filename": "stale-response.pdf" if stale_request_number == 1 else "fresh-response.pdf"}]
+    if state == "paging":
+        rows = rows[:2] if not cursor else rows[2:]
+    if stale_request_number is not None:
+        _document_list_completions.append(stale_request_number)
+    return JSONResponse({"contractVersion": "workbench-document-list/v1", "items": rows,
+                         "page": {"limit": 25, "nextCursor": "fixture-next" if state == "paging" and not cursor else None}})
+
+
+@fixture_app.get("/api/fixture/document-list-stale-pending")
+async def fixture_document_list_stale_pending() -> JSONResponse:
+    await _document_list_release.wait()
+    _document_list_completions.append(1)
+    rows = [{**_document_list_fixture()[0], "filename": "stale-response.pdf"}]
+    return JSONResponse({"contractVersion": "workbench-document-list/v1", "items": rows,
+                         "page": {"limit": 25, "nextCursor": None}})
+
+
+@fixture_app.get("/api/fixture/document-list-state")
+async def fixture_document_list_state() -> JSONResponse:
+    return JSONResponse({"requests": _document_list_stale_requests, "completions": _document_list_completions})
+
+
+@fixture_app.post("/api/fixture/document-list-arm")
+async def fixture_document_list_arm() -> JSONResponse:
+    global _document_list_stale_armed, _document_list_stale_requests
+    _document_list_stale_armed = True
+    _document_list_stale_requests = 0
+    _document_list_completions.clear()
+    _document_list_release.clear()
+    return JSONResponse({"armed": True})
+
+
+@fixture_app.post("/api/fixture/document-list-release")
+async def fixture_document_list_release() -> JSONResponse:
+    _document_list_release.set()
+    return JSONResponse({"released": True})
 
 
 @fixture_app.get("/api/workbench/overview")
@@ -1357,6 +1429,21 @@ def test_s025_s026_s027_visual_manifests_are_pinned_and_complete() -> None:
             assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
 
 
+def test_s028_visual_manifest_is_pinned_and_complete() -> None:
+    manifest = json.loads((S028_BASELINE_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["story"] == "S-028"
+    assert set(manifest["uiAnchors"]) == {"UI-003", "UI-005", "UI-013"}
+    assert manifest["prototypeSha256"] == hashlib.sha256(Path("docs/ui/kb_ui.zip").read_bytes()).hexdigest()
+    assert manifest["captureConditions"] == S022_CAPTURE
+    assert manifest["comparison"] == {"colorSpace": "RGBA", "channelTolerance": 12, "maximumDifferingPixelRatio": .005, "baselineUpdatesAutomatic": False}
+    assert len(manifest["baselines"]) == 8
+    assert {record["scenario"] for record in manifest["baselines"]} == {"populated", "empty", "loading", "error"}
+    assert {tuple(record["viewport"]) for record in manifest["baselines"]} == {(1440, 900), (644, 900)}
+    for record in manifest["baselines"]:
+        baseline = S028_BASELINE_ROOT / record["file"]
+        assert hashlib.sha256(baseline.read_bytes()).hexdigest() == record["sha256"]
+
+
 @pytest.mark.skipif(
     not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
     reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for browser shell evidence",
@@ -1928,6 +2015,106 @@ def test_fixture_backed_document_preflight_and_ingestion_state_matrix(tmp_path: 
         stop = """(async()=>{[...document.querySelectorAll('button')].find(x=>x.textContent==='停止').click();for(let i=0;i<100;i++){const requests=await fetch('/api/fixture/ingestion-stop-requests').then(r=>r.json());if(requests.length)return requests;await new Promise(r=>setTimeout(r,25))}return []})()"""
         assert _cdp(debug_port, stop, await_promise=True, target_url=run_url) == [_VISUAL_RUN]
     finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-028 visual evidence",
+)
+@pytest.mark.parametrize("width", (1440, 644))
+@pytest.mark.parametrize("scenario", ("populated", "empty", "loading", "error"))
+def test_s028_document_list_visual_matrix(tmp_path: Path, width: int, scenario: str) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_DOCUMENT_FIXTURE_STATE": scenario}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / f's028-{scenario}-{width}'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, width)
+        selectors = {"populated": ".document-table", "empty": ".documents-surface .empty-state", "loading": ".document-list-loading", "error": ".documents-surface .notice-failure"}
+        ready = f"(async()=>{{for(let i=0;i<120;i++){{if(document.querySelector('{selectors[scenario]}'))return true;await new Promise(r=>setTimeout(r,25))}}return false}})()"
+        assert _cdp(debug_port, ready, await_promise=True, target_url=url) is True
+        geometry = _cdp(debug_port, "(()=>{const wrap=document.querySelector('.document-table-wrap'),commands=[...document.querySelectorAll('.documents-commands button')];return {pageOverflow:document.documentElement.scrollWidth<=innerWidth,upload:commands.some(x=>x.textContent.includes('上传并预检')),refresh:commands.some(x=>x.getAttribute('aria-label')==='刷新文档列表'),scoped:wrap?wrap.scrollWidth>wrap.clientWidth:null,actions:[...document.querySelectorAll('.document-actions .icon-button')].every(x=>Math.round(x.getBoundingClientRect().width)>=30&&Math.round(x.getBoundingClientRect().height)>=30)}})()", target_url=url)
+        assert geometry["pageOverflow"] and geometry["upload"] and geometry["refresh"] and geometry["actions"]
+        if scenario == "populated":
+            assert geometry["scoped"] is (width < 900)
+            text_state = _cdp(debug_port, "document.body.innerText", target_url=url)
+            assert "contract-framework-sample.pdf" in text_state and "不可用" in text_state
+            assert "NOT_INGESTED" not in text_state and "删除" not in text_state
+        image = tmp_path / f"documents-{scenario}-{width}.png"
+        _capture_cdp(debug_port, image, target_url=url)
+        _assert_manifest_visual(debug_port, image, image.name, target_url=url, baseline_root=S028_BASELINE_ROOT, story="S-028")
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-028 interactions",
+)
+def test_s028_document_list_paging_retry_and_actions(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_DOCUMENT_FIXTURE_STATE": "paging"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's028-actions'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}throw new Error('document list timeout')};await wait(()=>document.querySelectorAll('.document-table tbody tr').length===2);const firstIds=[...document.querySelectorAll('.document-identity code')].map(x=>x.textContent);[...document.querySelectorAll('button')].find(x=>x.textContent==='加载更多').click();await wait(()=>document.body.innerText.includes('无法加载更多文档'));const retained=document.querySelectorAll('.document-table tbody tr').length===2;[...document.querySelectorAll('button')].find(x=>x.textContent==='重试').click();await wait(()=>document.querySelectorAll('.document-table tbody tr').length===4);const ids=[...document.querySelectorAll('.document-identity code')].map(x=>x.textContent),unique=new Set(ids).size===ids.length,run=document.querySelector('.document-run-link'),runUrl=new URL(run.href).pathname+new URL(run.href).search,source=document.querySelector('[aria-label="检查 Source Artifact"]');source.click();const drawer=await wait(()=>document.querySelector('.artifact-inspector'));const inspected=drawer.getAttribute('aria-label')==='Artifact 检查器';document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));const focusReturned=document.activeElement===source;document.querySelector('[aria-label="刷新文档列表"]').click();await wait(()=>document.querySelectorAll('.document-table tbody tr').length===2);return {firstIds,retained,count:ids.length,unique,runUrl,inspected,focusReturned,refreshed:document.querySelectorAll('.document-table tbody tr').length===2,upload:!![...document.querySelectorAll('button')].find(x=>x.textContent.includes('上传并预检'))}})()""", await_promise=True, target_url=url)
+        assert result["retained"] and result["count"] == 4 and result["unique"] and result["inspected"] and result["focusReturned"] and result["refreshed"] and result["upload"]
+        assert result["runUrl"] == f"/workbench/runs?run={_INGESTION_RUN}&legacy=ingestion"
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(
+    not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1",
+    reason="set KB2_BROWSER_TESTS=1 with an isolated Chrome headless runtime for S-028 stale response evidence",
+)
+def test_s028_document_list_suppresses_stale_refresh_and_restores_output_inspector_focus(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}", "KB2_DOCUMENT_FIXTURE_STATE": "stale"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/documents"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 's028-stale'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        def wait_for_state(predicate) -> dict[str, object]:
+            deadline = time.monotonic() + 4
+            state: dict[str, object] = {}
+            while time.monotonic() < deadline:
+                state = httpx.get(f"http://127.0.0.1:{port}/api/fixture/document-list-state", timeout=1).json()
+                if predicate(state):
+                    return state
+                time.sleep(.025)
+            pytest.fail(f"Document list fixture did not reach the expected overlap state: {state}")
+
+        initial_resources = _cdp(debug_port, "performance.getEntriesByType('resource').filter(x=>new URL(x.name).pathname==='/api/workbench/documents'&&x.responseEnd>0).length", target_url=url)
+        assert httpx.post(f"http://127.0.0.1:{port}/api/fixture/document-list-arm", timeout=1).json() == {"armed": True}
+        assert _cdp(debug_port, "(()=>{const x=document.querySelector('[aria-label=\"刷新文档列表\"]'),enabled=!x.disabled;x.click();return enabled})()", target_url=url) is True
+        assert wait_for_state(lambda state: state == {"requests": 1, "completions": []})
+        assert _cdp(debug_port, "(()=>{const x=document.querySelector('[aria-label=\"刷新文档列表\"]');return {disabled:x.disabled,connected:x.isConnected,dispatched:x.dispatchEvent(new MouseEvent('click',{bubbles:true}))}})()", target_url=url) == {"disabled": False, "connected": True, "dispatched": True}
+        assert wait_for_state(lambda state: state["requests"] >= 2 and 2 in state["completions"] and 1 not in state["completions"])
+        assert _cdp(debug_port, "(async()=>{for(let i=0;i<160;i++){if(document.body.innerText.includes('fresh-response.pdf'))return true;await new Promise(r=>setTimeout(r,25))}return false})()", await_promise=True, target_url=url) is True
+        assert httpx.post(f"http://127.0.0.1:{port}/api/fixture/document-list-release", timeout=1).json() == {"released": True}
+        assert wait_for_state(lambda state: 1 in state["completions"] and 2 in state["completions"])
+        result = _cdp(debug_port, f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const x=p();if(x)return x;await new Promise(r=>setTimeout(r,25))}}throw new Error('stale list timeout')}};await wait(()=>performance.getEntriesByType('resource').filter(x=>new URL(x.name).pathname==='/api/workbench/documents'&&x.responseEnd>0).length>={initial_resources + 2});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const staleSuppressed=!document.body.innerText.includes('stale-response.pdf')&&document.body.innerText.includes('fresh-response.pdf'),output=document.querySelector('[aria-label="检查最新输出 Artifact"]');output.click();const lineage=await wait(()=>[...document.querySelectorAll('.artifact-inspector [role=tab]')].find(x=>x.textContent==='Lineage')),drawer=lineage.closest('.artifact-inspector');lineage.click();const identity=drawer.innerText.includes('当前 Artifact：{_CHUNK_ARTIFACT}');document.dispatchEvent(new KeyboardEvent('keydown',{{key:'Escape',bubbles:true}}));return {{staleSuppressed,identity,closed:!document.querySelector('.artifact-inspector'),focusReturned:document.activeElement===output}}}})()""", await_promise=True, target_url=url)
+        assert result == {"staleSuppressed": True, "identity": True, "closed": True, "focusReturned": True}
+    finally:
+        try:
+            httpx.post(f"http://127.0.0.1:{port}/api/fixture/document-list-release", timeout=1)
+        except httpx.HTTPError:
+            pass
         _close_isolated_chrome(debug_port, browser)
         server.terminate()
         server.wait(timeout=10)

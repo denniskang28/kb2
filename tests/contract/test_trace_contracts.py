@@ -9,11 +9,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult, metadata_contains_sensitive_text
+from kb2_runtime.trace.contracts import ArtifactInput, ArtifactReference, DocumentSubmissionInput, EngineKind, IngestionEvidence, QualitySignal, SafeError, StageResult, metadata_contains_sensitive_text
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.repositories import TraceRepository
 from kb2_runtime.trace.schemas import schema_is_supported
-from kb2_runtime.trace.service import plan_digest
+from kb2_runtime.trace.service import ArtifactService, plan_digest
 from kb2_runtime.trace.storage import ArtifactStore
 
 
@@ -91,6 +91,18 @@ def test_trace_metadata_redacts_credential_and_provider_payload_canaries() -> No
     serialized = {"artifact": item.model_dump(mode="json"), "error": error.model_dump(mode="json")}
     assert CANARY_SECRET not in str(serialized)
     assert CANARY_PAYLOAD not in str(serialized)
+
+
+def test_document_submission_metadata_is_a_safe_bounded_leaf() -> None:
+    safe = DocumentSubmissionInput(display_filename="  sample   report.pdf  ", media_type="Application/PDF")
+    assert safe.display_filename == "sample report.pdf"
+    assert safe.media_type == "application/pdf"
+    assert DocumentSubmissionInput(display_filename=CANARY_SECRET + ".pdf", media_type="application/pdf").display_filename == "[redacted]"
+    for filename in ("../secret.pdf", "folder\\secret.pdf", "line\nfeed.pdf"):
+        with pytest.raises(ValidationError):
+            DocumentSubmissionInput(display_filename=filename, media_type="application/pdf")
+    with pytest.raises(ValidationError):
+        DocumentSubmissionInput(display_filename="sample.pdf", media_type="not-a-mime")
 
 
 def test_all_trace_summary_and_signal_text_boundaries_redact_canaries() -> None:
@@ -209,6 +221,107 @@ def test_repository_normalizes_model_construct_values_before_persistence() -> No
     assert CANARY_SECRET not in persisted_parameters
     assert CANARY_PAYLOAD not in persisted_parameters
     assert "[redacted]" in persisted_parameters
+
+
+def test_repository_registers_document_in_the_source_publication_transaction() -> None:
+    async def persist() -> CapturingConnection:
+        run_id, attempt_id = uuid4(), uuid4()
+        connection = CapturingConnection([{
+            "state": "RUNNING", "run_id": run_id, "terminal_state": None,
+            "stage_key": "ingestion.source", "engine_kind": "ingestion",
+        }])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        await repository.complete_outputs(
+            attempt_id, run_id, [(uuid4(), manifest(b"source"), "sha256/aa/source")], "source",
+            document_submission=DocumentSubmissionInput(display_filename="source.pdf", media_type="application/pdf"),
+        )
+        return connection
+
+    connection = asyncio.run(persist())
+    statements = [statement for statement, _ in connection.cursor_instance.executions]
+    assert next(index for index, value in enumerate(statements) if "INSERT INTO artifacts" in value) < next(
+        index for index, value in enumerate(statements) if "INSERT INTO document_submissions" in value
+    )
+    registration = next(parameters for statement, parameters in connection.cursor_instance.executions if "INSERT INTO document_submissions" in statement)
+    assert registration is not None and registration[2:] == ("source.pdf", "application/pdf")
+    assert connection.commits == 1
+
+
+def test_repository_rejects_document_registration_from_non_source_stage() -> None:
+    async def reject() -> CapturingConnection:
+        run_id, attempt_id = uuid4(), uuid4()
+        connection = CapturingConnection([{
+            "state": "RUNNING", "run_id": run_id, "terminal_state": None,
+            "stage_key": "extraction.parse", "engine_kind": "ingestion",
+        }])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        with pytest.raises(TraceError) as raised:
+            await repository.complete_outputs(
+                attempt_id, run_id, [(uuid4(), manifest(b"source"), "sha256/aa/source")], "source",
+                document_submission=DocumentSubmissionInput(display_filename="source.pdf", media_type="application/pdf"),
+            )
+        assert raised.value.code is TraceErrorCode.STAGE_OUTPUT_INVALID
+        return connection
+
+    connection = asyncio.run(reject())
+    assert not any("INSERT INTO artifacts" in statement for statement, _ in connection.cursor_instance.executions)
+    assert connection.commits == 0
+
+
+def test_document_list_latest_output_requires_same_run_processing_attempt() -> None:
+    async def capture_query() -> CapturingConnection:
+        connection = CapturingConnection([])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        await repository.list_document_submissions(25)
+        return connection
+
+    connection = asyncio.run(capture_query())
+    statement, _ = connection.cursor_instance.executions[-1]
+    assert "candidate.producing_run_id=r.id" in statement
+    assert "attempt.run_id=r.id" in statement
+    assert "attempt.stage_key<>'ingestion.source'" in statement
+
+
+def test_artifact_service_rolls_back_when_document_catalog_insert_fails() -> None:
+    class Connection:
+        rollbacks = 0
+
+        async def rollback(self) -> None:
+            self.rollbacks += 1
+
+    class Repository:
+        def __init__(self) -> None:
+            self.connection = Connection()
+            self.failures = []
+
+        async def complete_outputs(self, *args, **kwargs) -> None:
+            assert kwargs["document_submission"].display_filename == "duplicate.pdf"
+            raise RuntimeError("document_submissions run_id unique violation")
+
+        async def finish_attempt(self, attempt_id, result, summary, error) -> None:
+            self.failures.append((attempt_id, result, summary, error))
+
+    class Store:
+        def publish(self, content, digest, size) -> str:
+            assert len(content) == size and hashlib.sha256(content).hexdigest() == digest
+            return "sha256/aa/source"
+
+    async def publish() -> Repository:
+        repository = Repository()
+        service = ArtifactService(repository, Store())  # type: ignore[arg-type]
+        with pytest.raises(TraceError) as raised:
+            await service.complete_with_outputs(
+                uuid4(), uuid4(), [(manifest(b"source"), b"source")],
+                document_submission=DocumentSubmissionInput(display_filename="duplicate.pdf", media_type="application/pdf"),
+            )
+        assert raised.value.code is TraceErrorCode.TRACE_STORAGE_FAILURE
+        return repository
+
+    repository = asyncio.run(publish())
+    assert repository.connection.rollbacks == 1
+    assert len(repository.failures) == 1
+    assert repository.failures[0][1] is StageResult.FAILED
+    assert repository.failures[0][3].code is TraceErrorCode.TRACE_STORAGE_FAILURE
 
 
 def test_repository_rejects_output_commit_after_run_is_terminal() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import json
 from types import SimpleNamespace
 from pathlib import Path
@@ -15,7 +16,7 @@ from kb2_runtime.workbench.documents import DocumentWorkbenchService
 from kb2_runtime.plugins.registry import PluginRegistration
 from kb2_runtime.canonical.contracts import ProviderFixture
 from kb2_runtime.canonical.normalizer import normalize_fixture
-from kb2_runtime.trace.contracts import ArtifactManifest
+from kb2_runtime.trace.contracts import ArtifactManifest, DocumentSubmissionCursor, DocumentSubmissionRecord, RunState
 from tests.contract.test_ingestion_engine import profile, registry
 from tests.contract.test_canonical_document import fixture as canonical_fixture
 
@@ -144,6 +145,61 @@ def test_candidate_selection_api_rotates_and_replacement_header_revokes(
     )
     assert replaced.status_code == 422
     assert client.post(f"/api/workbench/documents/preflights/{selected['token']}/runs", json={}).status_code == 404
+
+
+def test_document_list_projection_is_strict_paged_and_safe(settings: Settings, catalog: CapabilityCatalog) -> None:
+    source_id, output_id, run_id = uuid4(), uuid4(), uuid4()
+    registered = datetime(2026, 9, 14, 8, 0, tzinfo=timezone.utc)
+
+    class Repository:
+        calls = []
+
+        async def list_document_submissions(self, limit, cursor):
+            self.calls.append((limit, cursor))
+            row = DocumentSubmissionRecord(
+                source_artifact_id=source_id, run_id=run_id, display_filename="sample.pdf",
+                media_type="application/pdf", registered_at=registered, byte_size=1234,
+                format="pdf", document_class=None, profile_id="native-long",
+                run_state=RunState.RUNNING, output_artifact_id=output_id,
+            )
+            return (row,), DocumentSubmissionCursor(registered_at=registered, source_artifact_id=source_id)
+
+    repository = Repository()
+    service = DocumentWorkbenchService(_Profiles(), registry(), object(), object(), object(), repository=repository)  # type: ignore[arg-type]
+    first = asyncio.run(service.documents_page(1))
+    payload = first.model_dump(mode="json")
+    assert set(payload) == {"contractVersion", "items", "page"}
+    assert set(payload["items"][0]) == {"sourceArtifactId", "filename", "mediaType", "format", "byteSize", "documentClass", "profileId", "registeredAt", "latestRun", "actions"}
+    assert payload["items"][0]["documentClass"] is None
+    assert payload["items"][0]["actions"] == {"sourceArtifactId": str(source_id), "outputArtifactId": str(output_id)}
+    assert not any(key in str(payload).lower() for key in ("storage_locator", "contentdigest", "providerpayload", "filesystem"))
+    second = asyncio.run(service.documents_page(1, first.page.nextCursor))
+    assert second.items[0].sourceArtifactId == source_id
+    assert repository.calls[1][1] == DocumentSubmissionCursor(registered_at=registered, source_artifact_id=source_id)
+
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = service
+    client = TestClient(app)
+    assert client.get("/api/workbench/documents?limit=1").status_code == 200
+    invalid = client.get("/api/workbench/documents?cursor=not-a-cursor")
+    assert invalid.status_code == 422
+    assert invalid.json() == {"contractVersion": "workbench-problem/v1", "code": "DOCUMENT_CURSOR_INVALID"}
+    for limit in ("0", "51", "not-a-number"):
+        invalid_page = client.get(f"/api/workbench/documents?limit={limit}")
+        assert invalid_page.status_code == 422
+        assert invalid_page.json() == {"contractVersion": "workbench-problem/v1", "code": "DOCUMENT_PAGE_INVALID"}
+
+
+def test_document_list_failure_uses_safe_503_problem(settings: Settings, catalog: CapabilityCatalog) -> None:
+    class Repository:
+        async def list_document_submissions(self, limit, cursor):
+            raise RuntimeError("database path /private/source and provider payload")
+
+    app = create_app(settings, catalog)
+    app.state.workbench_documents = DocumentWorkbenchService(_Profiles(), registry(), object(), object(), object(), repository=Repository())  # type: ignore[arg-type]
+    response = TestClient(app).get("/api/workbench/documents")
+    assert response.status_code == 503
+    assert response.json() == {"contractVersion": "workbench-problem/v1", "code": "DOCUMENT_LIST_UNAVAILABLE"}
 
 
 def test_preflight_is_bounded_and_requires_a_saved_ingestion_profile() -> None:

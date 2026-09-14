@@ -1,7 +1,7 @@
 # S-028: Persisted Document List
 
 - **Parent Feature:** FEAT-005
-- **Status:** Confirmed
+- **Status:** Implemented
 - **Phase:** Lite Core
 - **Priority:** P1
 - **Dependencies:** S-002, S-010, S-022, S-024
@@ -141,3 +141,9 @@ responsive table mechanics belong to Story design.
   and bounded scope; the compiled Story awaits explicit contract confirmation.
 - **2026-09-14:** User explicitly confirmed the compiled S-028 Story boundary;
   it is eligible for just-in-time technical design and delivery.
+- **2026-09-14:** Implemented the persisted source-submission catalog, bounded
+  document-list API, deterministic keyset paging, authoritative Run and
+  Artifact actions, responsive populated and exceptional states, and eight
+  reviewed desktop/narrow visual baselines. Independent verification and final
+  review passed; Docker-backed restart execution remains environment-blocked by
+  the known Compose startup stall.

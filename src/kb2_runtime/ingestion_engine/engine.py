@@ -10,7 +10,7 @@ from uuid import UUID
 from kb2_runtime.ingestion_profiles import CompiledProfileSet, ProfileResolver, ResolutionRecord, evaluate_condition
 from kb2_runtime.plugins.executor import PluginExecutor
 from kb2_runtime.plugins.registry import PluginRegistry
-from kb2_runtime.trace.contracts import ArtifactInput, EngineKind, IngestionEvidence, QualitySignal, SafeError
+from kb2_runtime.trace.contracts import ArtifactInput, DocumentSubmissionInput, EngineKind, IngestionEvidence, QualitySignal, SafeError
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
 from kb2_runtime.trace.service import ArtifactService, RunService
 
@@ -82,7 +82,15 @@ class IngestionEngine:
             configuration_digest=hashlib.sha256(configuration).hexdigest(),
             summary="submitted ingestion source",
         )
-        return (await self.artifacts.complete_with_outputs(run_id, attempt_id, [(artifact, source.content)]))[0]
+        return (await self.artifacts.complete_with_outputs(
+            run_id,
+            attempt_id,
+            [(artifact, source.content)],
+            document_submission=DocumentSubmissionInput(
+                display_filename=source.filename,
+                media_type=source.media_type,
+            ),
+        ))[0]
 
     async def _execute_sub_stage(
         self, run_id: UUID, axis: str, sub_stage: dict[str, Any], legacy_axis: bool, logical: dict[str, UUID], quality: dict[str, Any], document: dict[str, Any], cancellation: asyncio.Event | None

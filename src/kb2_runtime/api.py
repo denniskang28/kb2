@@ -78,6 +78,7 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
             app.state.workbench_documents = DocumentWorkbenchService(
                 await studio(), registry, IngestionEngine(registry, executor, runs, artifacts), runs, artifacts,
                 external_capabilities=frozenset(item.id for item in runtime_catalog.capabilities if item.provider is not None),
+                repository=repository,
             )
         return app.state.workbench_documents
 
@@ -344,6 +345,25 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
             return problem(str(exc), 404)
         except (ValueError, ProfileError):
             return problem("PREFLIGHT_INVALID", 422)
+
+    @app.get("/api/workbench/documents")
+    async def document_list(limit: str = Query(default="25"), cursor: str | None = Query(default=None)) -> JSONResponse:
+        try:
+            if not limit.isascii() or not limit.isdigit():
+                return problem("DOCUMENT_PAGE_INVALID", 422)
+            parsed_limit = int(limit)
+            if not 1 <= parsed_limit <= 50:
+                return problem("DOCUMENT_PAGE_INVALID", 422)
+            result = await (await documents()).documents_page(parsed_limit, cursor)
+            return JSONResponse(result.model_dump(mode="json"))
+        except ValueError as exc:
+            if str(exc) == "DOCUMENT_CURSOR_INVALID":
+                return problem("DOCUMENT_CURSOR_INVALID", 422)
+            if str(exc) == "DOCUMENT_PAGE_INVALID":
+                return problem("DOCUMENT_PAGE_INVALID", 422)
+            return problem("DOCUMENT_LIST_UNAVAILABLE", 503)
+        except Exception:
+            return problem("DOCUMENT_LIST_UNAVAILABLE", 503)
 
     @app.post("/api/workbench/documents/preflights/{token}/selection")
     async def document_preflight_selection(token: str, payload: dict[str, object]) -> JSONResponse:

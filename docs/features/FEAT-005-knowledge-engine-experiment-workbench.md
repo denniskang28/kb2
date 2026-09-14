@@ -51,7 +51,7 @@ queries, maintaining reviewed evaluation cases, and comparing experiments.
 | S-025 | Query Lab and Evidence inspection | UI-005, UI-008, UI-013 | Confirmed |
 | S-026 | Evaluation Dataset and Evaluation Run | UI-009, UI-010, UI-013 | Confirmed |
 | S-027 | Comparison and cross-Run diagnosis | UI-011, UI-012, UI-013 | Confirmed |
-| S-028 | Persisted document list | UI-003, UI-005, UI-013 | Confirmed |
+| S-028 | Persisted document list | UI-003, UI-005, UI-013 | Implemented |
 
 All adopted UI-001 through UI-013 items are compiled into at least one Story.
 Demo-only and not-adopted prototype items remain excluded from every Story.
@@ -73,3 +73,6 @@ adoption boundary and consume engine schemas instead of prototype data models.
   confirmed populated document-list behavior with persisted Run/Artifact data;
   its Story boundary awaits explicit confirmation.
 - **2026-09-14:** User explicitly confirmed the S-028 Story boundary.
+- **2026-09-14:** S-028 implemented the persisted API-backed document list,
+  deterministic paging, Run/Artifact diagnosis actions, and responsive state
+  coverage; independent verification and final review passed.

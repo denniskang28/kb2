@@ -67,6 +67,40 @@ class WorkbenchOverview(OverviewContract):
     recentComparisons: tuple[OverviewComparison, ...] = Field(max_length=4)
 
 
+class DocumentLatestRun(OverviewContract):
+    id: UUID
+    state: Literal["PENDING", "RUNNING", "SUCCEEDED", "FAILED"]
+
+
+class DocumentActions(OverviewContract):
+    sourceArtifactId: UUID | None = None
+    outputArtifactId: UUID | None = None
+
+
+class DocumentListItem(OverviewContract):
+    sourceArtifactId: UUID
+    filename: str = Field(min_length=1, max_length=255)
+    mediaType: str = Field(min_length=1, max_length=128)
+    format: str | None = Field(default=None, max_length=32)
+    byteSize: int = Field(ge=0)
+    documentClass: str | None = Field(default=None, max_length=64)
+    profileId: str = Field(min_length=1, max_length=64)
+    registeredAt: datetime
+    latestRun: DocumentLatestRun | None = None
+    actions: DocumentActions
+
+
+class DocumentPage(OverviewContract):
+    limit: int = Field(ge=1, le=50)
+    nextCursor: str | None = Field(default=None, max_length=256)
+
+
+class DocumentList(OverviewContract):
+    contractVersion: Literal["workbench-document-list/v1"] = "workbench-document-list/v1"
+    items: tuple[DocumentListItem, ...] = Field(max_length=50)
+    page: DocumentPage
+
+
 # The studio deliberately transports only declarative profile values.  Keeping
 # this envelope small prevents it becoming a second execution/request API.
 class WorkspaceProfile(OverviewContract):
