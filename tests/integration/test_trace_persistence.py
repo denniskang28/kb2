@@ -82,6 +82,7 @@ def compose(project: str, state: Path, *arguments: str) -> subprocess.CompletedP
 
 CREATE_FIXTURE = r'''
 import asyncio, hashlib, json
+from uuid import UUID
 from kb2_runtime.config import Settings
 from kb2_runtime.trace.contracts import ArtifactInput, DocumentSubmissionInput, EngineKind, IngestionEvidence, Metric, QualitySignal, SafeError, StageResult
 from kb2_runtime.trace.errors import TraceError, TraceErrorCode
@@ -191,6 +192,11 @@ async def main():
     await runs.finish_run(duplicate_run_ids[0], False)
     after_refresh, _ = await repository.list_document_submissions(25)
     assert next(item for item in after_refresh if item.run_id == duplicate_run_ids[0]).run_state.value == "FAILED"
+    exact_submissions = await repository.get_document_submissions_by_source_ids([
+        duplicate_source_ids[1], UUID("ffffffff-ffff-ffff-ffff-ffffffffffff"), duplicate_source_ids[0], duplicate_source_ids[1],
+    ])
+    assert {item.source_artifact_id for item in exact_submissions} == set(duplicate_source_ids)
+    assert {item.display_filename for item in exact_submissions} == {"restart-sample.pdf"}
     digest_rows = await repository.connection.execute(
         "SELECT d.source_artifact_id, d.display_filename, a.content_digest FROM document_submissions d JOIN artifacts a ON a.id=d.source_artifact_id WHERE d.source_artifact_id=ANY(%s)",
         ([parent_id, *duplicate_source_ids],),

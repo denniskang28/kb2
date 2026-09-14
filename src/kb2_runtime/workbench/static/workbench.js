@@ -110,85 +110,1927 @@ const setModalScrollLock=locked=>{document.documentElement.classList.toggle('mod
 function createDialogShell(label,origin){const backdrop=el('div','',{class:'modal-backdrop'}),dialog=el('section','',{class:'upload-dialog',role:'dialog','aria-modal':'true','aria-label':label,tabindex:'-1'}),background=document.querySelector('#workbench-shell');let closed=false;const dismiss=()=>{if(closed)return;closed=true;document.removeEventListener('keydown',onKey,true);backdrop.remove();background?.removeAttribute('inert');setModalScrollLock(false);origin?.focus()},onKey=event=>modalKeys(dialog,dismiss,event);backdrop.addEventListener('click',event=>{if(event.target===backdrop)dismiss()});document.addEventListener('keydown',onKey,true);background?.setAttribute('inert','');setModalScrollLock(true);backdrop.append(dialog);document.body.append(backdrop);return {dialog,dismiss,focus(){dialog.focus()}}}
 const locatorLabel=locator=>{if(!locator||!Object.keys(locator).length)return '定位不可用';const parts=[locator.kind,locator.page_number!=null?`第 ${locator.page_number} 页`:null,locator.sheet_name?`工作表 ${locator.sheet_name}`:null,locator.slide_number!=null?`第 ${locator.slide_number} 张`:null,locator.section?`章节 ${locator.section}`:null,locator.cell_range||locator.range].filter(Boolean);return parts.join(' / ')||JSON.stringify(locator)};
 const tabLabel=tab=>({raw:'原始文本',canonical:'Canonical',tree:'结构树',table:'表格',chunks:'Chunks',metadata:'元数据',lineage:'Lineage'}[tab]||tab);
-function inspector(id,returnFocus,selectedLocator){
- trigger=returnFocus;const overlay=el('div','',{class:'artifact-overlay'}),scrim=el('div','',{class:'artifact-scrim'}),drawer=el('aside','',{class:'artifact-inspector inspector-drawer open',role:'dialog','aria-modal':'true','aria-label':'Artifact 检查器',tabindex:'-1'}),background=document.querySelector('#workbench-shell');let closed=false;
- const dismiss=()=>{if(closed)return;closed=true;document.removeEventListener('keydown',onKey,true);overlay.remove();background?.removeAttribute('inert');setModalScrollLock(false);returnFocus?.focus()},onKey=event=>modalKeys(drawer,dismiss,event),close=iconButton('close','关闭 Artifact 检查器',dismiss),loadingHeader=el('header','',{class:'artifact-header'});loadingHeader.append(el('h2','Artifact 检查器'),close);document.addEventListener('keydown',onKey,true);background?.setAttribute('inert','');setModalScrollLock(true);scrim.addEventListener('click',dismiss);overlay.append(scrim,drawer);document.body.append(overlay);drawer.append(loadingHeader,el('p','加载 Artifact…',{class:'artifact-loading','aria-live':'polite'}));
- api(`/api/workbench/artifacts/${id}`).then(x=>{const view=x.view||{},tabs=el('div','',{class:'inspector-tabs',role:'tablist','aria-label':'Artifact 视图'}),body=el('section','',{class:'inspector-body',role:'tabpanel',tabindex:'0'}),header=el('header','',{class:'artifact-header'}),identity=el('div');identity.append(el('span','ARTIFACT',{class:'eyebrow'}),el('h2',`${x.artifactType} / ${x.schemaRevision}`),el('code',id,{class:'artifact-identity'}),statusTag(view.available===false?'Schema 不可用':'Schema 可用',view.available===false?'failure':'success'));header.append(identity,close);let active=null;
-  const selectPair=key=>{drawer.querySelectorAll('[data-stable-id]').forEach(node=>node.classList.toggle('source-selected',node.dataset.stableId===key));const selected=[...drawer.querySelectorAll('[data-stable-id]')].find(node=>node.dataset.stableId===key),identity=selected?.dataset.selectionLabel;summary.textContent=selected?`已选择来源：${identity?`${identity} / `:''}${locatorLabel(JSON.parse(selected.dataset.locator||'{}'))}`:'未选择来源'},summary=el('p','未选择来源',{class:'locator-summary','aria-live':'polite'});
-  const pairedView=(rows,tab)=>{if(!rows?.length)return emptyState(`${tabLabel(tab)} 不可用`,'该 Artifact Schema 未返回此视图。');const split=el('div','',{class:'artifact-source-grid'}),list=el('section','',{class:'inspector-list','aria-label':'稳定对象列表'}),source=el('section','',{class:'source-view','aria-label':'源定位'});rows.forEach(row=>{const bindings=tab==='chunks'?(row.citations||[]).map((citation,index)=>({locator:citation.locator,suffix:` / citation ${index+1}`,elementId:citation.elementId})):[{locator:row.locator,suffix:''}];for(const binding of bindings){const locator=binding.locator||{},stable=`${row.id}|${JSON.stringify(locator)}`,item=button('',()=>selectPair(stable)),origin=button('',()=>selectPair(stable));item.className='artifact-object';item.append(el('strong',row.id||'未命名对象',{class:'mono'}),el('span',`${row.text||'内容不可用'}${binding.suffix}`),tab==='chunks'?el('small',`Source elements: ${(row.sourceElementIds||[]).join(', ')||'不可用'}`):el('span',''));origin.className='locator-entry';origin.append(el('strong',locatorLabel(locator)),el('code',JSON.stringify(locator)));for(const node of [item,origin]){node.dataset.stableId=stable;node.dataset.locator=JSON.stringify(locator)}list.append(item);source.append(origin)}});split.append(list,source);return split};
-  const tableView=()=>{const rows=view.tables||[];if(!rows.length)return emptyState('表格不可用','该 Artifact Schema 未返回表格结构。');const split=el('div','',{class:'artifact-source-grid'}),host=el('section','',{class:'artifact-tables inspector-list','aria-label':'表格对象列表'}),source=el('section','',{class:'source-view','aria-label':'表格源定位'});for(const table of rows){const section=el('section','',{class:'artifact-table'}),stable=`${table.id}|${JSON.stringify(table.locator||{})}`,open=button(`${table.id} / ${locatorLabel(table.locator)}`,()=>selectPair(stable)),origin=button('',()=>selectPair(stable)),wrap=el('div','',{class:'table-wrap'}),grid=el('table','',{class:'dense-table'}),head=el('tr');['行','列','内容','行跨度','列跨度'].forEach(value=>head.append(el('th',value,{scope:'col'})));grid.append(head);for(const cell of table.cells||[]){const row=el('tr');[cell.row_index??cell.row,cell.column_index??cell.column,cell.text??cell.value,cell.row_span??1,cell.column_span??1].forEach(value=>row.append(el('td',displayValue(value))));grid.append(row)}wrap.append(grid);origin.className='locator-entry';origin.append(el('strong',locatorLabel(table.locator)),el('code',JSON.stringify(table.locator||{})));for(const node of [open,origin]){node.dataset.stableId=stable;node.dataset.locator=JSON.stringify(table.locator||{});node.dataset.selectionLabel=table.id||'未命名表格'}section.append(open,wrap);host.append(section);source.append(origin)}split.append(host,source);return split};
-  const render=tab=>{active=tab;[...tabs.children].forEach(control=>{const selected=control.dataset.tab===tab;control.setAttribute('aria-selected',String(selected));control.tabIndex=selected?0:-1});body.setAttribute('aria-labelledby',`artifact-tab-${tab}`);body.replaceChildren();summary.textContent='未选择来源';if(tab==='raw')body.append(view.rawText?el('pre',view.rawText,{class:'raw-preview'}):emptyState('原始文本不可用',view.reason||'该 Artifact 未提供可安全展示的原始文本。'));else if(tab==='canonical'||tab==='tree'||tab==='chunks')body.append(pairedView(tab==='chunks'?view.chunks:view.elements,tab),summary);else if(tab==='table')body.append(tableView(),summary);else if(tab==='metadata')body.append(definitionRows([['Artifact 类型',x.artifactType],['Schema',x.schemaRevision],['摘要',x.summary],['指标',signalValue(x.metrics)],['质量',signalValue(x.quality)]],'definition-grid metadata-grid'));else if(tab==='lineage'){const lineage=el('ol','',{class:'lineage-list'}),producer=x.producer||{};lineage.append(el('li',`生产者 Run ID：${producer.runId||'不可用'}`),el('li',`生产者 Plugin ID：${producer.pluginId||'不可用'}`),el('li',`当前 Artifact：${id}`));for(const parent of x.parents||[])lineage.append(el('li',`父 Artifact：${parent}`));body.append(lineage)}};
-  for(const tab of view.tabs||[]){const control=button(tabLabel(tab),()=>render(tab));control.dataset.tab=tab;control.id=`artifact-tab-${tab}`;control.setAttribute('role','tab');control.setAttribute('aria-controls','artifact-tabpanel');tabs.append(control)}body.id='artifact-tabpanel';tabs.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const controls=[...tabs.querySelectorAll('[role=tab]')],index=controls.findIndex(control=>control.dataset.tab===active),next=event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowLeft'?-1:1)+controls.length)%controls.length;controls[next].focus();render(controls[next].dataset.tab)});drawer.replaceChildren(header,tabs,body);render((view.tabs||[])[0]);if(selectedLocator){const encoded=JSON.stringify(selectedLocator),target=[...drawer.querySelectorAll('[data-locator]')].find(node=>node.dataset.locator===encoded);target?.click()}drawer.focus()}).catch(()=>{const errorHeader=el('header','',{class:'artifact-header'});errorHeader.append(el('h2','Artifact 不可用'),close);drawer.replaceChildren(errorHeader,notice('failure','无法读取 Artifact','服务未返回可检查的安全投影。'));drawer.focus()})
+function inspector(id, returnFocus, selectedLocator) {
+  trigger = returnFocus;
+  const overlay = el("div", "", { class: "artifact-overlay" }),
+    scrim = el("div", "", { class: "artifact-scrim" }),
+    drawer = el("aside", "", {
+      class: "artifact-inspector inspector-drawer open",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Artifact 检查器",
+      tabindex: "-1",
+    }),
+    background = document.querySelector("#workbench-shell");
+  let closed = false;
+  const dismiss = () => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("keydown", onKey, true);
+      overlay.remove();
+      background?.removeAttribute("inert");
+      setModalScrollLock(false);
+      returnFocus?.focus();
+    },
+    onKey = (event) => modalKeys(drawer, dismiss, event),
+    close = iconButton("close", "关闭 Artifact 检查器", dismiss),
+    loadingHeader = el("header", "", { class: "artifact-header" });
+  loadingHeader.append(el("h2", "Artifact 检查器"), close);
+  document.addEventListener("keydown", onKey, true);
+  background?.setAttribute("inert", "");
+  setModalScrollLock(true);
+  scrim.addEventListener("click", dismiss);
+  overlay.append(scrim, drawer);
+  document.body.append(overlay);
+  drawer.append(
+    loadingHeader,
+    el("p", "加载 Artifact…", {
+      class: "artifact-loading",
+      "aria-live": "polite",
+    }),
+  );
+  api(`/api/workbench/artifacts/${id}`)
+    .then((x) => {
+      const view = x.view || {},
+        tabs = el("div", "", {
+          class: "inspector-tabs",
+          role: "tablist",
+          "aria-label": "Artifact 视图",
+        }),
+        body = el("section", "", {
+          class: "inspector-body",
+          role: "tabpanel",
+          tabindex: "0",
+        }),
+        header = el("header", "", { class: "artifact-header" }),
+        identity = el("div");
+      identity.append(
+        el("span", "ARTIFACT", { class: "eyebrow" }),
+        el("h2", `${x.artifactType} / ${x.schemaRevision}`),
+        el("code", id, { class: "artifact-identity" }),
+        statusTag(
+          view.available === false ? "Schema 不可用" : "Schema 可用",
+          view.available === false ? "failure" : "success",
+        ),
+      );
+      header.append(identity, close);
+      let active = null;
+      const selectPair = (key) => {
+          drawer
+            .querySelectorAll("[data-stable-id]")
+            .forEach((node) =>
+              node.classList.toggle(
+                "source-selected",
+                node.dataset.stableId===key,
+              ),
+            );
+          const selected = [
+              ...drawer.querySelectorAll("[data-stable-id]"),
+            ].find((node) => node.dataset.stableId === key),
+            identity = selected?.dataset.selectionLabel;
+          summary.textContent = selected
+            ? `已选择来源：${identity ? `${identity} / ` : ""}${locatorLabel(JSON.parse(selected.dataset.locator || "{}"))}`
+            : "未选择来源";
+        },
+        summary = el("p", "未选择来源", {
+          class: "locator-summary",
+          "aria-live": "polite",
+        });
+      const pairedView = (rows, tab) => {
+        if (!rows?.length)
+          return emptyState(
+            `${tabLabel(tab)} 不可用`,
+            "该 Artifact Schema 未返回此视图。",
+          );
+        const split = el("div", "", { class: "artifact-source-grid" }),
+          list = el("section", "", {
+            class: "inspector-list",
+            "aria-label": "稳定对象列表",
+          }),
+          source = el("section", "", {
+            class: "source-view",
+            "aria-label": "源定位",
+          });
+        rows.forEach((row) => {
+          const bindings =
+            tab === "chunks"
+              ? (row.citations||[]).map((citation, index) => ({
+                  locator: citation.locator,
+                  suffix: ` / citation ${index + 1}`,
+                  elementId: citation.elementId,
+                }))
+              : [{ locator: row.locator, suffix: "" }];
+          for (const binding of bindings) {
+            const locator = binding.locator || {},
+              stable = `${row.id}|${JSON.stringify(locator)}`,
+              item = button("", () => selectPair(stable)),
+              origin = button("", () => selectPair(stable));
+            item.className = "artifact-object";
+            item.append(
+              el("strong", row.id || "未命名对象", { class: "mono" }),
+              el("span", `${row.text || "内容不可用"}${binding.suffix}`),
+              tab === "chunks"
+                ? el(
+                    "small",
+                    `Source elements: ${(row.sourceElementIds || []).join(", ") || "不可用"}`,
+                  )
+                : el("span", ""),
+            );
+            origin.className = "locator-entry";
+            origin.append(
+              el("strong", locatorLabel(locator)),
+              el("code", JSON.stringify(locator)),
+            );
+            for (const node of [item, origin]) {
+              node.dataset.stableId = stable;
+              node.dataset.locator = JSON.stringify(locator);
+            }
+            list.append(item);
+            source.append(origin);
+          }
+        });
+        split.append(list, source);
+        return split;
+      };
+      const tableView = () => {
+        const rows = view.tables || [];
+        if (!rows.length)
+          return emptyState(
+            "表格不可用",
+            "该 Artifact Schema 未返回表格结构。",
+          );
+        const split = el("div", "", { class: "artifact-source-grid" }),
+          host = el("section", "", {
+            class: "artifact-tables inspector-list",
+            "aria-label": "表格对象列表",
+          }),
+          source = el("section", "", {
+            class: "source-view",
+            "aria-label": "表格源定位",
+          });
+        for (const table of rows) {
+          const section = el("section", "", { class: "artifact-table" }),
+            stable = `${table.id}|${JSON.stringify(table.locator || {})}`,
+            open = button(`${table.id} / ${locatorLabel(table.locator)}`, () =>
+              selectPair(stable),
+            ),
+            origin = button("", () => selectPair(stable)),
+            wrap = el("div", "", { class: "table-wrap" }),
+            grid = el("table", "", { class: "dense-table" }),
+            head = el("tr");
+          ["行", "列", "内容", "行跨度", "列跨度"].forEach((value) =>
+            head.append(el("th", value, { scope: "col" })),
+          );
+          grid.append(head);
+          for (const cell of table.cells || []) {
+            const row = el("tr");
+            [
+              cell.row_index ?? cell.row,
+              cell.column_index ?? cell.column,
+              cell.text ?? cell.value,
+              cell.row_span ?? 1,
+              cell.column_span ?? 1,
+            ].forEach((value) => row.append(el("td", displayValue(value))));
+            grid.append(row);
+          }
+          wrap.append(grid);
+          origin.className = "locator-entry";
+          origin.append(
+            el("strong", locatorLabel(table.locator)),
+            el("code", JSON.stringify(table.locator || {})),
+          );
+          for (const node of [open, origin]) {
+            node.dataset.stableId = stable;
+            node.dataset.locator = JSON.stringify(table.locator || {});
+            node.dataset.selectionLabel = table.id || "未命名表格";
+          }
+          section.append(open, wrap);
+          host.append(section);
+          source.append(origin);
+        }
+        split.append(host, source);
+        return split;
+      };
+      const render = (tab) => {
+        active = tab;
+        [...tabs.children].forEach((control) => {
+          const selected = control.dataset.tab === tab;
+          control.setAttribute("aria-selected", String(selected));
+          control.tabIndex = selected ? 0 : -1;
+        });
+        body.setAttribute("aria-labelledby", `artifact-tab-${tab}`);
+        body.replaceChildren();
+        summary.textContent = "未选择来源";
+        if (tab === "raw")
+          body.append(
+            view.rawText
+              ? el("pre", view.rawText, { class: "raw-preview" })
+              : emptyState(
+                  "原始文本不可用",
+                  view.reason || "该 Artifact 未提供可安全展示的原始文本。",
+                ),
+          );
+        else if (tab === "canonical" || tab === "tree" || tab === "chunks")
+          body.append(
+            pairedView(tab === "chunks" ? view.chunks : view.elements, tab),
+            summary,
+          );
+        else if (tab === "table") body.append(tableView(), summary);
+        else if (tab === "metadata")
+          body.append(
+            definitionRows(
+              [
+                ["Artifact 类型", x.artifactType],
+                ["Schema", x.schemaRevision],
+                ["摘要", x.summary],
+                ["指标", signalValue(x.metrics)],
+                ["质量", signalValue(x.quality)],
+              ],
+              "definition-grid metadata-grid",
+            ),
+          );
+        else if (tab === "lineage") {
+          const lineage = el("ol", "", { class: "lineage-list" }),
+            producer = x.producer || {};
+          lineage.append(
+            el("li", `生产者 Run ID：${producer.runId || "不可用"}`),
+            el("li", `生产者 Plugin ID：${producer.pluginId || "不可用"}`),
+            el("li", `当前 Artifact：${id}`),
+          );
+          for (const parent of x.parents || [])
+            lineage.append(el("li", `父 Artifact：${parent}`));
+          body.append(lineage);
+        }
+      };
+      for (const tab of view.tabs || []) {
+        const control = button(tabLabel(tab), () => render(tab));
+        control.dataset.tab = tab;
+        control.id = `artifact-tab-${tab}`;
+        control.setAttribute("role", "tab");
+        control.setAttribute("aria-controls", "artifact-tabpanel");
+        tabs.append(control);
+      }
+      body.id = "artifact-tabpanel";
+      tabs.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+          return;
+        event.preventDefault();
+        const controls = [...tabs.querySelectorAll("[role=tab]")],
+          index = controls.findIndex(
+            (control) => control.dataset.tab === active,
+          ),
+          next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? controls.length - 1
+                : (index +
+                    (event.key === "ArrowLeft" ? -1 : 1) +
+                    controls.length) %
+                  controls.length;
+        controls[next].focus();
+        render(controls[next].dataset.tab);
+      });
+      drawer.replaceChildren(header, tabs, body);
+      render((view.tabs || [])[0]);
+      if (selectedLocator) {
+        const encoded = JSON.stringify(selectedLocator);
+        for (const tab of view.tabs || []) {
+          if (tab !== active) render(tab);
+          const target = [...drawer.querySelectorAll("[data-locator]")].find(
+            (node) => node.dataset.locator === encoded,
+          );
+          if (target) {
+            target.click();
+            break;
+          }
+        }
+      }
+      drawer.focus();
+    })
+    .catch(() => {
+      const errorHeader = el("header", "", { class: "artifact-header" });
+      errorHeader.append(el("h2", "Artifact 不可用"), close);
+      drawer.replaceChildren(
+        errorHeader,
+        notice("failure", "无法读取 Artifact", "服务未返回可检查的安全投影。"),
+      );
+      drawer.focus();
+    });
 }
-function documents(){
- const main=el('main','',{class:'documents-page'}),surface=el('section','',{class:'documents-surface','aria-labelledby':'documents-list-title','aria-live':'polite'}),current=el('section','',{class:'documents-current','aria-labelledby':'current-submission-title','aria-live':'polite',hidden:''}),header=heading('文档','已持久化的提交、处理状态与诊断入口'),commands=el('div','',{class:'documents-commands'}),open=button('',()=>showDialog()),refresh=iconButton('refresh','刷新文档列表',()=>load(false));open.className='command-link command-primary';open.append(icon('upload'),el('span','上传并预检'));commands.append(refresh,open);header.classList.add('documents-title');header.append(commands);main.append(header,surface,current);shell(main);
- let generation=0,items=[],nextCursor=null,mode='loading';
- const byteLabel=value=>value<1024?`${value} B`:value<1024*1024?`${(value/1024).toFixed(value<10240?1:0)} KB`:`${(value/1024/1024).toFixed(1)} MB`;
- const runHref=id=>{const p=new URLSearchParams({run:id,legacy:'ingestion'});if(workspaceId)p.set('workspace',workspaceId);return `/workbench/runs?${p}`};
- const renderList=()=>{surface.replaceChildren(el('h2','已上传文档',{id:'documents-list-title',class:'sr-only'}));surface.setAttribute('aria-busy',String(mode==='loading'||mode==='more'));if(mode==='loading'){const loading=skeletonRows(6);loading.classList.add('document-list-loading');surface.append(loading);return}if(mode==='error'){surface.append(notice('failure','无法加载文档列表','已上传文档暂时不可用。',[button('重试',()=>load(false))]));return}if(!items.length){surface.append(emptyState('尚无已上传文档','完成预检并创建 Run 后，持久化的文档提交会显示在这里。'));return}
-  const wrap=el('div','',{class:'document-table-wrap',tabindex:'0',role:'region','aria-label':'已上传文档表格'}),table=el('table','',{class:'document-table','aria-label':'已上传文档'}),head=el('thead'),headRow=el('tr');['文档','格式','处理类别','Ingestion Profile','最近 Run','状态','操作'].forEach(value=>headRow.append(el('th',value,{scope:'col'})));head.append(headRow);const body=el('tbody');
-  for(const row of items){const tr=el('tr'),identity=el('div','',{class:'document-identity'}),name=el('strong',row.filename),meta=el('span',byteLabel(row.byteSize)),source=el('code',row.sourceArtifactId);identity.append(name,meta,source);const run=row.latestRun?el('a',row.latestRun.id,{href:runHref(row.latestRun.id),class:'document-run-link'}):el('span','不可用',{class:'muted'}),actions=el('div','',{class:'document-actions'});if(row.actions?.sourceArtifactId)actions.append(iconButton('file','检查 Source Artifact',event=>inspector(row.actions.sourceArtifactId,event.currentTarget)));if(row.actions?.outputArtifactId)actions.append(iconButton('search','检查最新输出 Artifact',event=>inspector(row.actions.outputArtifactId,event.currentTarget)));const state=row.latestRun?.state||'PENDING',tone=state==='PENDING'?'neutral':statusTone(state);[identity,row.format||row.mediaType||'不可用',row.documentClass||'不可用',row.profileId||'不可用',run,statusTag(statusLabel(state),tone),actions].forEach(value=>{const td=el('td');td.append(value instanceof Node?value:document.createTextNode(String(value)));tr.append(td)});body.append(tr)}table.append(head,body);wrap.append(table);surface.append(wrap);
-  const footer=el('footer','',{class:'document-page-actions'});if(mode==='more-error'){footer.append(notice('failure','无法加载更多文档','已显示的文档保持不变。',[button('重试',()=>load(true))]))}else if(nextCursor){footer.append(button(mode==='more'?'正在加载…':'加载更多',()=>load(true),mode==='more'))}surface.append(footer)
- };
- const load=async append=>{const requestGeneration=append?generation:++generation;if(!append){items=[];nextCursor=null;mode='loading'}else mode='more';renderList();try{const suffix=new URLSearchParams({limit:'25'});if(append&&nextCursor)suffix.set('cursor',nextCursor);const result=await api(`/api/workbench/documents?${suffix}`);if(requestGeneration!==generation)return;const incoming=result.items||[],known=new Set(items.map(item=>item.sourceArtifactId));if(incoming.some(item=>known.has(item.sourceArtifactId))||new Set(incoming.map(item=>item.sourceArtifactId)).size!==incoming.length)throw new Error('DOCUMENT_LIST_DUPLICATE');items=append?[...items,...incoming]:incoming;nextCursor=result.page?.nextCursor||null;mode='ready'}catch{if(requestGeneration!==generation)return;mode=append?'more-error':'error'}finally{if(requestGeneration===generation)renderList()}};
- const renderCurrent=(p,fileName)=>{const row=el('div','',{class:'document-current'}),selected=p.selection?.profileId||p.automatic?.selectedProfileId;row.append(icon('file'),definitionRows([['文件 / Source',fileName||p.sourceArtifactId],['媒体类型',p.detected?.media_type],['大小',p.detected?.byte_size!=null?`${p.detected.byte_size} bytes`:null],['选中 Profile',selected],['计划摘要',p.planDigest]],'document-facts'));current.hidden=false;current.replaceChildren(sectionHeader('current-submission-title','本次提交','预检完成'),row)};
- const showDialog=(handoff=null)=>{
-  const modal=createDialogShell('上传并预检',open),dialog=modal.dialog,head=el('header','',{class:'dialog-header'}),body=el('div','',{class:'upload-dialog-body'}),foot=el('footer','',{class:'dialog-actions'}),close=iconButton('close','关闭上传对话框',modal.dismiss),profile=el('input','',{placeholder:'Ingestion Profile Set ID','aria-label':'Ingestion Profile Set ID'}),file=el('input','',{type:'file','aria-label':'选择文档'}),result=el('div','',{class:'preflight-result','aria-live':'polite'}),alert=el('div','',{class:'preflight-alert','aria-live':'assertive'}),requestStatus=el('p','',{class:'preflight-request-status',role:'status','aria-live':'polite'}),headCopy=el('div'),fileLabel=el('label','文档'),profileLabel=el('label','Profile Set'),source=el('section','',{class:'upload-source-step'});
-  let generation=0,currentPreview=null,replacementToken=null;
-  const cancel=()=>button('取消',modal.dismiss),resetCurrent=message=>{current.hidden=false;current.replaceChildren(sectionHeader('current-submission-title','本次提交','API 支持的当前选择'),emptyState(message||'尚未选择文档',message?'等待服务返回新的固定计划。':'上传后将在这里显示当前预检与固定计划信息。'))};
-  const clearPreview=()=>{generation+=1;if(currentPreview?.token)replacementToken=currentPreview.token;currentPreview=null;result.replaceChildren();alert.replaceChildren();requestStatus.textContent='';foot.replaceChildren(cancel());preflight.disabled=false;resetCurrent()};
-  const render=async(p,fileName)=>{
-   currentPreview=p;if(!profile.value&&p.workspaceProfileId)profile.value=p.workspaceProfileId;
-   const automatic=p.automatic||{},selected=p.selection?.profileId||automatic.selectedProfileId,candidates=automatic.candidateProfileIds||[selected],resolution=el('fieldset','',{class:'profile-resolution'});
-   resolution.append(el('legend','Profile 解析依据'));
-   for(const id of candidates.filter(Boolean)){
-    const radio=el('input','',{type:'radio',name:'ingestion-profile',value:id,'aria-label':`选择 Profile ${id}`});radio.checked=id===selected;
-    const label=el('label','',{class:'profile-option'}),descriptor=id===automatic.selectedProfileId?statusTag('自动选中','info'):id===selected?statusTag('当前预览','success'):el('span','显式候选',{class:'muted'});label.append(radio,el('strong',id),descriptor);resolution.append(label);
-    radio.addEventListener('change',async()=>{if(!radio.checked||id===selected)return;const requestGeneration=++generation,token=p.token;currentPreview=null;replacementToken=null;result.replaceChildren();alert.replaceChildren();foot.replaceChildren(cancel());requestStatus.textContent='正在切换 Profile 预览…';preflight.disabled=true;resetCurrent('正在切换 Profile 预览');try{const next=await api(`/api/workbench/documents/preflights/${token}/selection`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({profileId:id})});if(requestGeneration!==generation)return;await render(next,fileName);requestStatus.textContent='Profile 预览已更新'}catch{if(requestGeneration!==generation)return;requestStatus.textContent='Profile 预览切换失败，请重新预检';alert.replaceChildren(notice('failure','无法切换 Profile','旧预检已失效，请重新预检后再提交。'))}finally{if(requestGeneration===generation)preflight.disabled=false}});
-   }
-   const matched=(automatic.evaluatedRules||[]).map(rule=>`${rule.rule_id||rule.ruleId||'规则'}：${rule.matched?'匹配':'未匹配'}`).join('；')||'未返回规则评估';resolution.append(definitionRows([['选择层级',p.selection?.selectionTier||automatic.selectionTier],['候选 Profile',candidates.join(', ')],['规则评估',matched],['最终 Profile',selected]]));
-   const facts=definitionRows(Object.entries(p.detected||{}).map(([key,value])=>[key,value])),factSection=el('section','',{class:'preflight-facts'});factSection.append(el('h3','检测事实'),facts);const stages=el('section','',{class:'resolved-stages'});stages.append(el('h3','解析后的阶段'));for(const stage of p.stages||[]){const row=el('div','',{class:'resolved-stage-row'});row.append(el('strong',stage.key),el('span',(stage.candidates||[]).map(candidate=>candidate.pluginId).join(', ')||'Plugin 不可用'));stages.append(row)}
-   const disclosure=el('section','',{class:'persistence-disclosure'}),external=p.disclosure?.externalStages||[],ack=el('input','',{type:'checkbox','aria-label':'确认外部阶段披露'});disclosure.append(notice('info','本地持久化',p.disclosure?.localPersistence||'持久化信息不可用。'));if(external.length){const warning=notice('warning','外部阶段披露','以下已选阶段可能向外部提供方发送内容。'),list=el('ul');for(const item of external)list.append(el('li',`${item.stage} / ${item.pluginId||'Plugin 不可用'} / ${item.capability||'能力不可用'}：${item.message||'披露信息不可用'}`));warning.lastChild.append(list);const label=el('label','',{class:'acknowledgement'});label.append(ack,el('span','确认已了解外部阶段披露'));disclosure.append(warning,label)}
-   const run=button('创建新 Run',async()=>{if(currentPreview!==p)return;run.disabled=true;try{const receipt=await api(`/api/workbench/documents/preflights/${p.token}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({profileId:selected,acknowledgeExternal:ack.checked})});location.href=href('runs')+`?run=${receipt.runId}&legacy=ingestion`}catch{alert.replaceChildren(notice('failure','无法创建 Run','预检令牌或确认状态无效。'));run.disabled=external.length>0&&!ack.checked}},external.length>0);ack.addEventListener('change',()=>run.disabled=!ack.checked);foot.replaceChildren(cancel(),run);result.replaceChildren(factSection,resolution,stages,definitionRows([['Profile Set',p.workspaceProfileId||profile.value],['计划摘要',p.planDigest],['复用 Source Artifact',p.sourceArtifactId]]),disclosure);renderCurrent(p,fileName)
+function documents() {
+  const main = el("main", "", { class: "documents-page" }),
+    surface = el("section", "", {
+      class: "documents-surface",
+      "aria-labelledby": "documents-list-title",
+      "aria-live": "polite",
+    }),
+    current = el("section", "", {
+      class: "documents-current",
+      "aria-labelledby": "current-submission-title",
+      "aria-live": "polite",
+      hidden: "",
+    }),
+    header = heading("文档", "已持久化的提交、处理状态与诊断入口"),
+    commands = el("div", "", { class: "documents-commands" }),
+    open = button("", () => showDialog()),
+    refresh = iconButton("refresh", "刷新文档列表", () => load(false));
+  open.className = "command-link command-primary";
+  open.append(icon("upload"), el("span", "上传并预检"));
+  commands.append(refresh, open);
+  header.classList.add("documents-title");
+  header.append(commands);
+  main.append(header, surface, current);
+  shell(main);
+  let generation = 0,
+    items = [],
+    nextCursor = null,
+    mode = "loading";
+  const byteLabel = (value) =>
+    value < 1024
+      ? `${value} B`
+      : value < 1024 * 1024
+        ? `${(value / 1024).toFixed(value < 10240 ? 1 : 0)} KB`
+        : `${(value / 1024 / 1024).toFixed(1)} MB`;
+  const runHref = (id) => {
+    const p = new URLSearchParams({ run: id, legacy: "ingestion" });
+    if (workspaceId) p.set("workspace", workspaceId);
+    return `/workbench/runs?${p}`;
   };
-  const preflight=button('预检',async()=>{const selectedFile=file.files?.[0];if(!selectedFile||!profile.value)return;const oldToken=currentPreview?.token||replacementToken,requestGeneration=++generation;currentPreview=null;replacementToken=null;result.replaceChildren();alert.replaceChildren();foot.replaceChildren(cancel());resetCurrent('正在预检');preflight.disabled=true;requestStatus.textContent='正在预检…';const headers={'X-Profile-Id':profile.value,'X-Filename':selectedFile.name,'Content-Type':selectedFile.type||'application/octet-stream'};if(oldToken)headers['X-Replaces-Preflight-Token']=oldToken;try{const next=await api('/api/workbench/documents/preflight',{method:'PUT',headers,body:selectedFile});if(requestGeneration!==generation)return;await render(next,selectedFile.name);requestStatus.textContent='预检完成'}catch{if(requestGeneration!==generation)return;requestStatus.textContent='预检失败，可重试';alert.replaceChildren(notice('failure','预检失败','请检查 Profile Set 和文档后重试。'))}finally{if(requestGeneration===generation)preflight.disabled=false}});
-  profile.addEventListener('input',clearPreview);file.addEventListener('change',clearPreview);headCopy.append(el('span','NEW INGESTION',{class:'eyebrow'}),el('h2','上传并预检文档'));head.append(headCopy,close);fileLabel.append(file);profileLabel.append(profile);source.append(fileLabel,profileLabel,preflight,requestStatus);body.append(source,result,alert);foot.append(cancel());dialog.append(head,body,foot);
-  if(handoff){profile.value=handoff.workspaceProfileId||'';file.disabled=true;source.insertBefore(notice('info','复用 Source Artifact',handoff.sourceArtifactId||'Source Artifact 不可用。'),file.closest('label'));render(handoff,handoff.sourceArtifactId)}modal.focus()
- };
- const handoff=sessionStorage.getItem('kb2.rerun-preflight');if(handoff){sessionStorage.removeItem('kb2.rerun-preflight');showDialog(JSON.parse(handoff))}
- load(false)
+  const renderList = () => {
+    surface.replaceChildren(
+      el("h2", "已上传文档", { id: "documents-list-title", class: "sr-only" }),
+    );
+    surface.setAttribute(
+      "aria-busy",
+      String(mode === "loading" || mode === "more"),
+    );
+    if (mode === "loading") {
+      const loading = skeletonRows(6);
+      loading.classList.add("document-list-loading");
+      surface.append(loading);
+      return;
+    }
+    if (mode === "error") {
+      surface.append(
+        notice("failure", "无法加载文档列表", "已上传文档暂时不可用。", [
+          button("重试", () => load(false)),
+        ]),
+      );
+      return;
+    }
+    if (!items.length) {
+      surface.append(
+        emptyState(
+          "尚无已上传文档",
+          "完成预检并创建 Run 后，持久化的文档提交会显示在这里。",
+        ),
+      );
+      return;
+    }
+    const wrap = el("div", "", {
+        class: "document-table-wrap",
+        tabindex: "0",
+        role: "region",
+        "aria-label": "已上传文档表格",
+      }),
+      table = el("table", "", {
+        class: "document-table",
+        "aria-label": "已上传文档",
+      }),
+      head = el("thead"),
+      headRow = el("tr");
+    [
+      "文档",
+      "格式",
+      "处理类别",
+      "Ingestion Profile",
+      "最近 Run",
+      "状态",
+      "操作",
+    ].forEach((value) => headRow.append(el("th", value, { scope: "col" })));
+    head.append(headRow);
+    const body = el("tbody");
+    for (const row of items) {
+      const tr = el("tr"),
+        identity = el("div", "", { class: "document-identity" }),
+        name = el("strong", row.filename),
+        meta = el("span", byteLabel(row.byteSize)),
+        source = el("code", row.sourceArtifactId);
+      identity.append(name, meta, source);
+      const run = row.latestRun
+          ? el("a", row.latestRun.id, {
+              href: runHref(row.latestRun.id),
+              class: "document-run-link",
+            })
+          : el("span", "不可用", { class: "muted" }),
+        actions = el("div", "", { class: "document-actions" });
+      if (row.actions?.sourceArtifactId)
+        actions.append(
+          iconButton("file", "检查 Source Artifact", (event) =>
+            inspector(row.actions.sourceArtifactId, event.currentTarget),
+          ),
+        );
+      if (row.actions?.outputArtifactId)
+        actions.append(
+          iconButton("search", "检查最新输出 Artifact", (event) =>
+            inspector(row.actions.outputArtifactId, event.currentTarget),
+          ),
+        );
+      const state = row.latestRun?.state || "PENDING",
+        tone = state === "PENDING" ? "neutral" : statusTone(state);
+      [
+        identity,
+        row.format || row.mediaType || "不可用",
+        row.documentClass || "不可用",
+        row.profileId || "不可用",
+        run,
+        statusTag(statusLabel(state), tone),
+        actions,
+      ].forEach((value) => {
+        const td = el("td");
+        td.append(
+          value instanceof Node
+            ? value
+            : document.createTextNode(String(value)),
+        );
+        tr.append(td);
+      });
+      body.append(tr);
+    }
+    table.append(head, body);
+    wrap.append(table);
+    surface.append(wrap);
+    const footer = el("footer", "", { class: "document-page-actions" });
+    if (mode === "more-error") {
+      footer.append(
+        notice("failure", "无法加载更多文档", "已显示的文档保持不变。", [
+          button("重试", () => load(true)),
+        ]),
+      );
+    } else if (nextCursor) {
+      footer.append(
+        button(
+          mode === "more" ? "正在加载…" : "加载更多",
+          () => load(true),
+          mode === "more",
+        ),
+      );
+    }
+    surface.append(footer);
+  };
+  const load = async (append) => {
+    const requestGeneration = append ? generation : ++generation;
+    if (!append) {
+      items = [];
+      nextCursor = null;
+      mode = "loading";
+    } else mode = "more";
+    renderList();
+    try {
+      const suffix = new URLSearchParams({ limit: "25" });
+      if (append && nextCursor) suffix.set("cursor", nextCursor);
+      const result = await api(`/api/workbench/documents?${suffix}`);
+      if (requestGeneration !== generation) return;
+      const incoming = result.items || [],
+        known = new Set(items.map((item) => item.sourceArtifactId));
+      if (
+        incoming.some((item) => known.has(item.sourceArtifactId)) ||
+        new Set(incoming.map((item) => item.sourceArtifactId)).size !==
+          incoming.length
+      )
+        throw new Error("DOCUMENT_LIST_DUPLICATE");
+      items = append ? [...items, ...incoming] : incoming;
+      nextCursor = result.page?.nextCursor || null;
+      mode = "ready";
+    } catch {
+      if (requestGeneration !== generation) return;
+      mode = append ? "more-error" : "error";
+    } finally {
+      if (requestGeneration === generation) renderList();
+    }
+  };
+  const renderCurrent = (p, fileName) => {
+    const row = el("div", "", { class: "document-current" }),
+      selected = p.selection?.profileId || p.automatic?.selectedProfileId;
+    row.append(
+      icon("file"),
+      definitionRows(
+        [
+          ["文件 / Source", fileName || p.sourceArtifactId],
+          ["媒体类型", p.detected?.media_type],
+          [
+            "大小",
+            p.detected?.byte_size != null
+              ? `${p.detected.byte_size} bytes`
+              : null,
+          ],
+          ["选中 Profile", selected],
+          ["计划摘要", p.planDigest],
+        ],
+        "document-facts",
+      ),
+    );
+    current.hidden = false;
+    current.replaceChildren(
+      sectionHeader("current-submission-title", "本次提交", "预检完成"),
+      row,
+    );
+  };
+  const showDialog = (handoff = null) => {
+    const modal = createDialogShell("上传并预检", open),
+      dialog = modal.dialog,
+      head = el("header", "", { class: "dialog-header" }),
+      body = el("div", "", { class: "upload-dialog-body" }),
+      foot = el("footer", "", { class: "dialog-actions" }),
+      close = iconButton("close", "关闭上传对话框", modal.dismiss),
+      profile = el("input", "", {
+        placeholder: "Ingestion Profile Set ID",
+        "aria-label": "Ingestion Profile Set ID",
+      }),
+      file = el("input", "", { type: "file", "aria-label": "选择文档" }),
+      result = el("div", "", {
+        class: "preflight-result",
+        "aria-live": "polite",
+      }),
+      alert = el("div", "", {
+        class: "preflight-alert",
+        "aria-live": "assertive",
+      }),
+      requestStatus = el("p", "", {
+        class: "preflight-request-status",
+        role: "status",
+        "aria-live": "polite",
+      }),
+      headCopy = el("div"),
+      fileLabel = el("label", "文档"),
+      profileLabel = el("label", "Profile Set"),
+      source = el("section", "", { class: "upload-source-step" });
+    let generation = 0,
+      currentPreview = null,
+      replacementToken = null;
+    const cancel = () => button("取消", modal.dismiss),
+      resetCurrent = (message) => {
+        current.hidden = false;
+        current.replaceChildren(
+          sectionHeader(
+            "current-submission-title",
+            "本次提交",
+            "API 支持的当前选择",
+          ),
+          emptyState(
+            message || "尚未选择文档",
+            message
+              ? "等待服务返回新的固定计划。"
+              : "上传后将在这里显示当前预检与固定计划信息。",
+          ),
+        );
+      };
+    const clearPreview = () => {
+      generation += 1;
+      if (currentPreview?.token) replacementToken = currentPreview.token;
+      currentPreview = null;
+      result.replaceChildren();
+      alert.replaceChildren();
+      requestStatus.textContent = "";
+      foot.replaceChildren(cancel());
+      preflight.disabled = false;
+      resetCurrent();
+    };
+    const render = async (p, fileName) => {
+      currentPreview = p;
+      if (!profile.value && p.workspaceProfileId)
+        profile.value = p.workspaceProfileId;
+      const automatic = p.automatic || {},
+        selected = p.selection?.profileId || automatic.selectedProfileId,
+        candidates = automatic.candidateProfileIds || [selected],
+        resolution = el("fieldset", "", { class: "profile-resolution" });
+      resolution.append(el("legend", "Profile 解析依据"));
+      for (const id of candidates.filter(Boolean)) {
+        const radio = el("input", "", {
+          type: "radio",
+          name: "ingestion-profile",
+          value: id,
+          "aria-label": `选择 Profile ${id}`,
+        });
+        radio.checked = id === selected;
+        const label = el("label", "", { class: "profile-option" }),
+          descriptor =
+            id === automatic.selectedProfileId
+              ? statusTag("自动选中", "info")
+              : id === selected
+                ? statusTag("当前预览", "success")
+                : el("span", "显式候选", { class: "muted" });
+        label.append(radio, el("strong", id), descriptor);
+        resolution.append(label);
+        radio.addEventListener("change", async () => {
+          if (!radio.checked || id === selected) return;
+          const requestGeneration = ++generation,
+            token = p.token;
+          currentPreview = null;
+          replacementToken = null;
+          result.replaceChildren();
+          alert.replaceChildren();
+          foot.replaceChildren(cancel());
+          requestStatus.textContent = "正在切换 Profile 预览…";
+          preflight.disabled = true;
+          resetCurrent("正在切换 Profile 预览");
+          try {
+            const next = await api(
+              `/api/workbench/documents/preflights/${token}/selection`,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ profileId: id }),
+              },
+            );
+            if (requestGeneration !== generation) return;
+            await render(next, fileName);
+            requestStatus.textContent = "Profile 预览已更新";
+          } catch {
+            if (requestGeneration !== generation) return;
+            requestStatus.textContent = "Profile 预览切换失败，请重新预检";
+            alert.replaceChildren(
+              notice(
+                "failure",
+                "无法切换 Profile",
+                "旧预检已失效，请重新预检后再提交。",
+              ),
+            );
+          } finally {
+            if (requestGeneration === generation) preflight.disabled = false;
+          }
+        });
+      }
+      const matched =
+        (automatic.evaluatedRules || [])
+          .map(
+            (rule) =>
+              `${rule.rule_id || rule.ruleId || "规则"}：${rule.matched ? "匹配" : "未匹配"}`,
+          )
+          .join("；") || "未返回规则评估";
+      resolution.append(
+        definitionRows([
+          ["选择层级", p.selection?.selectionTier || automatic.selectionTier],
+          ["候选 Profile", candidates.join(", ")],
+          ["规则评估", matched],
+          ["最终 Profile", selected],
+        ]),
+      );
+      const facts = definitionRows(
+          Object.entries(p.detected || {}).map(([key, value]) => [key, value]),
+        ),
+        factSection = el("section", "", { class: "preflight-facts" });
+      factSection.append(el("h3", "检测事实"), facts);
+      const stages = el("section", "", { class: "resolved-stages" });
+      stages.append(el("h3", "解析后的阶段"));
+      for (const stage of p.stages || []) {
+        const row = el("div", "", { class: "resolved-stage-row" });
+        row.append(
+          el("strong", stage.key),
+          el(
+            "span",
+            (stage.candidates || [])
+              .map((candidate) => candidate.pluginId)
+              .join(", ") || "Plugin 不可用",
+          ),
+        );
+        stages.append(row);
+      }
+      const disclosure = el("section", "", { class: "persistence-disclosure" }),
+        external = p.disclosure?.externalStages || [],
+        ack = el("input", "", {
+          type: "checkbox",
+          "aria-label": "确认外部阶段披露",
+        });
+      disclosure.append(
+        notice(
+          "info",
+          "本地持久化",
+          p.disclosure?.localPersistence || "持久化信息不可用。",
+        ),
+      );
+      if (external.length) {
+        const warning = notice(
+            "warning",
+            "外部阶段披露",
+            "以下已选阶段可能向外部提供方发送内容。",
+          ),
+          list = el("ul");
+        for (const item of external)
+          list.append(
+            el(
+              "li",
+              `${item.stage} / ${item.pluginId || "Plugin 不可用"} / ${item.capability || "能力不可用"}：${item.message || "披露信息不可用"}`,
+            ),
+          );
+        warning.lastChild.append(list);
+        const label = el("label", "", { class: "acknowledgement" });
+        label.append(ack, el("span", "确认已了解外部阶段披露"));
+        disclosure.append(warning, label);
+      }
+      const run = button(
+        "创建新 Run",
+        async () => {
+          if (currentPreview !== p) return;
+          run.disabled = true;
+          try {
+            const receipt = await api(
+              `/api/workbench/documents/preflights/${p.token}/runs`,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  profileId: selected,
+                  acknowledgeExternal: ack.checked,
+                }),
+              },
+            );
+            location.href =
+              href("runs") + `?run=${receipt.runId}&legacy=ingestion`;
+          } catch {
+            alert.replaceChildren(
+              notice("failure", "无法创建 Run", "预检令牌或确认状态无效。"),
+            );
+            run.disabled = external.length > 0 && !ack.checked;
+          }
+        },
+        external.length > 0,
+      );
+      ack.addEventListener("change", () => (run.disabled = !ack.checked));
+      foot.replaceChildren(cancel(), run);
+      result.replaceChildren(
+        factSection,
+        resolution,
+        stages,
+        definitionRows([
+          ["Profile Set", p.workspaceProfileId || profile.value],
+          ["计划摘要", p.planDigest],
+          ["复用 Source Artifact", p.sourceArtifactId],
+        ]),
+        disclosure,
+      );
+      renderCurrent(p, fileName);
+    };
+    const preflight = button("预检", async () => {
+      const selectedFile = file.files?.[0];
+      if (!selectedFile || !profile.value) return;
+      const oldToken = currentPreview?.token || replacementToken,
+        requestGeneration = ++generation;
+      currentPreview = null;
+      replacementToken = null;
+      result.replaceChildren();
+      alert.replaceChildren();
+      foot.replaceChildren(cancel());
+      resetCurrent("正在预检");
+      preflight.disabled = true;
+      requestStatus.textContent = "正在预检…";
+      const headers = {
+        "X-Profile-Id": profile.value,
+        "X-Filename": selectedFile.name,
+        "Content-Type": selectedFile.type || "application/octet-stream",
+      };
+      if (oldToken) headers["X-Replaces-Preflight-Token"] = oldToken;
+      try {
+        const next = await api("/api/workbench/documents/preflight", {
+          method: "PUT",
+          headers,
+          body: selectedFile,
+        });
+        if (requestGeneration !== generation) return;
+        await render(next, selectedFile.name);
+        requestStatus.textContent = "预检完成";
+      } catch {
+        if (requestGeneration !== generation) return;
+        requestStatus.textContent = "预检失败，可重试";
+        alert.replaceChildren(
+          notice("failure", "预检失败", "请检查 Profile Set 和文档后重试。"),
+        );
+      } finally {
+        if (requestGeneration === generation) preflight.disabled = false;
+      }
+    });
+    profile.addEventListener("input", clearPreview);
+    file.addEventListener("change", clearPreview);
+    headCopy.append(
+      el("span", "NEW INGESTION", { class: "eyebrow" }),
+      el("h2", "上传并预检文档"),
+    );
+    head.append(headCopy, close);
+    fileLabel.append(file);
+    profileLabel.append(profile);
+    source.append(fileLabel, profileLabel, preflight, requestStatus);
+    body.append(source, result, alert);
+    foot.append(cancel());
+    dialog.append(head, body, foot);
+    if (handoff) {
+      profile.value = handoff.workspaceProfileId || "";
+      file.disabled = true;
+      source.insertBefore(
+        notice(
+          "info",
+          "复用 Source Artifact",
+          handoff.sourceArtifactId || "Source Artifact 不可用。",
+        ),
+        file.closest("label"),
+      );
+      render(handoff, handoff.sourceArtifactId);
+    }
+    modal.focus();
+  };
+  const handoff = sessionStorage.getItem("kb2.rerun-preflight");
+  if (handoff) {
+    sessionStorage.removeItem("kb2.rerun-preflight");
+    showDialog(JSON.parse(handoff));
+  }
+  load(false);
 }
 const unavailable=value=>value==null||value===''?'不可用':String(value);
 const identityList=value=>Array.isArray(value)&&value.length?value.join('、'):'不可用';
 const definitionList=(facts,className='definition-grid')=>{const list=el('dl','',{class:className});for(const [name,value] of facts){list.append(el('dt',name),el('dd',unavailable(value)))}return list};
 const field=(label,value,onInput,{multiline=false,type='text'}={})=>{const wrap=el('label','',{class:'field'}),control=el(multiline?'textarea':'input','',{'aria-label':label,type});control.value=value??'';control.addEventListener('input',()=>onInput(control.value));wrap.append(el('span',label),control);return wrap};
 
-function queryLab(){
- const requestedRun=new URL(location).searchParams.get('run'),validRequestedRun=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedRun||'')?requestedRun:null,main=el('main','',{class:'query-page'}),workspace=el('section','',{class:'query-workspace','aria-label':'Query Lab 工作区'}),control=el('aside','',{class:'query-control-pane'}),retrieval=el('section','',{class:'query-retrieval-pane'}),answer=el('aside','',{class:'query-answer-pane'}),question=el('textarea','',{placeholder:'输入问题','aria-label':'问题',maxlength:'8192'}),profile=el('select','',{'aria-label':'已保存 Query Profile'}),index=el('select','',{'aria-label':'已索引 Artifact'}),status=el('div','加载 Query Lab 选项…',{class:'query-status',role:'status','aria-live':'polite'}),preview=el('div'),stopHost=el('div','',{class:'query-stop-host'}),runButton=button('预检',()=>preflight(),true);let timer=null,last=null,requestVersion=0,pollVersion=0,pending=false;
- const reset=(invalidate=true)=>{clearTimeout(timer);if(invalidate){requestVersion++;pending=false;[question,profile,index].forEach(x=>x.disabled=false);status.textContent='输入已更改，请重新预检。'}last=null;stopHost.replaceChildren();preview.replaceChildren();retrieval.replaceChildren(emptyState('尚无检索 Trace','完成预检并创建 Query Run 后显示有序阶段与候选。'));answer.replaceChildren(emptyState('尚无最终结果','最终状态与 Evidence 将由 Query Run 返回。'));runButton.textContent='预检';runButton.disabled=pending||!question.value.trim()||!profile.value||!index.value};
- [question,profile,index].forEach(node=>node.addEventListener(node===question?'input':'change',reset));
- const candidateTable=c=>{const rows=(c.rows||[]).map((row,i)=>{const contributions=(row.contributions||[]).map(item=>`${item.contributorId??'不可用'} #${item.originalRank??'不可用'} / ${item.safeScore??'不可用'} (${item.scoreKind??'不可用'})`),decision=row.decision;return [row.rank??i+1,row.chunkId??'不可用','不可用',row.safeScore??'不可用',identityList(contributions),identityList((row.locators||[]).map(locatorLabel)),decision?`${decision.reason} / ${decision.input_rank}->${decision.output_rank??'excluded'}`:'不可用']});return rows.length?denseTable(['排名','Chunk','摘录','安全分数','贡献明细','Locator','Rerank 决策'],rows,`${c.stageId} 候选`):emptyState(c.available?'没有候选':'候选 Artifact 不可用','该阶段没有返回可展示候选。')};
- const renderCandidates=candidates=>{const host=el('section','',{class:'candidate-region'});host.append(el('h3','候选与决策'));if(!candidates.length){host.append(emptyState('没有候选集合','运行未返回候选 Artifact。'));return host}const tabs=el('div','',{class:'candidate-tabs',role:'tablist','aria-label':'候选集合'}),panel=el('div','',{class:'candidate-panel'});let selected=0;const select=i=>{selected=i;[...tabs.children].forEach((tab,n)=>{tab.setAttribute('aria-selected',String(n===i));tab.tabIndex=n===i?0:-1});panel.replaceChildren(candidateTable(candidates[i]))};candidates.forEach((c,i)=>{const tab=button(c.stageId,()=>select(i));tab.id=`candidate-tab-${i}`;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','candidate-panel');tab.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?candidates.length-1:(selected+(event.key==='ArrowRight'?1:-1)+candidates.length)%candidates.length;select(next);tabs.children[next].focus()});tabs.append(tab)});panel.id='candidate-panel';panel.setAttribute('role','tabpanel');host.append(tabs,panel);select(0);return host};
- const detailKind=d=>d.kind||'不可用';
- const contextProjection=details=>{const decisions=[],shortages=[];for(const detail of details||[]){if(detailKind(detail)!=='context')continue;for(const decision of detail.decisions||[])decisions.push(decision);if(detail.shortage)shortages.push(detail.shortage)}return {decisions,rows:decisions.map(decision=>[decision.chunk_id??'不可用',decision.source_rank??'不可用',decision.reason??'不可用',decision.safe_score??'不可用']),shortages}};
- const renderRun=x=>{clearTimeout(timer);last=x;stopHost.replaceChildren();retrieval.replaceChildren(sectionHeader('query-trace-title','有序执行 Trace',`${(x.stages||[]).length} 个阶段`));const stages=(x.stages||[]).map(s=>[s.stageKey,`#${s.attempt}`,statusTag(statusLabel(s.state),statusTone(s.state)),s.pluginId||'不可用',formatTime(s.startedAt),formatTime(s.endedAt),s.failure?.code||'无']);retrieval.append(stages.length?denseTable(['阶段','尝试','状态','Plugin','开始','结束','失败'],stages,'Query 有序阶段'):emptyState('没有阶段 Trace','运行未返回可展示阶段。'),renderCandidates(x.candidates||[]));const context=contextProjection(x.details);retrieval.append(el('h3','Context 决策'),context.rows.length?denseTable(['Chunk','来源排名','理由','安全分数'],context.rows,'Context 决策'):emptyState('没有 Context 决策','运行未返回可展示决策。'),el('h3','Context Shortage'),context.shortages.length?definitionList(context.shortages.flatMap((shortage,i)=>[[`Shortage ${i+1}`,shortage.reason],['Minimum items',shortage.minimum_items??shortage.minimumItems],['Selected items',shortage.selected_items??shortage.selectedItems],['Selected tokens',shortage.selected_tokens??shortage.selectedTokens]])):emptyState('没有 Context Shortage','运行未返回 shortage 状态。'));
-   const final=x.final||{state:'UNAVAILABLE'},tone=final.state==='ANSWERED'?'success':final.state==='FAILED'?'failure':'warning',band=el('section','',{class:`final-state final-${tone}`});band.append(el('span','权威最终状态',{class:'eyebrow'}),statusTag(final.state,tone),el('h2',final.state==='ANSWERED'?'已验证答案':'安全结果'));if(final.state==='ANSWERED'&&final.answer){band.append(el('p',final.answer,{class:'answer-copy'}));const citations=el('div','',{class:'citation-actions'});for(const key of final.citationKeys||[]){const item=(x.evidence||[]).find(e=>e.citationKey===key);if(item?.sourceArtifactId)citations.append(button(key,e=>inspector(item.sourceArtifactId,e.currentTarget,item.sourceLocator)))}band.append(citations)}else band.append(el('p',final.action||'结果不可用，未发布答案。'));answer.replaceChildren(band,el('h3','Evidence'));
-   if(!(x.evidence||[]).length)answer.append(emptyState('没有 Evidence','该最终状态未返回可展示 Evidence。'));const decisionsByChunk=new Map(context.decisions.map(decision=>[decision.chunk_id,decision]));for(const item of x.evidence||[]){const decision=decisionsByChunk.get(item.chunkId),row=el('article','',{class:'evidence-row'}),head=el('header'),open=final.state==='ANSWERED'&&item.sourceArtifactId?button(item.citationKey,e=>inspector(item.sourceArtifactId,e.currentTarget,item.sourceLocator)):el('strong',item.citationKey||'不可用'),contributors=(item.contributors||[]).map(c=>`${c.contributor_id??c.contributorId??'不可用'} / ${c.safe_score??c.safeScore??'不可用'}`);head.append(open,statusTag(decision?.reason||'Context 决策不可用','neutral'));row.append(head,el('p',item.excerpt||'不可用'),definitionList([['Document',item.documentId],['Chunk',item.chunkId],['Locator',item.sourceLocator?JSON.stringify(item.sourceLocator):identityList(item.locators)],['贡献者 / safe_score',identityList(contributors)],['Context 决策',decision?.reason],['决策理由 / reason',decision?.reason],['决策来源排名',decision?.source_rank],['决策安全分数',decision?.safe_score],['层级',identityList(item.hierarchy)],['表格元素',identityList(item.tableElementIds)]]));answer.append(row)}const trace=(x.details||[]).filter(d=>detailKind(d)==='verification');answer.append(el('h3','验证与有限修复'),trace.length?definitionList(trace.flatMap((d,i)=>[[`verification ${i+1}`,d.outcome],['Failure codes',identityList(d.failureCodes)],['Missing citation keys',identityList(d.missingCitationKeys)]])):emptyState('没有验证详情','运行未返回 VerificationResult。'));const runState=x.terminalState?statusLabel(x.state):'正在运行';status.textContent=validRequestedRun===x.id?`Query Run ${x.id} / ${runState}`:`Query Run ${runState}`;status.className='query-status';if(x.actions?.stop&&!x.terminalState){const stop=button('停止',async()=>{stop.disabled=true;status.textContent='正在停止 Query Run…';try{await api(`/api/workbench/query-runs/${x.id}/stop`,{method:'POST'});await load()}catch{status.textContent='停止请求失败，可重试。';stop.disabled=false}});stopHost.replaceChildren(stop)}if(!x.terminalState&&x.state!=='FAILED')timer=setTimeout(load,1000)};
- const load=async()=>{if(!last?.id)return;const id=last.id,version=requestVersion,poll=++pollVersion;status.textContent='正在读取 Query Run…';try{const result=await api(`/api/workbench/query-runs/${id}`);if(version===requestVersion&&poll===pollVersion&&last?.id===id)renderRun(result)}catch{if(version===requestVersion&&poll===pollVersion&&last?.id===id){status.replaceChildren(el('span',`Query Run ${id} 不存在或不可用。`),button('重试读取',load));status.setAttribute('role','alert')}}};
- const preflight=async()=>{const version=++requestVersion;pending=true;reset(false);[question,profile,index,runButton].forEach(x=>x.disabled=true);status.textContent='正在解析 Query Profile…';try{const p=await api('/api/workbench/query-lab/preflights',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question:question.value,profileId:profile.value,indexId:index.value})});if(version!==requestVersion)return;const plan=el('section','',{class:'query-preflight'}),stageRows=(p.stages||[]).map(s=>[s.stageId,s.kind,s.pluginId]);plan.append(el('h2','已解析计划'),definitionList([['Plan digest',p.planDigest]]),stageRows.length?denseTable(['阶段','类型','Plugin'],stageRows,'已解析 Query 计划'):emptyState('计划无阶段','服务未返回可执行阶段。'));const ack=el('input','',{type:'checkbox','aria-label':'确认外部阶段披露'}),external=p.disclosure?.externalStages||[],submit=button('创建 Query Run',async()=>{const submitVersion=requestVersion;submit.disabled=true;status.textContent='正在创建 Query Run…';try{const r=await api(`/api/workbench/query-lab/preflights/${p.token}/runs`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({acknowledgeExternal:ack.checked})});if(submitVersion!==requestVersion)return;last={id:r.runId};await load()}catch{if(submitVersion!==requestVersion)return;status.textContent='Query Run 创建失败，可重试或重新预检。';submit.disabled=external.length>0&&!ack.checked}},external.length>0);if(external.length){const disclose=notice('warning','外部生成边界',`所选计划包含外部阶段：${external.map(x=>x.stage||x.stageId||x.capability).join('、')}。`);const label=el('label','',{class:'acknowledgement'});label.append(ack,el('span','确认外部阶段披露'));ack.addEventListener('change',()=>submit.disabled=!ack.checked);plan.append(disclose,label)}plan.append(submit);preview.replaceChildren(plan);status.textContent='预检完成，可创建 Query Run。'}catch{if(version===requestVersion){preview.replaceChildren(notice('failure','预检失败','Query Profile 或索引当前不可用。'));status.textContent='预检失败，输入与选择已保留。'}}finally{if(version===requestVersion){pending=false;[question,profile,index].forEach(x=>x.disabled=false);runButton.disabled=!question.value.trim()||!profile.value||!index.value}}};
- const controls=el('div','',{class:'query-control-fields'});controls.append(el('label','问题'),question,el('label','Query Profile'),profile,el('label','已索引 Artifact'),index,runButton,status,stopHost,preview);control.append(sectionHeader('query-control-title','执行控制','服务权威'),controls);workspace.append(control,retrieval,answer);main.append(heading('Query Lab','执行固定 Query Profile 并检查 Evidence'),workspace);shell(main);reset(false);api('/api/workbench/query-lab/options').then(x=>{profile.replaceChildren();index.replaceChildren();if(!(x.profiles||[]).length)profile.append(el('option','没有可用 Query Profile',{value:''}));else x.profiles.forEach(v=>profile.append(el('option',v.profileId,{value:v.profileId})));if(!(x.indexes||[]).length)index.append(el('option','没有可用索引 Artifact',{value:''}));else x.indexes.forEach(v=>index.append(el('option',`${v.id} / ${v.summary||'索引 Artifact'}`,{value:v.id})));status.textContent=(!x.profiles?.length||!x.indexes?.length)?'没有可执行的 Query Profile 或索引。':'Query Lab 已就绪。';reset(false);if(validRequestedRun){last={id:validRequestedRun};load()}}).catch(()=>{status.textContent='Query Lab 选项不可用。';status.setAttribute('role','alert')})}
+function queryLab() {
+  const requestedRun = new URL(location).searchParams.get("run"),
+    validRequestedRun =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        requestedRun || "",
+      )
+        ? requestedRun
+        : null,
+    main = el("main", "", { class: "query-page" }),
+    workspace = el("section", "", {
+      class: "query-workspace",
+      "aria-label": "Query Lab 工作区",
+    }),
+    control = el("aside", "", { class: "query-control-pane" }),
+    retrieval = el("section", "", { class: "query-retrieval-pane" }),
+    answer = el("aside", "", { class: "query-answer-pane" }),
+    question = el("textarea", "", {
+      placeholder: "输入问题",
+      "aria-label": "问题",
+      maxlength: "8192",
+    }),
+    profile = el("select", "", { "aria-label": "已保存 Query Profile" }),
+    index = el("select", "", { "aria-label": "已索引 Artifact" }),
+    status = el("div", "加载 Query Lab 选项…", {
+      class: "query-status",
+      role: "status",
+      "aria-live": "polite",
+    }),
+    preview = el("div"),
+    stopHost = el("div", "", { class: "query-stop-host" }),
+    runButton = button("预检", () => preflight(), true);
+  let timer = null,
+    last = null,
+    requestVersion = 0,
+    pollVersion = 0,
+    pending = false;
+  const reset = (invalidate = true) => {
+    clearTimeout(timer);
+    if (invalidate) {
+      requestVersion++;
+      pending = false;
+      [question, profile, index].forEach((x) => (x.disabled = false));
+      status.textContent = "输入已更改，请重新预检。";
+    }
+    last = null;
+    stopHost.replaceChildren();
+    preview.replaceChildren();
+    retrieval.replaceChildren(
+      emptyState(
+        "尚无检索 Trace",
+        "完成预检并创建 Query Run 后显示有序阶段与候选。",
+      ),
+    );
+    answer.replaceChildren(
+      emptyState("尚无最终结果", "最终状态与 Evidence 将由 Query Run 返回。"),
+    );
+    runButton.textContent = "预检";
+    runButton.disabled =
+      pending || !question.value.trim() || !profile.value || !index.value;
+  };
+  [question, profile, index].forEach((node) =>
+    node.addEventListener(node === question ? "input" : "change", reset),
+  );
+  const tableRegion = (table, label) => {
+    table.tabIndex = 0;
+    table.setAttribute("role", "region");
+    table.setAttribute("aria-label", label);
+    return table;
+  };
+  const candidateTable = (c) => {
+    const rows = (c.rows || []).map((row) => {
+      const contributions = (row.contributions || []).map(
+          (item) =>
+            `${item.contributorId ?? "不可用"} #${item.originalRank ?? "不可用"} / ${item.safeScore ?? "不可用"} (${item.scoreKind ?? "不可用"})`,
+        ),
+        decision = row.decision;
+      return [
+        row.rank ?? "不可用",
+        row.documentLabel || "文档不可用",
+        row.excerpt || "摘录不可用",
+        row.safeScore ?? "不可用",
+        identityList(contributions),
+        row.locatorLabel || "定位不可用",
+        decision
+          ? `${decision.reason} / ${decision.input_rank}->${decision.output_rank ?? "excluded"}`
+          : "不可用",
+      ];
+    });
+    return rows.length
+      ? tableRegion(denseTable(
+          [
+            "排名",
+            "文档",
+            "摘录",
+            "安全分数",
+            "贡献明细",
+            "Locator",
+            "Rerank 决策",
+          ],
+          rows,
+          `${c.stageId} 候选`,
+        ), `${c.stageId} 候选横向滚动区`)
+      : emptyState(
+          c.available ? "没有候选" : "候选 Artifact 不可用",
+          "该阶段没有返回可展示候选。",
+        );
+  };
+  const renderCandidates = (candidates) => {
+    const host = el("section", "", { class: "candidate-region" });
+    host.append(el("h3", "候选与决策"));
+    if (!candidates.length) {
+      host.append(emptyState("没有候选集合", "运行未返回候选 Artifact。"));
+      return host;
+    }
+    const tabs = el("div", "", {
+        class: "candidate-tabs",
+        role: "tablist",
+        "aria-label": "候选集合",
+      }),
+      panel = el("div", "", { class: "candidate-panel" });
+    let selected = 0;
+    const select = (i) => {
+      selected = i;
+      [...tabs.children].forEach((tab, n) => {
+        tab.setAttribute("aria-selected", String(n === i));
+        tab.tabIndex = n === i ? 0 : -1;
+      });
+      panel.replaceChildren(candidateTable(candidates[i]));
+    };
+    candidates.forEach((c, i) => {
+      const tab = button(c.stageId, () => select(i));
+      tab.id = `candidate-tab-${i}`;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", "candidate-panel");
+      tab.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+          return;
+        event.preventDefault();
+        const next =
+          event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? candidates.length - 1
+              : (selected +
+                  (event.key === "ArrowRight" ? 1 : -1) +
+                  candidates.length) %
+                candidates.length;
+        select(next);
+        tabs.children[next].focus();
+      });
+      tabs.append(tab);
+    });
+    panel.id = "candidate-panel";
+    panel.setAttribute("role", "tabpanel");
+    host.append(tabs, panel);
+    select(0);
+    return host;
+  };
+  const detailKind = (d) => d.kind || "不可用";
+  const contextProjection = (details) => {
+    const decisions = [],
+      shortages = [];
+    for (const detail of details || []) {
+      if (detailKind(detail) !== "context") continue;
+      for (const decision of detail.decisions || []) decisions.push(decision);
+      if (detail.shortage) shortages.push(detail.shortage);
+    }
+    return {
+      decisions,
+      rows: decisions.map((decision) => [
+        decision.chunk_id ?? "不可用",
+        decision.source_rank ?? "不可用",
+        decision.reason ?? "不可用",
+        decision.safe_score ?? "不可用",
+      ]),
+      shortages,
+    };
+  };
+  const decisionPath = (path) => {
+    const columns = path?.columns || [],
+      rows = path?.rows || [];
+    if (!rows.length)
+      return emptyState(
+        "没有决策路径",
+        "运行未返回可关联的候选与 Context 决策。",
+      );
+    const headers = [
+        "文档 / Chunk",
+        ...columns.map((x) => x.stageId),
+        "摘录 / Locator",
+      ],
+      values = rows.map((row) => [
+        `${row.documentLabel || "文档不可用"}\n${row.chunkId || "Chunk 不可用"}`,
+        ...columns.map((column) => {
+          const stage = row.stages?.[column.stageId] || {
+            state: "NOT_PRESENT",
+          };
+          if (stage.state === "NOT_PRESENT") return "未出现";
+          if (column.kind === "context")
+            return `${stage.reason || "不可用"} / #${stage.source_rank ?? "不可用"} / ${stage.safe_score ?? "不可用"}`;
+          const decision = stage.decision ? ` / ${stage.decision.reason}` : "";
+          return `#${stage.rank ?? "不可用"} / ${stage.safeScore ?? "不可用"}${decision}`;
+        }),
+        `${row.excerpt || "摘录不可用"}\n${row.locatorLabel || "定位不可用"}`,
+      ]);
+    return tableRegion(denseTable(headers, values, "候选决策路径"), "候选决策路径横向滚动区");
+  };
+  const attemptDetails = (stages) => {
+    const host = el("section", "", { class: "query-attempt-details" });
+    host.append(el("h3", "阶段技术详情"));
+    for (const s of stages) {
+      const details = el("details", "", { class: "query-attempt" });
+      details.append(
+        el("summary", `${s.stageKey} #${s.attempt}`),
+        definitionList([
+          ["开始", formatTime(s.startedAt)],
+          ["结束", formatTime(s.endedAt)],
+          ["输入 Artifact", identityList((s.inputs || []).map((x) => x.id))],
+          ["输出 Artifact", identityList((s.outputs || []).map((x) => x.id))],
+          ["Metrics", signalValue(s.metrics)],
+          ["Quality", signalValue(s.quality)],
+        ]),
+      );
+      host.append(details);
+    }
+    return host;
+  };
+  const renderRun = (x) => {
+    clearTimeout(timer);
+    last = x;
+    stopHost.replaceChildren();
+    retrieval.replaceChildren(
+      sectionHeader(
+        "query-trace-title",
+        "有序执行 Trace",
+        `${(x.stages || []).length} 个阶段`,
+      ),
+    );
+    const stages = (x.stages || []).map((s) => [
+      s.stageKey,
+      `#${s.attempt}`,
+      statusTag(statusLabel(s.state), statusTone(s.state)),
+      s.pluginId || "不可用",
+      s.durationMs == null ? "不可用" : `${s.durationMs} ms`,
+      s.failure?.code || "无",
+    ]);
+    retrieval.append(
+      stages.length
+        ? denseTable(
+            ["阶段", "尝试", "状态", "Plugin", "耗时", "失败"],
+            stages,
+            "Query 有序阶段",
+          )
+        : emptyState("没有阶段 Trace", "运行未返回可展示阶段。"),
+      renderCandidates(x.candidates || []),
+      el("h3", "决策路径"),
+      decisionPath(x.decisionPath),
+      attemptDetails(x.stages || []),
+    );
+    const context = contextProjection(x.details);
+    retrieval.append(
+      el("h3", "Context Shortage"),
+      context.shortages.length
+        ? definitionList(
+            context.shortages.flatMap((shortage, i) => [
+              [`Shortage ${i + 1}`, shortage.reason],
+              [
+                "Minimum items",
+                shortage.minimum_items ?? shortage.minimumItems,
+              ],
+              [
+                "Selected items",
+                shortage.selected_items ?? shortage.selectedItems,
+              ],
+              [
+                "Selected tokens",
+                shortage.selected_tokens ?? shortage.selectedTokens,
+              ],
+            ]),
+          )
+        : emptyState("没有 Context Shortage", "运行未返回 shortage 状态。"),
+    );
+    if (!x.final) {
+      answer.replaceChildren(
+        emptyState(
+          x.terminalState ? "最终结果不可用" : "Query Run 正在执行",
+          x.terminalState ? "运行未返回可验证的 FinalResponse。" : "最终状态与 Evidence 将在运行完成后显示。",
+        ),
+      );
+      const runState = x.terminalState ? statusLabel(x.state) : "正在运行";
+      status.textContent = validRequestedRun === x.id ? `Query Run ${x.id} / ${runState}` : `Query Run ${runState}`;
+      status.className = "query-status";
+      if (x.actions?.stop && !x.terminalState) {
+        const stop = button("停止", async () => {
+          stop.disabled = true;
+          status.textContent = "正在停止 Query Run…";
+          try {
+            await api(`/api/workbench/query-runs/${x.id}/stop`, { method: "POST" });
+            await load();
+          } catch {
+            status.textContent = "停止请求失败，可重试。";
+            stop.disabled = false;
+          }
+        });
+        stopHost.replaceChildren(stop);
+      }
+      if (!x.terminalState && x.state !== "FAILED") timer = setTimeout(load, 1000);
+      return;
+    }
+    const final = x.final,
+      tone =
+        final.state === "ANSWERED"
+          ? "success"
+          : final.state === "FAILED"
+            ? "failure"
+            : "warning",
+      band = el("section", "", { class: `final-state final-${tone}` });
+    band.append(
+      el("span", "权威最终状态", { class: "eyebrow" }),
+      statusTag(final.state, tone),
+      el("h2", final.state === "ANSWERED" ? "已验证答案" : "安全结果"),
+    );
+    if (final.state === "ANSWERED" && final.answer) {
+      band.append(el("p", final.answer, { class: "answer-copy" }));
+      const citations = el("div", "", { class: "citation-actions" });
+      for (const key of final.citationKeys || []) {
+        const item = (x.evidence || []).find((e) => e.citationKey === key);
+        if (item?.sourceArtifactId)
+          citations.append(
+            button(key, (e) =>
+              inspector(
+                item.sourceArtifactId,
+                e.currentTarget,
+                item.sourceLocator,
+              ),
+            ),
+          );
+      }
+      band.append(citations);
+    } else band.append(el("p", final.action || "结果不可用，未发布答案。"));
+    answer.replaceChildren(band, el("h3", "Evidence"));
+    if (!(x.evidence || []).length)
+      answer.append(
+        emptyState("没有 Evidence", "该最终状态未返回可展示 Evidence。"),
+      );
+    for (const item of x.evidence || []) {
+      const decision = item.contextDecision || {},
+        row = el("article", "", { class: "evidence-row" }),
+        head = el("header"),
+        contributors = (item.contributors || []).map(
+          (c) =>
+            `${c.contributor_id ?? c.contributorId ?? "不可用"} / ${c.safe_score ?? c.safeScore ?? "不可用"}`,
+        );
+      head.append(
+        el("strong", item.citationKey || "不可用"),
+        el("span", item.documentLabel || "文档不可用"),
+        statusTag(decision?.reason || "Context 决策不可用", "neutral"),
+      );
+      const actions = el("div", "", { class: "evidence-actions" });
+      if (item.sourceArtifactId && item.sourceLocator)
+        actions.append(
+          button("源预览", (e) =>
+            inspector(item.sourceArtifactId, e.currentTarget, item.sourceLocator),
+          ),
+        );
+      else actions.append(el("span", "源预览不可用", { class: "muted" }));
+      const details = el("details", "", { class: "evidence-details" });
+      details.append(
+        el("summary", "技术详情"),
+        definitionList([
+          ["Document ID", item.documentId],
+          ["Chunk ID", item.chunkId],
+          ["结构化 Locator", item.sourceLocator ? JSON.stringify(item.sourceLocator) : identityList(item.locators)],
+          ["贡献者 / safe_score", identityList(contributors)],
+          ["决策来源排名", decision?.source_rank],
+          ["决策安全分数", decision?.safe_score],
+          ["层级", identityList(item.hierarchy)],
+          ["表格元素", identityList(item.tableElementIds)],
+        ]),
+      );
+      row.append(
+        head,
+        el("p", item.excerpt || "不可用"),
+        definitionList([
+          ["Locator", item.locatorLabel],
+          ["贡献者", identityList(contributors)],
+          ["决策理由", decision?.reason],
+        ]),
+        actions,
+        details,
+      );
+      answer.append(row);
+    }
+    const trace = (x.details || []).filter(
+      (d) => detailKind(d) === "verification",
+    );
+    answer.append(el("h3", "验证与有限修复"));
+    if (trace.length)
+      for (const [i, d] of trace.entries()) {
+        const details = el("details", "", { class: "verification-attempt" });
+        details.append(el("summary", `Verification #${i + 1} / ${d.outcome || "不可用"}`), definitionList([["Failure codes", identityList(d.failureCodes)], ["Missing citation keys", identityList(d.missingCitationKeys)]]));
+        answer.append(details);
+      }
+    else answer.append(emptyState("没有验证详情", "运行未返回 VerificationResult。"));
+    const runState = x.terminalState ? statusLabel(x.state) : "正在运行";
+    status.textContent =
+      validRequestedRun === x.id
+        ? `Query Run ${x.id} / ${runState}`
+        : `Query Run ${runState}`;
+    status.className = "query-status";
+    if (x.actions?.stop && !x.terminalState) {
+      const stop = button("停止", async () => {
+        stop.disabled = true;
+        status.textContent = "正在停止 Query Run…";
+        try {
+          await api(`/api/workbench/query-runs/${x.id}/stop`, {
+            method: "POST",
+          });
+          await load();
+        } catch {
+          status.textContent = "停止请求失败，可重试。";
+          stop.disabled = false;
+        }
+      });
+      stopHost.replaceChildren(stop);
+    }
+    if (!x.terminalState && x.state !== "FAILED")
+      timer = setTimeout(load, 1000);
+  };
+  const load = async () => {
+    if (!last?.id) return;
+    const id = last.id,
+      version = requestVersion,
+      poll = ++pollVersion;
+    status.textContent = "正在读取 Query Run…";
+    try {
+      const result = await api(`/api/workbench/query-runs/${id}`);
+      if (version === requestVersion && poll === pollVersion && last?.id === id)
+        renderRun(result);
+    } catch {
+      if (
+        version === requestVersion &&
+        poll === pollVersion &&
+        last?.id === id
+      ) {
+        status.replaceChildren(
+          el("span", `Query Run ${id} 不存在或不可用。`),
+          button("重试读取", load),
+        );
+        status.setAttribute("role", "alert");
+      }
+    }
+  };
+  const preflight = async () => {
+    const version = ++requestVersion;
+    pending = true;
+    reset(false);
+    [question, profile, index, runButton].forEach((x) => (x.disabled = true));
+    status.textContent = "正在解析 Query Profile…";
+    try {
+      const p = await api("/api/workbench/query-lab/preflights", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          question: question.value,
+          profileId: profile.value,
+          indexId: index.value,
+        }),
+      });
+      if (version !== requestVersion) return;
+      const plan = el("section", "", { class: "query-preflight" }),
+        stageRows = (p.stages || []).map((s) => [
+          s.stageId,
+          s.kind,
+          s.pluginId,
+        ]);
+      plan.append(
+        el("h2", "已解析计划"),
+        definitionList([["Plan digest", p.planDigest]]),
+        stageRows.length
+          ? denseTable(
+              ["阶段", "类型", "Plugin"],
+              stageRows,
+              "已解析 Query 计划",
+            )
+          : emptyState("计划无阶段", "服务未返回可执行阶段。"),
+      );
+      const ack = el("input", "", {
+          type: "checkbox",
+          "aria-label": "确认外部阶段披露",
+        }),
+        external = p.disclosure?.externalStages || [],
+        submit = button(
+          "创建 Query Run",
+          async () => {
+            const submitVersion = requestVersion;
+            submit.disabled = true;
+            status.textContent = "正在创建 Query Run…";
+            try {
+              const r = await api(
+                `/api/workbench/query-lab/preflights/${p.token}/runs`,
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ acknowledgeExternal: ack.checked }),
+                },
+              );
+              if (submitVersion !== requestVersion) return;
+              last = { id: r.runId };
+              await load();
+            } catch {
+              if (submitVersion !== requestVersion) return;
+              status.textContent = "Query Run 创建失败，可重试或重新预检。";
+              submit.disabled = external.length > 0 && !ack.checked;
+            }
+          },
+          external.length > 0,
+        );
+      if (external.length) {
+        const disclose = notice(
+          "warning",
+          "外部生成边界",
+          `所选计划包含外部阶段：${external.map((x) => x.stage || x.stageId || x.capability).join("、")}。`,
+        );
+        const label = el("label", "", { class: "acknowledgement" });
+        label.append(ack, el("span", "确认外部阶段披露"));
+        ack.addEventListener("change", () => (submit.disabled = !ack.checked));
+        plan.append(disclose, label);
+      }
+      plan.append(submit);
+      preview.replaceChildren(plan);
+      status.textContent = "预检完成，可创建 Query Run。";
+    } catch {
+      if (version === requestVersion) {
+        preview.replaceChildren(
+          notice("failure", "预检失败", "Query Profile 或索引当前不可用。"),
+        );
+        status.textContent = "预检失败，输入与选择已保留。";
+      }
+    } finally {
+      if (version === requestVersion) {
+        pending = false;
+        [question, profile, index].forEach((x) => (x.disabled = false));
+        runButton.disabled =
+          !question.value.trim() || !profile.value || !index.value;
+      }
+    }
+  };
+  const controls = el("div", "", { class: "query-control-fields" });
+  controls.append(
+    el("label", "问题"),
+    question,
+    el("label", "Query Profile"),
+    profile,
+    el("label", "已索引 Artifact"),
+    index,
+    runButton,
+    status,
+    stopHost,
+    preview,
+  );
+  control.append(
+    sectionHeader("query-control-title", "执行控制", "服务权威"),
+    controls,
+  );
+  workspace.append(control, retrieval, answer);
+  main.append(
+    heading("Query Lab", "执行固定 Query Profile 并检查 Evidence"),
+    workspace,
+  );
+  shell(main);
+  reset(false);
+  api("/api/workbench/query-lab/options")
+    .then((x) => {
+      profile.replaceChildren();
+      index.replaceChildren();
+      if (!(x.profiles || []).length)
+        profile.append(el("option", "没有可用 Query Profile", { value: "" }));
+      else
+        x.profiles.forEach((v) =>
+          profile.append(el("option", v.profileId, { value: v.profileId })),
+        );
+      if (!(x.indexes || []).length)
+        index.append(el("option", "没有可用索引 Artifact", { value: "" }));
+      else
+        x.indexes.forEach((v) =>
+          index.append(
+            el("option", `${v.id} / ${v.summary || "索引 Artifact"}`, {
+              value: v.id,
+            }),
+          ),
+        );
+      status.textContent =
+        !x.profiles?.length || !x.indexes?.length
+          ? "没有可执行的 Query Profile 或索引。"
+          : "Query Lab 已就绪。";
+      reset(false);
+      if (validRequestedRun) {
+        last = { id: validRequestedRun };
+        load();
+      }
+    })
+    .catch(() => {
+      status.textContent = "Query Lab 选项不可用。";
+      status.setAttribute("role", "alert");
+    });
+}
 
-function evaluationDataset(){
- const main=el('main','',{class:'evaluation-dataset-page'}),filter=el('input','',{placeholder:'筛选评估数据集','aria-label':'筛选评估数据集'}),status=el('div','正在加载评估数据集…',{class:'dataset-status',role:'status','aria-live':'polite'}),catalog=el('aside','',{class:'dataset-catalog','aria-label':'评估数据集列表'}),detail=el('section','',{class:'dataset-detail'}),casesHost=el('nav','',{class:'dataset-case-list','aria-label':'案例列表'}),editor=el('form','',{class:'dataset-case-editor'}),layout=el('section','',{class:'dataset-workspace'});let current=null,selected=null,pending=false,loadVersion=0;
- const cases=()=>current?[...(current.content.annotations||[]).map(x=>({item:x,kind:'annotation'})),...(current.content.query_cases||[]).map(x=>({item:x,kind:'query'}))]:[];
- const lines=value=>Array.isArray(value)?value.join('\n'):'';const setLines=(item,key,value)=>item[key]=value.split('\n').map(x=>x.trim()).filter(Boolean);
- const renderCaseList=()=>{casesHost.replaceChildren(sectionHeader('dataset-cases-title','案例',`${cases().length} 条`));for(const entry of cases()){const errors=current.validation?.[entry.item.id]||[],reviewed=(entry.item.reviews||[]).length>0,incomplete=errors.some(code=>String(code).includes('INCOMPLETE')),b=button('',()=>{selected=entry;renderEditor()});b.setAttribute('aria-pressed',String(selected?.item.id===entry.item.id));b.className='dataset-case-row';b.append(el('strong',entry.item.id),el('span',entry.kind==='query'?'问题':'文档'),statusTag(reviewed?'已审核':incomplete?'不完整':errors.length?'无效':'待审核',reviewed?'success':errors.length?'failure':'warning'));casesHost.append(b)}if(!cases().length)casesHost.append(emptyState('数据集为空','此修订中没有标注或问题案例。'))};
- const renderEditor=()=>{editor.replaceChildren();if(!selected){editor.append(emptyState('选择案例','从案例列表中选择一个案例进行编辑。'));return}const item=selected.item,errors=current.validation?.[item.id]||[],reviewed=(item.reviews||[]).length>0;let locatorValid=true,locatorError=null;editor.append(sectionHeader('case-editor-title',selected.kind==='query'?'问题案例':'文档标注',item.id),errors.length?notice('failure','案例验证失败',errors.join('、')):notice('info',reviewed?'已显式审核':'待审核',reviewed?'审核记录已绑定当前内容。':'保存后仍需显式审核。'));
-   const source=el('fieldset'),sourceLegend=el('legend','来源与 Provenance');source.append(sourceLegend,field('Source Artifact ID',item.source?.id,v=>item.source.id=v),field('Source digest',item.source?.content_digest,v=>item.source.content_digest=v),field('Source schema',item.source?.schema_revision,v=>item.source.schema_revision=v),field('Source type',item.source?.artifact_type,v=>item.source.artifact_type=v),field('Provenance origin',item.provenance?.origin,v=>item.provenance.origin=v),field('Provenance operation',item.provenance?.operation,v=>item.provenance.operation=v));editor.append(source);
-   const labels=el('fieldset'),legend=el('legend',selected.kind==='query'?'问题与标签':'标注与标签');labels.append(legend);if(selected.kind==='query'){labels.append(field('问题',item.question,v=>item.question=v,{multiline:true}),field('Answerability',item.answerability,v=>item.answerability=v),field('预期事实（每行一项）',lines(item.expected_facts),v=>setLines(item,'expected_facts',v),{multiline:true}),field('禁止事实（每行一项）',lines(item.forbidden_facts),v=>setLines(item,'forbidden_facts',v),{multiline:true}),field('相关 Evidence ID（每行一项）',lines(item.relevant_evidence_ids),v=>setLines(item,'relevant_evidence_ids',v),{multiline:true}),field('必需 Citation key（每行一项）',lines(item.required_citation_keys),v=>setLines(item,'required_citation_keys',v),{multiline:true}),field('确定性答案',item.deterministic_answer,v=>item.deterministic_answer=v,{multiline:true}));const ensureEvidence=()=>item.evidence??={id:'',content_digest:'',schema_revision:'v1',artifact_type:'evidence.set'},evidence=el('fieldset');evidence.append(el('legend','Evidence Source Artifact'),field('Evidence Artifact ID',item.evidence?.id,v=>ensureEvidence().id=v),field('Evidence digest',item.evidence?.content_digest,v=>ensureEvidence().content_digest=v),field('Evidence schema',item.evidence?.schema_revision,v=>ensureEvidence().schema_revision=v),field('Evidence type',item.evidence?.artifact_type,v=>ensureEvidence().artifact_type=v));labels.append(evidence)}else{item.target??={kind:'element'};const target=item.target,locatorValue=target.locator?JSON.stringify(target.locator):'';locatorError=el('div','',{class:'field-error',role:'alert','aria-live':'polite'});const locatorField=field('Target locator',locatorValue,v=>{try{target.locator=v?JSON.parse(v):null;locatorValid=true;locatorError.textContent=''}catch{locatorValid=false;locatorError.textContent='Locator 必须是有效 JSON；当前文本已保留。'}sync()},{multiline:true});labels.append(field('Target kind',target.kind,v=>target.kind=v),field('Target element ID',target.element_id,v=>target.element_id=v||null),field('Target table ID',target.table_id,v=>target.table_id=v||null),field('Target cell ID',target.cell_id,v=>target.cell_id=v||null),locatorField,locatorError,field('Target start',target.start,v=>target.start=v===''?null:Number(v),{type:'number'}),field('Target end',target.end,v=>target.end=v===''?null:Number(v),{type:'number'}),field('Label',item.label,v=>item.label=v,{multiline:true}))}editor.append(labels);
-   const slices=el('fieldset'),sliceLegend=el('legend','切片标签');slices.append(sliceLegend);for(const [key,value] of Object.entries(item.slices||{}))slices.append(field(key,value,v=>item.slices[key]=v));editor.append(slices);const reviewer=el('input','',{placeholder:'Reviewer ID','aria-label':'Reviewer ID',maxlength:'128'}),save=button('验证并保存',async()=>{if(!locatorValid)return;pending=true;sync();status.textContent='正在验证并保存新草稿修订…';try{const r=await api(`/api/workbench/evaluation-datasets/${current.id}`,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(current.content)});if(r.dataset){status.textContent='草稿修订已保存。';await loadDataset(r.dataset)}else{current.validation=r.validation||{'/':['DATASET_INVALID']};status.textContent='数据集验证未通过，编辑已保留。';renderCaseList();renderEditor()}}catch{status.textContent='保存失败，编辑已保留。'}finally{pending=false;sync()}}),review=button('标记已审核',async()=>{pending=true;sync();status.textContent='正在记录显式审核…';try{const r=await api(`/api/workbench/evaluation-datasets/${current.id}/revisions/${current.revision}/cases/${encodeURIComponent(item.id)}/review`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({reviewer:reviewer.value})});if(r.dataset){status.textContent='案例已审核。';await loadDataset(r.dataset)}else status.textContent=r.code||'案例不可审核。'}catch{status.textContent='审核失败，Reviewer ID 已保留。'}finally{pending=false;sync()}},reviewed||errors.length>0);reviewer.addEventListener('input',()=>sync());const actions=el('div','',{class:'editor-actions'});actions.append(save,reviewer,review);editor.append(actions);function sync(){[...editor.querySelectorAll('input,textarea,button')].forEach(x=>{if(x!==reviewer)x.disabled=pending});save.disabled=pending||!locatorValid;review.disabled=pending||reviewed||errors.length>0||!reviewer.value.trim()}};
- const loadDataset=async row=>{const version=++loadVersion;status.textContent='正在加载数据集修订…';try{const d=row.content?row:await api(`/api/workbench/evaluation-datasets/${row.id}?revision=${row.revision}`);if(version!==loadVersion)return;current=structuredClone(d);const all=cases(),choice=all.find(x=>x.item.provenance?.origin==='generated'&&!(x.item.reviews||[]).length&&!(d.validation?.[x.item.id]||[]).length)||all.find(x=>!(x.item.reviews||[]).length)||all[0];selected=choice||null;detail.replaceChildren(el('header','',{class:'dataset-detail-header'}),casesHost,editor);detail.firstChild.append(el('h2',`评估数据集 / r${d.revision}`),definitionList([['Dataset ID',d.id],['Digest',d.digest],['已审核',`${d.reviewedCount}/${d.caseCount}`],['创建时间',formatTime(d.createdAt)]]));renderCaseList();renderEditor();status.textContent='数据集修订已加载。'}catch{status.textContent='数据集加载失败，可重新选择。';status.setAttribute('role','alert')}};
- const refresh=async()=>{status.textContent='正在加载评估数据集…';try{const rows=await api(`/api/workbench/evaluation-datasets?q=${encodeURIComponent(filter.value)}`);catalog.replaceChildren(filter);if(!rows.length){current=null;selected=null;casesHost.replaceChildren();editor.replaceChildren();catalog.append(emptyState(filter.value?'没有匹配数据集':'尚无评估数据集',filter.value?'调整筛选条件。':'创建数据集后将在这里显示。'));detail.replaceChildren(emptyState('没有可编辑数据集','当前目录没有结果。'));status.textContent='数据集目录为空。';return}rows.forEach(row=>{const b=button('',()=>loadDataset(row));b.className='dataset-row';b.append(el('strong',`r${row.revision}`),el('span',`${row.reviewedCount}/${row.caseCount} 已审核`),el('small',`${row.annotationCount} 标注 · ${row.queryCaseCount} 问题`),shortIdentity(row.digest,12));catalog.append(b)});status.textContent=`已加载 ${rows.length} 个数据集。`;if(!current)loadDataset(rows[0])}catch{catalog.replaceChildren(filter,emptyState('目录不可用','重新加载以读取数据集。',button('重新加载',refresh)));status.textContent='评估数据集目录不可用。';status.setAttribute('role','alert')}};filter.addEventListener('input',refresh);layout.append(catalog,detail);main.append(heading('评估数据集','维护受审核的文档标注与问题案例'),status,layout);shell(main);refresh()}
+function evaluationDataset() {
+  const main = el("main", "", { class: "evaluation-dataset-page" }),
+    filter = el("input", "", {
+      placeholder: "筛选评估数据集",
+      "aria-label": "筛选评估数据集",
+    }),
+    status = el("div", "正在加载评估数据集…", {
+      class: "dataset-status",
+      role: "status",
+      "aria-live": "polite",
+    }),
+    catalog = el("aside", "", {
+      class: "dataset-catalog",
+      "aria-label": "评估数据集列表",
+    }),
+    detail = el("section", "", { class: "dataset-detail" }),
+    casesHost = el("nav", "", {
+      class: "dataset-case-list",
+      "aria-label": "案例列表",
+    }),
+    editor = el("form", "", { class: "dataset-case-editor" }),
+    layout = el("section", "", { class: "dataset-workspace" });
+  let current = null,
+    selected = null,
+    pending = false,
+    loadVersion = 0;
+  const cases = () =>
+    current
+      ? [
+          ...(current.content.annotations || []).map((x) => ({
+            item: x,
+            kind: "annotation",
+          })),
+          ...(current.content.query_cases || []).map((x) => ({
+            item: x,
+            kind: "query",
+          })),
+        ]
+      : [];
+  const lines = (value) => (Array.isArray(value) ? value.join("\n") : "");
+  const setLines = (item, key, value) =>
+    (item[key] = value
+      .split("\n")
+      .map((x) => x.trim())
+      .filter(Boolean));
+  const renderCaseList = () => {
+    casesHost.replaceChildren(
+      sectionHeader("dataset-cases-title", "案例", `${cases().length} 条`),
+    );
+    for (const entry of cases()) {
+      const errors = current.validation?.[entry.item.id] || [],
+        reviewed = (entry.item.reviews || []).length > 0,
+        incomplete = errors.some((code) => String(code).includes("INCOMPLETE")),
+        b = button("", () => {
+          selected = entry;
+          renderEditor();
+        });
+      b.setAttribute(
+        "aria-pressed",
+        String(selected?.item.id === entry.item.id),
+      );
+      b.className = "dataset-case-row";
+      b.append(
+        el("strong", entry.item.id),
+        el("span", entry.kind === "query" ? "问题" : "文档"),
+        statusTag(
+          reviewed
+            ? "已审核"
+            : incomplete
+              ? "不完整"
+              : errors.length
+                ? "无效"
+                : "待审核",
+          reviewed ? "success" : errors.length ? "failure" : "warning",
+        ),
+      );
+      casesHost.append(b);
+    }
+    if (!cases().length)
+      casesHost.append(
+        emptyState("数据集为空", "此修订中没有标注或问题案例。"),
+      );
+  };
+  const renderEditor = () => {
+    editor.replaceChildren();
+    if (!selected) {
+      editor.append(
+        emptyState("选择案例", "从案例列表中选择一个案例进行编辑。"),
+      );
+      return;
+    }
+    const item = selected.item,
+      errors = current.validation?.[item.id] || [],
+      reviewed = (item.reviews || []).length > 0;
+    let locatorValid = true,
+      locatorError = null;
+    editor.append(
+      sectionHeader(
+        "case-editor-title",
+        selected.kind === "query" ? "问题案例" : "文档标注",
+        item.id,
+      ),
+      errors.length
+        ? notice("failure", "案例验证失败", errors.join("、"))
+        : notice(
+            "info",
+            reviewed ? "已显式审核" : "待审核",
+            reviewed ? "审核记录已绑定当前内容。" : "保存后仍需显式审核。",
+          ),
+    );
+    const source = el("fieldset"),
+      sourceLegend = el("legend", "来源与 Provenance");
+    source.append(
+      sourceLegend,
+      field("Source Artifact ID", item.source?.id, (v) => (item.source.id = v)),
+      field(
+        "Source digest",
+        item.source?.content_digest,
+        (v) => (item.source.content_digest = v),
+      ),
+      field(
+        "Source schema",
+        item.source?.schema_revision,
+        (v) => (item.source.schema_revision = v),
+      ),
+      field(
+        "Source type",
+        item.source?.artifact_type,
+        (v) => (item.source.artifact_type = v),
+      ),
+      field(
+        "Provenance origin",
+        item.provenance?.origin,
+        (v) => (item.provenance.origin = v),
+      ),
+      field(
+        "Provenance operation",
+        item.provenance?.operation,
+        (v) => (item.provenance.operation = v),
+      ),
+    );
+    editor.append(source);
+    const labels = el("fieldset"),
+      legend = el(
+        "legend",
+        selected.kind === "query" ? "问题与标签" : "标注与标签",
+      );
+    labels.append(legend);
+    if (selected.kind === "query") {
+      labels.append(
+        field("问题", item.question, (v) => (item.question = v), {
+          multiline: true,
+        }),
+        field(
+          "Answerability",
+          item.answerability,
+          (v) => (item.answerability = v),
+        ),
+        field(
+          "预期事实（每行一项）",
+          lines(item.expected_facts),
+          (v) => setLines(item, "expected_facts", v),
+          { multiline: true },
+        ),
+        field(
+          "禁止事实（每行一项）",
+          lines(item.forbidden_facts),
+          (v) => setLines(item, "forbidden_facts", v),
+          { multiline: true },
+        ),
+        field(
+          "相关 Evidence ID（每行一项）",
+          lines(item.relevant_evidence_ids),
+          (v) => setLines(item, "relevant_evidence_ids", v),
+          { multiline: true },
+        ),
+        field(
+          "必需 Citation key（每行一项）",
+          lines(item.required_citation_keys),
+          (v) => setLines(item, "required_citation_keys", v),
+          { multiline: true },
+        ),
+        field(
+          "确定性答案",
+          item.deterministic_answer,
+          (v) => (item.deterministic_answer = v),
+          { multiline: true },
+        ),
+      );
+      const ensureEvidence = () =>
+          (item.evidence ??= {
+            id: "",
+            content_digest: "",
+            schema_revision: "v1",
+            artifact_type: "evidence.set",
+          }),
+        evidence = el("fieldset");
+      evidence.append(
+        el("legend", "Evidence Source Artifact"),
+        field(
+          "Evidence Artifact ID",
+          item.evidence?.id,
+          (v) => (ensureEvidence().id = v),
+        ),
+        field(
+          "Evidence digest",
+          item.evidence?.content_digest,
+          (v) => (ensureEvidence().content_digest = v),
+        ),
+        field(
+          "Evidence schema",
+          item.evidence?.schema_revision,
+          (v) => (ensureEvidence().schema_revision = v),
+        ),
+        field(
+          "Evidence type",
+          item.evidence?.artifact_type,
+          (v) => (ensureEvidence().artifact_type = v),
+        ),
+      );
+      labels.append(evidence);
+    } else {
+      item.target ??= { kind: "element" };
+      const target = item.target,
+        locatorValue = target.locator ? JSON.stringify(target.locator) : "";
+      locatorError = el("div", "", {
+        class: "field-error",
+        role: "alert",
+        "aria-live": "polite",
+      });
+      const locatorField = field(
+        "Target locator",
+        locatorValue,
+        (v) => {
+          try {
+            target.locator = v ? JSON.parse(v) : null;
+            locatorValid = true;
+            locatorError.textContent = "";
+          } catch {
+            locatorValid = false;
+            locatorError.textContent =
+              "Locator 必须是有效 JSON；当前文本已保留。";
+          }
+          sync();
+        },
+        { multiline: true },
+      );
+      labels.append(
+        field("Target kind", target.kind, (v) => (target.kind = v)),
+        field(
+          "Target element ID",
+          target.element_id,
+          (v) => (target.element_id = v || null),
+        ),
+        field(
+          "Target table ID",
+          target.table_id,
+          (v) => (target.table_id = v || null),
+        ),
+        field(
+          "Target cell ID",
+          target.cell_id,
+          (v) => (target.cell_id = v || null),
+        ),
+        locatorField,
+        locatorError,
+        field(
+          "Target start",
+          target.start,
+          (v) => (target.start = v === "" ? null : Number(v)),
+          { type: "number" },
+        ),
+        field(
+          "Target end",
+          target.end,
+          (v) => (target.end = v === "" ? null : Number(v)),
+          { type: "number" },
+        ),
+        field("Label", item.label, (v) => (item.label = v), {
+          multiline: true,
+        }),
+      );
+    }
+    editor.append(labels);
+    const slices = el("fieldset"),
+      sliceLegend = el("legend", "切片标签");
+    slices.append(sliceLegend);
+    for (const [key, value] of Object.entries(item.slices || {}))
+      slices.append(field(key, value, (v) => (item.slices[key] = v)));
+    editor.append(slices);
+    const reviewer = el("input", "", {
+        placeholder: "Reviewer ID",
+        "aria-label": "Reviewer ID",
+        maxlength: "128",
+      }),
+      save = button("验证并保存", async () => {
+        if (!locatorValid) return;
+        pending = true;
+        sync();
+        status.textContent = "正在验证并保存新草稿修订…";
+        try {
+          const r = await api(
+            `/api/workbench/evaluation-datasets/${current.id}`,
+            {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(current.content),
+            },
+          );
+          if (r.dataset) {
+            status.textContent = "草稿修订已保存。";
+            await loadDataset(r.dataset);
+          } else {
+            current.validation = r.validation || { "/": ["DATASET_INVALID"] };
+            status.textContent = "数据集验证未通过，编辑已保留。";
+            renderCaseList();
+            renderEditor();
+          }
+        } catch {
+          status.textContent = "保存失败，编辑已保留。";
+        } finally {
+          pending = false;
+          sync();
+        }
+      }),
+      review = button(
+        "标记已审核",
+        async () => {
+          pending = true;
+          sync();
+          status.textContent = "正在记录显式审核…";
+          try {
+            const r = await api(
+              `/api/workbench/evaluation-datasets/${current.id}/revisions/${current.revision}/cases/${encodeURIComponent(item.id)}/review`,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ reviewer: reviewer.value }),
+              },
+            );
+            if (r.dataset) {
+              status.textContent = "案例已审核。";
+              await loadDataset(r.dataset);
+            } else status.textContent = r.code || "案例不可审核。";
+          } catch {
+            status.textContent = "审核失败，Reviewer ID 已保留。";
+          } finally {
+            pending = false;
+            sync();
+          }
+        },
+        reviewed || errors.length > 0,
+      );
+    reviewer.addEventListener("input", () => sync());
+    const actions = el("div", "", { class: "editor-actions" });
+    actions.append(save, reviewer, review);
+    editor.append(actions);
+    function sync() {
+      [...editor.querySelectorAll("input,textarea,button")].forEach((x) => {
+        if (x !== reviewer) x.disabled = pending;
+      });
+      save.disabled = pending || !locatorValid;
+      review.disabled =
+        pending || reviewed || errors.length > 0 || !reviewer.value.trim();
+    }
+  };
+  const loadDataset = async (row) => {
+    const version = ++loadVersion;
+    status.textContent = "正在加载数据集修订…";
+    try {
+      const d = row.content
+        ? row
+        : await api(
+            `/api/workbench/evaluation-datasets/${row.id}?revision=${row.revision}`,
+          );
+      if (version !== loadVersion) return;
+      current = structuredClone(d);
+      const all = cases(),
+        choice =
+          all.find(
+            (x) =>
+              x.item.provenance?.origin === "generated" &&
+              !(x.item.reviews || []).length &&
+              !(d.validation?.[x.item.id] || []).length,
+          ) ||
+          all.find((x) => !(x.item.reviews || []).length) ||
+          all[0];
+      selected = choice || null;
+      detail.replaceChildren(
+        el("header", "", { class: "dataset-detail-header" }),
+        casesHost,
+        editor,
+      );
+      detail.firstChild.append(
+        el("h2", `评估数据集 / r${d.revision}`),
+        definitionList([
+          ["Dataset ID", d.id],
+          ["Digest", d.digest],
+          ["已审核", `${d.reviewedCount}/${d.caseCount}`],
+          ["创建时间", formatTime(d.createdAt)],
+        ]),
+      );
+      renderCaseList();
+      renderEditor();
+      status.textContent = "数据集修订已加载。";
+    } catch {
+      status.textContent = "数据集加载失败，可重新选择。";
+      status.setAttribute("role", "alert");
+    }
+  };
+  const refresh = async () => {
+    status.textContent = "正在加载评估数据集…";
+    try {
+      const rows = await api(
+        `/api/workbench/evaluation-datasets?q=${encodeURIComponent(filter.value)}`,
+      );
+      catalog.replaceChildren(filter);
+      if (!rows.length) {
+        current = null;
+        selected = null;
+        casesHost.replaceChildren();
+        editor.replaceChildren();
+        catalog.append(
+          emptyState(
+            filter.value ? "没有匹配数据集" : "尚无评估数据集",
+            filter.value ? "调整筛选条件。" : "创建数据集后将在这里显示。",
+          ),
+        );
+        detail.replaceChildren(
+          emptyState("没有可编辑数据集", "当前目录没有结果。"),
+        );
+        status.textContent = "数据集目录为空。";
+        return;
+      }
+      rows.forEach((row) => {
+        const b = button("", () => loadDataset(row));
+        b.className = "dataset-row";
+        b.append(
+          el("strong", `r${row.revision}`),
+          el("span", `${row.reviewedCount}/${row.caseCount} 已审核`),
+          el(
+            "small",
+            `${row.annotationCount} 标注 · ${row.queryCaseCount} 问题`,
+          ),
+          shortIdentity(row.digest, 12),
+        );
+        catalog.append(b);
+      });
+      status.textContent = `已加载 ${rows.length} 个数据集。`;
+      if (!current) loadDataset(rows[0]);
+    } catch {
+      catalog.replaceChildren(
+        filter,
+        emptyState(
+          "目录不可用",
+          "重新加载以读取数据集。",
+          button("重新加载", refresh),
+        ),
+      );
+      status.textContent = "评估数据集目录不可用。";
+      status.setAttribute("role", "alert");
+    }
+  };
+  filter.addEventListener("input", refresh);
+  layout.append(catalog, detail);
+  main.append(
+    heading("评估数据集", "维护受审核的文档标注与问题案例"),
+    status,
+    layout,
+  );
+  shell(main);
+  refresh();
+}
 
 function evaluationRun(){
  const routeParams=new URL(location).searchParams,requestedCase=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(routeParams.get('q')||'')?routeParams.get('q'):null,main=el('main','',{class:'evaluation-run-page'}),pick=el('select','',{'aria-label':'评估运行'}),status=el('div','正在加载 Evaluation Run…',{class:'evaluation-status',role:'status','aria-live':'polite'}),surface=el('section','',{class:'evaluation-run-surface'}),owners=['ingestion','retrieval','context','answer','citation','decision','judge','latency','resources'],ownerLabels={ingestion:'Ingestion',retrieval:'Retrieval',context:'Context',answer:'Answer',citation:'Citation',decision:'Decision',judge:'Judge',latency:'Latency',resources:'Resources'};

@@ -155,6 +155,12 @@ _QUERY_RUNS = {
     "active": "12345678-1234-5678-1234-567812345708",
     "submit-error": "12345678-1234-5678-1234-567812345710",
     "delayed-submit": "12345678-1234-5678-1234-567812345711",
+    "fact-answered": "12345678-1234-5678-1234-567812345712",
+    "table-answered-inspector": "12345678-1234-5678-1234-567812345713",
+    "hierarchy-answered": "12345678-1234-5678-1234-567812345714",
+    "clarification-required": "12345678-1234-5678-1234-567812345715",
+    "repair-answered": "12345678-1234-5678-1234-567812345716",
+    "repair-exhausted": "12345678-1234-5678-1234-567812345717",
 }
 _EVALUATION_RUNS = {
     "failed-gates": _EVALUATION_RUN,
@@ -167,6 +173,7 @@ _query_scenarios: dict[str, str] = {}
 _active_query_stopped = False
 _active_query_reads = 0
 _QUERY_CHUNK = "chk_" + "1" * 32
+_QUERY_CHUNK_PARENT = "chk_" + "3" * 32
 _QUERY_DOCUMENT = "doc_" + "1" * 32
 _COMPARISON = "12345678-1234-5678-1234-567812345693"
 _COMPARISON_BASELINE = "12345678-1234-5678-1234-567812345694"
@@ -450,6 +457,7 @@ async def fixture_rerun_preflight(run_id: str, request: Request) -> JSONResponse
 async def fixture_artifact(artifact_id: str) -> JSONResponse:
     locator_a = {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5}
     locator_b = {"kind": "pdf", "page_number": 1, "x0": .5, "y0": .5, "x1": 1, "y1": 1}
+    table_locator = {"kind": "spreadsheet", "sheet_name": "华东预算", "range": "B7"}
     if artifact_id == _CHUNK_ARTIFACT:
         return JSONResponse({
             "artifactType": "chunk.set", "schemaRevision": "v1", "summary": "fixture chunks",
@@ -469,7 +477,9 @@ async def fixture_artifact(artifact_id: str) -> JSONResponse:
                  "elements": [{"id": "elm_a", "text": "First", "locator": locator_a},
                               {"id": "elm_b", "text": "Second", "locator": locator_b}],
                  "tables": [{"id": "tbl_fixture", "elementId": "elm_b", "locator": locator_b,
-                             "cells": [{"row_index": 0, "column_index": 0, "text": "Cell fixture", "row_span": 1, "column_span": 1}]}]},
+                             "cells": [{"row_index": 0, "column_index": 0, "text": "Cell fixture", "row_span": 1, "column_span": 1}]},
+                            {"id": "tbl_budget", "elementId": "elm_budget", "locator": table_locator,
+                             "cells": [{"id": "cell_budget_b7", "row_index": 6, "column_index": 1, "text": "128 万元", "row_span": 1, "column_span": 1}]}]},
     })
 
 
@@ -494,7 +504,7 @@ async def fixture_query_preflight(request: Request) -> JSONResponse:
         return JSONResponse({"code": "QUERY_PREFLIGHT_UNAVAILABLE"}, status_code=503)
     if "stale-old" in question:
         await asyncio.sleep(.2)
-    scenario = next((name for name in _QUERY_RUNS if name in question), "answered")
+    scenario = next((name for name in sorted(_QUERY_RUNS, key=len, reverse=True) if name in question), "answered")
     if scenario == "active":
         _active_query_stopped = False
         _active_query_reads = 0
@@ -558,34 +568,70 @@ def _query_candidate_contracts(locator: dict[str, object]) -> tuple[RetrievalCan
 async def fixture_query_run(run_id: str) -> JSONResponse:
     global _active_query_stopped, _active_query_reads
     scenario = "answered" if run_id == _HISTORY_QUERY else next(name for name, identifier in _QUERY_RUNS.items() if identifier == run_id)
-    locator = {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5}
+    locator = ({"kind": "spreadsheet", "sheet_name": "华东预算", "range": "B7"}
+               if scenario == "table-answered-inspector" else
+               {"kind": "pdf", "page_number": 1, "x0": 0, "y0": 0, "x1": .5, "y1": .5})
     finals = {
         "answered": {"state": "ANSWERED", "answer": "Evidence-bound fixture answer", "citationKeys": ["cit_fixture"], "action": None},
+        "fact-answered": {"state": "ANSWERED", "answer": "试点系统于 2026 年 6 月完成验收。", "citationKeys": ["cit_fixture"], "action": None},
+        "table-answered-inspector": {"state": "ANSWERED", "answer": "华东区第二季度预算为 128 万元。", "citationKeys": ["cit_fixture"], "action": None},
+        "hierarchy-answered": {"state": "ANSWERED", "answer": "风险分为交付风险与数据质量风险。", "citationKeys": ["cit_fixture", "cit_parent"], "action": None},
         "clarification": {"state": "CLARIFICATION_REQUIRED", "answer": None, "citationKeys": [], "action": "请明确目标文档范围。"},
+        "clarification-required": {"state": "CLARIFICATION_REQUIRED", "answer": None, "citationKeys": [], "action": "请明确是查询项目预算还是部门预算。"},
         "abstained": {"state": "ABSTAINED", "answer": None, "citationKeys": [], "action": "可用 Evidence 不足，未生成答案。"},
         "failed": {"state": "FAILED", "answer": None, "citationKeys": [], "action": "验证失败，未发布答案。"},
+        "repair-answered": {"state": "ANSWERED", "answer": "修复后的答案保持同一 Evidence 引用。", "citationKeys": ["cit_fixture"], "action": None},
+        "repair-exhausted": {"state": "FAILED", "answer": None, "citationKeys": [], "action": "有限修复已耗尽，未发布答案。"},
     }
     if scenario == "active" and not _active_query_stopped:
         _active_query_reads += 1
         if _active_query_reads >= 2:
             await asyncio.sleep(.5)
-        return JSONResponse({"id": run_id, "state": "RUNNING", "terminalState": None, "actions": {"stop": True}, "stages": [], "candidates": [], "evidence": [], "details": [], "final": {"state": "UNAVAILABLE"}})
+        return JSONResponse({"id": run_id, "state": "RUNNING", "terminalState": None, "actions": {"stop": True}, "stages": [], "candidates": [], "decisionPath": {"columns": [], "rows": []}, "evidence": [], "details": [], "final": None})
     projected_scenario = "answered" if scenario == "active" else scenario
     verification = {
         "answered": {"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []},
         "clarification": {"kind": "verification", "outcome": "clarification_required", "failureCodes": [], "missingCitationKeys": []},
         "abstained": {"kind": "verification", "outcome": "abstain", "failureCodes": ["EVIDENCE_INSUFFICIENT"], "missingCitationKeys": []},
         "failed": {"kind": "verification", "outcome": "failed", "failureCodes": ["CITATION_VALIDATION_FAILED"], "missingCitationKeys": ["cit_missing"]},
+        "fact-answered": {"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []},
+        "table-answered-inspector": {"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []},
+        "hierarchy-answered": {"kind": "verification", "outcome": "pass", "failureCodes": [], "missingCitationKeys": []},
+        "clarification-required": {"kind": "verification", "outcome": "clarification_required", "failureCodes": [], "missingCitationKeys": []},
+        "repair-answered": {"kind": "verification", "outcome": "pass_after_repair", "failureCodes": [], "missingCitationKeys": []},
+        "repair-exhausted": {"kind": "verification", "outcome": "failed", "failureCodes": ["CITATION_VALIDATION_FAILED", "REPAIR_EXHAUSTED"], "missingCitationKeys": ["cit_missing"]},
     }[projected_scenario]
     contracts = _query_candidate_contracts(locator)
-    return JSONResponse({"id": run_id, "state": "SUCCEEDED" if projected_scenario != "failed" else "FAILED", "terminalState": "SUCCEEDED" if projected_scenario != "failed" else "FAILED", "actions": {"stop": False},
-                         "stages": [{"stageKey": "keyword", "attempt": 1, "state": "SUCCEEDED", "pluginId": "retriever.keyword@1", "startedAt": "2026-09-13T00:00:00Z", "endedAt": "2026-09-13T00:00:00.120Z"},
-                                    {"stageKey": "fusion", "attempt": 1, "state": "SUCCEEDED", "pluginId": "fusion.rrf@1", "startedAt": "2026-09-13T00:00:00.120Z", "endedAt": "2026-09-13T00:00:00.180Z"},
-                                    {"stageKey": "rerank", "attempt": 1, "state": "SUCCEEDED", "pluginId": "reranker.lexical@1", "startedAt": "2026-09-13T00:00:00.180Z", "endedAt": "2026-09-13T00:00:00.210Z"}],
-                         "candidates": [{"stageId": name, "available": True, "rows": QueryWorkbenchService._candidate_rows(value)}
-                                        for name, value in zip(("keyword", "fusion", "rerank"), contracts, strict=True)],
-                         "evidence": [{"citationKey": "cit_fixture", "excerpt": "Long fixture evidence " * 80, "documentId": _QUERY_DOCUMENT, "chunkId": _QUERY_CHUNK, "locators": [locator], "contributors": [{"contributor_id": "keyword", "safe_score": .8}], "hierarchy": [], "tableElementIds": [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator}],
-                         "details": [_fixture_context_detail(), verification], "final": finals[projected_scenario]})
+    candidate_sets = []
+    for name, value in zip(("keyword", "fusion", "rerank"), contracts, strict=True):
+        rows = QueryWorkbenchService._candidate_rows(value)
+        for row in rows:
+            row.update(documentLabel="项目验收与预算说明.pdf", excerpt="试点系统于 2026 年 6 月完成验收；华东区第二季度预算为 128 万元。", locatorLabel="SPREADSHEET / 工作表 华东预算 / 范围 B7" if projected_scenario == "table-answered-inspector" else "PDF / 第 1 页")
+        candidate_sets.append({"stageId": name, "available": True, "rows": rows})
+    context_decision = {"chunk_id": _QUERY_CHUNK, "source_rank": 1, "reason": "included", "safe_score": .8}
+    decision_path = {"columns": [{"stageId": name, "kind": "candidate"} for name in ("keyword", "fusion", "rerank")] + [{"stageId": "context", "kind": "context"}],
+                     "rows": [{"documentId": _QUERY_DOCUMENT, "documentLabel": "项目验收与预算说明.pdf", "chunkId": _QUERY_CHUNK, "excerpt": "试点系统于 2026 年 6 月完成验收；华东区第二季度预算为 128 万元。", "locatorLabel": "SPREADSHEET / 工作表 华东预算 / 范围 B7" if projected_scenario == "table-answered-inspector" else "PDF / 第 1 页", "stages": {
+                         "keyword": {"state": "PRESENT", "rank": 1, "safeScore": .8}, "fusion": {"state": "PRESENT", "rank": 1, "safeScore": .75},
+                         "rerank": {"state": "PRESENT", "rank": 1, "safeScore": .75, "decision": {"reason": "included"}}, "context": {"state": "PRESENT", **context_decision}}}]}
+    failed = projected_scenario in {"failed", "repair-exhausted"}
+    details = [_fixture_context_detail()]
+    if projected_scenario == "repair-answered":
+        details.extend([{"kind": "verification", "outcome": "failed", "failureCodes": ["CITATION_VALIDATION_FAILED"], "missingCitationKeys": ["cit_missing"]}, verification])
+    else:
+        details.append(verification)
+    evidence_rows = [{"citationKey": "cit_fixture", "excerpt": "华东区第二季度预算为 128 万元。" if projected_scenario == "table-answered-inspector" else "试点系统于 2026 年 6 月完成验收，相关结论来自已固定的来源段落。", "documentId": _QUERY_DOCUMENT, "documentLabel": "项目验收与预算说明.pdf", "chunkId": _QUERY_CHUNK, "locators": [locator], "locatorLabel": "SPREADSHEET / 工作表 华东预算 / 范围 B7" if projected_scenario == "table-answered-inspector" else "PDF / 第 1 页", "contributors": [{"contributor_id": "keyword", "safe_score": .8}], "hierarchy": ["项目报告", "验收结论"] if projected_scenario == "hierarchy-answered" else [], "tableElementIds": ["elm_budget"] if projected_scenario == "table-answered-inspector" else [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator, "contextDecision": context_decision}]
+    if projected_scenario == "hierarchy-answered":
+        parent_decision = {"chunk_id": _QUERY_CHUNK_PARENT, "source_rank": 2, "reason": "expanded_parent", "safe_score": .68}
+        evidence_rows.append({"citationKey": "cit_parent", "excerpt": "数据质量风险包括字段缺失与表格结构错误，需要在验收前完成核查。", "documentId": _QUERY_DOCUMENT, "documentLabel": "项目验收与预算说明.pdf", "chunkId": _QUERY_CHUNK_PARENT, "locators": [locator], "locatorLabel": "PDF / 第 1 页", "contributors": [{"contributor_id": "hierarchy", "safe_score": .68}], "hierarchy": ["项目报告", "风险", "数据质量"], "tableElementIds": [], "sourceArtifactId": _ARTIFACT, "sourceLocator": locator, "contextDecision": parent_decision})
+        decision_path["rows"].append({"documentId": _QUERY_DOCUMENT, "documentLabel": "项目验收与预算说明.pdf", "chunkId": _QUERY_CHUNK_PARENT, "excerpt": evidence_rows[-1]["excerpt"], "locatorLabel": "PDF / 第 1 页", "stages": {"keyword": {"state": "NOT_PRESENT"}, "fusion": {"state": "NOT_PRESENT"}, "rerank": {"state": "NOT_PRESENT"}, "context": {"state": "PRESENT", **parent_decision}}})
+        details[0] = {"kind": "context", "decisions": [context_decision, parent_decision], "shortage": {"minimum_items": 2, "selected_items": 2, "selected_tokens": 164, "reason": "none"}}
+    return JSONResponse({"id": run_id, "state": "FAILED" if failed else "SUCCEEDED", "terminalState": "FAILED" if failed else "SUCCEEDED", "actions": {"stop": False},
+                         "stages": [{"stageKey": "keyword", "attempt": 1, "state": "SUCCEEDED", "pluginId": "retriever.keyword@1", "startedAt": "2026-09-13T00:00:00Z", "endedAt": "2026-09-13T00:00:00.120Z", "durationMs": 120},
+                                    {"stageKey": "fusion", "attempt": 1, "state": "SUCCEEDED", "pluginId": "fusion.rrf@1", "startedAt": "2026-09-13T00:00:00.120Z", "endedAt": "2026-09-13T00:00:00.180Z", "durationMs": 60},
+                                    {"stageKey": "rerank", "attempt": 1, "state": "SUCCEEDED", "pluginId": "reranker.lexical@1", "startedAt": "2026-09-13T00:00:00.180Z", "endedAt": "2026-09-13T00:00:00.210Z", "durationMs": 30}],
+                         "candidates": candidate_sets, "decisionPath": decision_path,
+                         "evidence": evidence_rows,
+                         "details": details, "final": finals[projected_scenario]})
 
 
 def _fixture_context_detail() -> dict[str, object]:
@@ -1412,7 +1458,7 @@ def test_s024_visual_manifest_is_pinned_and_baselines_are_reviewed_assets() -> N
 
 
 def test_s025_s026_s027_visual_manifests_are_pinned_and_complete() -> None:
-    expectations = ((S025_BASELINE_ROOT, "S-025", {"UI-005", "UI-008", "UI-013"}, 8),
+    expectations = ((S025_BASELINE_ROOT, "S-025", {"UI-005", "UI-008", "UI-013"}, 14),
                     (S026_BASELINE_ROOT, "S-026", {"UI-009", "UI-010", "UI-013"}, 10),
                     (S027_BASELINE_ROOT, "S-027", {"UI-011", "UI-012", "UI-013"}, 6))
     for root, story, anchors, count in expectations:
@@ -2231,14 +2277,32 @@ def test_s025_query_options_stale_preflight_poll_stop_and_terminal_cleanup(tmp_p
         behavior = behavior.replace("preflightError,submitError,localOnly,delayedSubmit,oneStop", "preflightError,submitError,localOnly,oneStop")
         behavior = behavior.replace(
             "const evidence=document.querySelector('.evidence-row')?.innerText||'',body=document.body.innerText;return",
-            "const evidence=document.querySelector('.evidence-row')?.innerText||'',candidateTabs=[...document.querySelectorAll('.candidate-tabs button')];candidateTabs.find(x=>x.textContent==='fusion').click();const fusionText=document.querySelector('.candidate-panel').innerText;candidateTabs.find(x=>x.textContent==='rerank').click();const rerankText=document.querySelector('.candidate-panel').innerText,body=document.body.innerText,candidateProjection=fusionText.includes('vector #1 / 0.7 (cosine.normalized)')&&fusionText.includes('第 1 页')&&rerankText.includes('included / 1->1');return",
+            "const evidence=document.querySelector('.evidence-row')?.innerText||'',candidateTabs=[...document.querySelectorAll('.candidate-tabs button')];candidateTabs.find(x=>x.textContent==='fusion').click();const fusionText=document.querySelector('.candidate-panel').innerText;candidateTabs.find(x=>x.textContent==='rerank').click();const rerankText=document.querySelector('.candidate-panel').innerText,body=document.body.innerText,candidateProjection=fusionText.includes('vector #1 / 0.7 (cosine.normalized)')&&fusionText.includes('PDF / 第 1 页')&&rerankText.includes('included / 1->1'),sourcePreview=[...document.querySelectorAll('.evidence-row button')].some(x=>x.textContent==='源预览');return",
         ).replace(
             "candidate:body.includes('vector #1 / 0.7 (cosine.normalized)')&&body.includes('Rerank 决策')&&body.includes('定位不可用')===false",
             "candidate:candidateProjection",
-        )
-        assert _cdp(debug_port, behavior, await_promise=True, target_url=ready_url) == {"preflightError": True, "submitError": True, "localOnly": True, "oneStop": True, "terminalCleanup": True, "citation": True, "score": True, "decision": True, "candidate": True}
+        ).replace("citation:!![...document.querySelectorAll('.evidence-row button')].find(x=>x.textContent==='cit_fixture')", "citation:!![...document.querySelectorAll('.citation-actions button')].find(x=>x.textContent==='cit_fixture'),sourcePreview").replace("evidence.includes('决策理由 / reason')", "evidence.includes('决策理由')").replace("const oneStop=document.querySelectorAll('.query-stop-host button').length===1;", "const oneStop=document.querySelectorAll('.query-stop-host button').length===1,pendingNeutral=!document.querySelector('.final-state')&&!document.body.innerText.includes('UNAVAILABLE')&&document.body.innerText.includes('Query Run 正在执行');").replace("oneStop,terminalCleanup", "oneStop,pendingNeutral,terminalCleanup")
+        assert _cdp(debug_port, behavior, await_promise=True, target_url=ready_url) == {"preflightError": True, "submitError": True, "localOnly": True, "oneStop": True, "pendingNeutral": True, "terminalCleanup": True, "citation": True, "sourcePreview": True, "score": True, "decision": True, "candidate": True}
         delayed_submit = """(async()=>{const wait=async p=>{for(let i=0;i<160;i++){const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}throw new Error('delayed submit timeout')};const q=document.querySelector('textarea[aria-label="问题"]');q.value='delayed-submit';q.dispatchEvent(new Event('input',{bubbles:true}));(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled))).click();const ack=await wait(()=>document.querySelector('input[aria-label="确认外部阶段披露"]'));ack.click();[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run').click();q.value='changed while submit pending';q.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,450));return {question:q.value,status:document.querySelector('.query-status')?.textContent,preview:!!document.querySelector('.query-preflight'),final:!!document.querySelector('.final-state'),stop:!!document.querySelector('.query-stop-host button'),preflight:!![...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled)}})()"""
         assert _cdp(debug_port, delayed_submit, await_promise=True, target_url=ready_url) == {"question": "changed while submit pending", "status": "输入已更改，请重新预检。", "preview": False, "final": False, "stop": False, "preflight": True}
+    finally:
+        _close_isolated_chrome(debug_port, browser)
+        server.terminate()
+        server.wait(timeout=10)
+
+
+@pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-025 source preview")
+def test_s025_non_answered_source_preview_sync_escape_focus_and_url_context(tmp_path: Path) -> None:
+    port, debug_port = _free_local_port(), _free_local_port()
+    environment = {**os.environ, "PYTHONPATH": f"{Path.cwd() / 'src'}:{Path.cwd()}"}
+    server = subprocess.Popen([sys.executable, "-m", "uvicorn", "tests.contract.test_workbench_browser:fixture_app", "--host", "127.0.0.1", "--port", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=environment)
+    url = f"http://127.0.0.1:{port}/workbench/query?workspace=fixture&q=diagnosis-context"
+    _wait_for_fixture(url)
+    browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", "--window-size=1440,900", f"--user-data-dir={tmp_path / 'query-non-answer-preview'}", url])
+    try:
+        _prepare_s022_capture_environment(debug_port, url, 1440)
+        result = _cdp(debug_port, """(async()=>{const wait=async p=>{for(let i=0;i<180;i++){const value=p();if(value)return value;await new Promise(r=>setTimeout(r,25))}throw new Error('source preview unavailable')};const before=location.href,q=await wait(()=>document.querySelector('textarea[aria-label="问题"]'));q.value='clarification-required';q.dispatchEvent(new Event('input',{bubbles:true}));(await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled))).click();const submit=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'));document.querySelector('input[aria-label="确认外部阶段披露"]').click();submit.click();await wait(()=>document.querySelector('.final-state')?.innerText.includes('CLARIFICATION_REQUIRED'));const preview=await wait(()=>[...document.querySelectorAll('.evidence-row button')].find(x=>x.textContent==='源预览'));preview.click();await wait(()=>document.querySelector('.artifact-inspector .source-selected'));const synchronized=document.querySelector('.locator-summary')?.textContent.includes('pdf / 第 1 页'),noCitation=!document.querySelector('.citation-actions button'),unchangedOpen=location.href===before;document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await new Promise(r=>setTimeout(r,50));return {synchronized,noCitation,unchangedOpen,closed:!document.querySelector('.artifact-inspector'),focusReturned:document.activeElement===preview,unchangedClosed:location.href===before}})()""", await_promise=True, target_url=url)
+        assert result == {"synchronized": True, "noCitation": True, "unchangedOpen": True, "closed": True, "focusReturned": True, "unchangedClosed": True}
     finally:
         _close_isolated_chrome(debug_port, browser)
         server.terminate()
@@ -2282,7 +2346,7 @@ def test_s026_gate_and_judge_authoritative_state_matrix(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(not CHROME.exists() or os.getenv("KB2_BROWSER_TESTS") != "1", reason="set KB2_BROWSER_TESTS=1 for S-025 visuals")
-@pytest.mark.parametrize("scenario", ("answered", "clarification", "abstained", "failed"))
+@pytest.mark.parametrize("scenario", ("fact-answered", "table-answered-inspector", "hierarchy-answered", "clarification-required", "abstained", "repair-answered", "repair-exhausted"))
 @pytest.mark.parametrize("width", (1440, 644))
 def test_s025_query_final_state_visual_matrix(tmp_path: Path, width: int, scenario: str) -> None:
     port, debug_port = _free_local_port(), _free_local_port()
@@ -2293,13 +2357,17 @@ def test_s025_query_final_state_visual_matrix(tmp_path: Path, width: int, scenar
     browser = _launch_isolated_chrome([*S022_CHROME_FLAGS, f"--remote-debugging-port={debug_port}", f"--window-size={width},900", f"--user-data-dir={tmp_path / 'query-matrix'}", url])
     try:
         _prepare_s022_capture_environment(debug_port, url, width)
-        expected = {"answered": "ANSWERED", "clarification": "CLARIFICATION_REQUIRED", "abstained": "ABSTAINED", "failed": "FAILED"}[scenario]
-        expression = f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}}throw new Error('query state did not render')}};const q=await wait(()=>document.querySelector('textarea[aria-label="问题"]'));q.value={json.dumps(scenario)};q.dispatchEvent(new Event('input',{{bubbles:true}}));const pre=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled));pre.click();const submit=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'));const blocked=submit.disabled;document.querySelector('input[aria-label="确认外部阶段披露"]').click();submit.click();await wait(()=>document.querySelector('.final-state')?.innerText.includes({json.dumps(expected)}));const tabs=[...document.querySelectorAll('[role=tab]')];tabs[0].focus();tabs[0].dispatchEvent(new KeyboardEvent('keydown',{{key:'ArrowRight',bubbles:true}}));const body=document.body.innerText,evidence=document.querySelector('.evidence-row')?.innerText||'',citation=[...document.querySelectorAll('.evidence-row button')].some(x=>x.textContent==='cit_fixture');return {{blocked,threePanes:document.querySelector('.query-workspace').children.length===3,tabbed:tabs.length===3&&tabs[1].getAttribute('aria-selected')==='true',decisions:body.includes('included')&&body.includes('excluded_budget')&&evidence.includes('决策理由 / reason')&&evidence.includes('included'),shortage:body.includes('below_minimum')&&body.includes('96'),candidate:body.includes('vector #1 / 0.7 (cosine.normalized)')&&body.includes('第 1 页'),evidenceScore:body.includes('贡献者 / safe_score')&&body.includes('keyword / 0.8'),missingCitation:{str(scenario != 'failed').lower()}||body.includes('cit_missing'),citationCommand:citation==={str(scenario == 'answered').lower()},noAnswer:{str(scenario == 'answered').lower()}||!body.includes('Evidence-bound fixture answer'),noInventedRepair:!body.includes('repair 1'),noRaw:!body.includes('[object Object]')&&!body.includes('"chunk_id"'),overflow:document.documentElement.scrollWidth<=innerWidth}}}})()"""
-        assert _cdp(debug_port, expression, await_promise=True, target_url=url) == {"blocked": True, "threePanes": True, "tabbed": True, "decisions": True, "shortage": True, "candidate": True, "evidenceScore": True, "missingCitation": True, "citationCommand": True, "noAnswer": True, "noInventedRepair": True, "noRaw": True, "overflow": True}
-        if width == 644:
+        expected = "FAILED" if scenario == "repair-exhausted" else "CLARIFICATION_REQUIRED" if scenario == "clarification-required" else "ABSTAINED" if scenario == "abstained" else "ANSWERED"
+        answered = expected == "ANSWERED"
+        expression = f"""(async()=>{{const wait=async p=>{{for(let i=0;i<160;i++){{const v=p();if(v)return v;await new Promise(r=>setTimeout(r,25))}}throw new Error('query state did not render')}};const q=await wait(()=>document.querySelector('textarea[aria-label="问题"]'));q.value={json.dumps(scenario)};q.dispatchEvent(new Event('input',{{bubbles:true}}));const pre=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='预检'&&!x.disabled));pre.click();const submit=await wait(()=>[...document.querySelectorAll('button')].find(x=>x.textContent==='创建 Query Run'));const blocked=submit.disabled;document.querySelector('input[aria-label="确认外部阶段披露"]').click();submit.click();await wait(()=>document.querySelector('.final-state')?.innerText.includes({json.dumps(expected)}));const tabs=[...document.querySelectorAll('[role=tab]')];tabs[0].focus();tabs[0].dispatchEvent(new KeyboardEvent('keydown',{{key:'ArrowRight',bubbles:true}}));const body=document.body.innerText,evidence=document.querySelector('.evidence-row')?.innerText||'',citation=[...document.querySelectorAll('.citation-actions button')].some(x=>x.textContent==='cit_fixture'),preview=[...document.querySelectorAll('.evidence-row button')].some(x=>x.textContent==='源预览');return {{blocked,threePanes:document.querySelector('.query-workspace').children.length===3,tabbed:tabs.length===3&&tabs[1].getAttribute('aria-selected')==='true',decisionPath:body.includes('决策路径')&&body.includes('项目验收与预算说明.pdf')&&body.includes('included'),duration:body.includes('120 ms'),shortage:{str(scenario == 'hierarchy-answered').lower()}?body.includes('none')&&body.includes('164'):body.includes('below_minimum')&&body.includes('96'),multiEvidence:{str(scenario != 'hierarchy-answered').lower()}||document.querySelectorAll('.evidence-row').length===2&&document.querySelectorAll('.citation-actions button').length===2,candidate:body.includes('vector #1 / 0.7 (cosine.normalized)')&&body.includes({json.dumps('SPREADSHEET / 工作表 华东预算 / 范围 B7' if scenario == 'table-answered-inspector' else 'PDF / 第 1 页')}),labelledOverflow:[...document.querySelectorAll('.query-retrieval-pane .table-wrap[role=region]')].filter(x=>x.getAttribute('aria-label')).length>=2,preview,citationCommand:citation==={str(answered).lower()},noAnswer:{str(answered).lower()}||!document.querySelector('.answer-copy'),collapsed:[...document.querySelectorAll('.evidence-details,.verification-attempt,.query-attempt')].every(x=>!x.open),noRaw:!body.includes('[object Object]')&&!body.includes('"chunk_id"'),overflow:document.documentElement.scrollWidth<=innerWidth}}}})()"""
+        assert _cdp(debug_port, expression, await_promise=True, target_url=url) == {"blocked": True, "threePanes": True, "tabbed": True, "decisionPath": True, "duration": True, "shortage": True, "multiEvidence": True, "candidate": True, "labelledOverflow": True, "preview": True, "citationCommand": True, "noAnswer": True, "collapsed": True, "noRaw": True, "overflow": True}
+        if scenario == "table-answered-inspector":
+            assert _cdp(debug_port, "[...document.querySelectorAll('.evidence-row button')].find(x=>x.textContent==='源预览').click();true", target_url=url) is True
+            table_sync = _cdp(debug_port, "(async()=>{const state=()=>{const selected=document.querySelector('.artifact-table .source-selected');return {tab:document.querySelector('[role=tab][data-tab=table]')?.getAttribute('aria-selected')==='true',selected:selected?.textContent.includes('tbl_budget')===true,summary:document.querySelector('.locator-summary')?.textContent.includes('华东预算 / B7')===true,cell:selected?.closest('.artifact-table')?.textContent.includes('128 万元')===true}};for(let i=0;i<160;i++){const result=state();if(Object.values(result).every(Boolean))return result;await new Promise(r=>setTimeout(r,25))}return state()})()", await_promise=True, target_url=url)
+            assert table_sync == {"tab": True, "selected": True, "summary": True, "cell": True}
+        elif width == 644:
             assert _cdp(debug_port, "document.querySelector('.final-state').scrollIntoView();true", target_url=url) is True
-        baseline_scenario = "clarification-required" if scenario == "clarification" else scenario
-        image = tmp_path / f"query-{baseline_scenario}-{width}.png"
+        image = tmp_path / f"query-{scenario}-{width}.png"
         _capture_cdp(debug_port, image, target_url=url)
         _assert_manifest_visual(debug_port, image, image.name, target_url=url, baseline_root=S025_BASELINE_ROOT, story="S-025")
     finally:

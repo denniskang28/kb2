@@ -282,6 +282,23 @@ def test_document_list_latest_output_requires_same_run_processing_attempt() -> N
     assert "attempt.stage_key<>'ingestion.source'" in statement
 
 
+def test_exact_document_registration_lookup_is_empty_safe_deduplicated_and_bounded() -> None:
+    async def capture() -> CapturingConnection:
+        connection = CapturingConnection([])
+        repository = TraceRepository(connection)  # type: ignore[arg-type]
+        assert await repository.get_document_submissions_by_source_ids(()) == ()
+        identifiers = [uuid4() for _ in range(70)]
+        await repository.get_document_submissions_by_source_ids([identifiers[0], identifiers[0], *identifiers[1:]])
+        return connection
+
+    connection = asyncio.run(capture())
+    assert len(connection.cursor_instance.executions) == 1
+    statement, parameters = connection.cursor_instance.executions[0]
+    assert "d.source_artifact_id=ANY(%s)" in statement
+    assert parameters is not None and len(parameters[0]) == 64
+    assert len(set(parameters[0])) == 64
+
+
 def test_artifact_service_rolls_back_when_document_catalog_insert_fails() -> None:
     class Connection:
         rollbacks = 0

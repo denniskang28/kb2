@@ -253,6 +253,39 @@ class TraceRepository:
             next_cursor = DocumentSubmissionCursor(registered_at=last.registered_at, source_artifact_id=last.source_artifact_id)
         return records, next_cursor
 
+    async def get_document_submissions_by_source_ids(
+        self, source_ids: Sequence[UUID], *, limit: int = 64,
+    ) -> tuple[DocumentSubmissionRecord, ...]:
+        """Return only exact, lineage-proven source registrations for a bounded set."""
+        bounded_ids = tuple(dict.fromkeys(source_ids))[:min(max(limit, 1), 64)]
+        if not bounded_ids:
+            return ()
+        async with self.connection.cursor() as cursor:
+            await cursor.execute(
+                """SELECT d.source_artifact_id, d.run_id, d.display_filename, d.media_type,
+                    d.registered_at, source.byte_size, r.state AS run_state,
+                    NULLIF(evidence.resolution_json->'observables'->>'extension', '') AS format,
+                    NULLIF(evidence.resolution_json->'observables'->>'document_class', '') AS document_class,
+                    evidence.resolution_json->>'selected_profile_id' AS profile_id,
+                    latest.id AS output_artifact_id
+                FROM document_submissions d
+                JOIN artifacts source ON source.id=d.source_artifact_id
+                JOIN runs r ON r.id=d.run_id AND r.engine_kind='ingestion'
+                JOIN ingestion_run_evidence evidence ON evidence.run_id=r.id
+                LEFT JOIN LATERAL (
+                    SELECT candidate.id FROM artifacts candidate
+                    JOIN stage_attempts attempt ON attempt.id=candidate.producing_stage_attempt_id
+                    WHERE candidate.producing_run_id=r.id AND candidate.id<>source.id
+                      AND attempt.state='SUCCEEDED' AND attempt.result='SUCCEEDED'
+                    ORDER BY candidate.created_at DESC, candidate.id DESC LIMIT 1
+                ) latest ON TRUE
+                WHERE d.source_artifact_id=ANY(%s)
+                ORDER BY d.source_artifact_id""",
+                (list(bounded_ids),),
+            )
+            rows = await cursor.fetchall()
+        return tuple(DocumentSubmissionRecord.model_validate(row) for row in rows)
+
     async def eligible_artifact_location(self, artifact_id: UUID) -> tuple[str, str] | None:
         locations = await self.eligible_artifact_locations(artifact_id)
         return locations[0] if locations else None
