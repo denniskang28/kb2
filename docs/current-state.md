@@ -264,3 +264,10 @@ when another product change is confirmed.
   exact diagnostic focus/ARIA, and ten reviewed desktop/narrow baselines.
   Twenty S-023 Chrome tests, thirty-five surrounding Chrome regressions, sixty-two
   related non-browser contracts, and final independent review passed.
+- **2026-09-15:** S-025 workspace parity repair brought Query Lab closer to the
+  adopted reference with a fixed 28/40/32 desktop workspace, pane-local
+  scrolling, compact preflight and Resolved Plan controls, Retriever-only
+  candidate tabs, one server-owned decision path, and a summary-first
+  answer/Verification/Evidence hierarchy. Fourteen refreshed responsive
+  baselines, three desktop geometry widths, independent acceptance, and final
+  review passed.

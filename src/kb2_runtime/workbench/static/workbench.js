@@ -1024,9 +1024,11 @@ function queryLab() {
       role: "status",
       "aria-live": "polite",
     }),
-    preview = el("div"),
+    preview = el("div", "", { class: "query-plan-host" }),
     stopHost = el("div", "", { class: "query-stop-host" }),
-    runButton = button("预检", () => preflight(), true);
+    runButton = button("", () => preflight(), true);
+  runButton.className = "query-primary-command";
+  runButton.append(icon("play"), el("span", "预检并准备运行"));
   let timer = null,
     last = null,
     requestVersion = 0,
@@ -1039,6 +1041,7 @@ function queryLab() {
       pending = false;
       [question, profile, index].forEach((x) => (x.disabled = false));
       status.textContent = "输入已更改，请重新预检。";
+      status.setAttribute("role", "status");
     }
     last = null;
     stopHost.replaceChildren();
@@ -1052,7 +1055,7 @@ function queryLab() {
     answer.replaceChildren(
       emptyState("尚无最终结果", "最终状态与 Evidence 将由 Query Run 返回。"),
     );
-    runButton.textContent = "预检";
+    runButton.hidden = false;
     runButton.disabled =
       pending || !question.value.trim() || !profile.value || !index.value;
   };
@@ -1067,34 +1070,23 @@ function queryLab() {
   };
   const candidateTable = (c) => {
     const rows = (c.rows || []).map((row) => {
-      const contributions = (row.contributions || []).map(
-          (item) =>
-            `${item.contributorId ?? "不可用"} #${item.originalRank ?? "不可用"} / ${item.safeScore ?? "不可用"} (${item.scoreKind ?? "不可用"})`,
-        ),
-        decision = row.decision;
+      const identity = el("div", "", { class: "candidate-identity" }),
+        scoreKind = (row.contributions || []).find((item) => item.scoreKind)?.scoreKind;
+      identity.append(
+        el("strong", row.documentLabel || "文档不可用"),
+        shortIdentity(row.chunkId || "Chunk 不可用", 12),
+      );
       return [
         row.rank ?? "不可用",
-        row.documentLabel || "文档不可用",
+        identity,
         row.excerpt || "摘录不可用",
-        row.safeScore ?? "不可用",
-        identityList(contributions),
+        `${row.safeScore ?? "不可用"}${scoreKind ? ` / ${scoreKind}` : ""}`,
         row.locatorLabel || "定位不可用",
-        decision
-          ? `${decision.reason} / ${decision.input_rank}->${decision.output_rank ?? "excluded"}`
-          : "不可用",
       ];
     });
     return rows.length
       ? tableRegion(denseTable(
-          [
-            "排名",
-            "文档",
-            "摘录",
-            "安全分数",
-            "贡献明细",
-            "Locator",
-            "Rerank 决策",
-          ],
+          ["Rank", "Document / Chunk", "摘录", "Score", "Locator"],
           rows,
           `${c.stageId} 候选`,
         ), `${c.stageId} 候选横向滚动区`)
@@ -1104,10 +1096,24 @@ function queryLab() {
         );
   };
   const renderCandidates = (candidates) => {
-    const host = el("section", "", { class: "candidate-region" });
-    host.append(el("h3", "候选与决策"));
-    if (!candidates.length) {
-      host.append(emptyState("没有候选集合", "运行未返回候选 Artifact。"));
+    const host = el("section", "", { class: "candidate-region" }),
+      retrievers = candidates.filter(
+        (candidate) =>
+          candidate.artifact?.artifactType === "retrieval.candidate.set",
+      ),
+      unknown = candidates.filter((candidate) => {
+        const type = candidate.artifact?.artifactType;
+        return !type || ![
+          "retrieval.candidate.set",
+          "fusion.candidate.set",
+          "rerank.candidate.set",
+        ].includes(type);
+      });
+    host.append(sectionHeader("query-candidates-title", "Retriever 候选", `${retrievers.length} 个集合`));
+    if (!retrievers.length) {
+      host.append(emptyState("没有 Retriever 候选", "运行未返回可识别的 retrieval.candidate.set。"));
+      if (unknown.length)
+        host.append(notice("warning", "候选类型不可用", "部分候选 Artifact 缺少受支持的类型描述。"));
       return host;
     }
     const tabs = el("div", "", {
@@ -1123,10 +1129,10 @@ function queryLab() {
         tab.setAttribute("aria-selected", String(n === i));
         tab.tabIndex = n === i ? 0 : -1;
       });
-      panel.replaceChildren(candidateTable(candidates[i]));
+      panel.replaceChildren(candidateTable(retrievers[i]));
     };
-    candidates.forEach((c, i) => {
-      const tab = button(c.stageId, () => select(i));
+    retrievers.forEach((c, i) => {
+      const tab = button(`${c.stageId} · ${(c.rows || []).length}`, () => select(i));
       tab.id = `candidate-tab-${i}`;
       tab.setAttribute("role", "tab");
       tab.setAttribute("aria-controls", "candidate-panel");
@@ -1138,11 +1144,11 @@ function queryLab() {
           event.key === "Home"
             ? 0
             : event.key === "End"
-              ? candidates.length - 1
+              ? retrievers.length - 1
               : (selected +
                   (event.key === "ArrowRight" ? 1 : -1) +
-                  candidates.length) %
-                candidates.length;
+                  retrievers.length) %
+                retrievers.length;
         select(next);
         tabs.children[next].focus();
       });
@@ -1151,6 +1157,8 @@ function queryLab() {
     panel.id = "candidate-panel";
     panel.setAttribute("role", "tabpanel");
     host.append(tabs, panel);
+    if (unknown.length)
+      host.append(notice("warning", "候选类型不可用", "部分候选 Artifact 缺少受支持的类型描述。"));
     select(0);
     return host;
   };
@@ -1188,7 +1196,7 @@ function queryLab() {
         "摘录 / Locator",
       ],
       values = rows.map((row) => [
-        `${row.documentLabel || "文档不可用"}\n${row.chunkId || "Chunk 不可用"}`,
+        `${row.documentLabel || "文档不可用"}\n${String(row.chunkId || "Chunk 不可用").slice(0, 12)}`,
         ...columns.map((column) => {
           const stage = row.stages?.[column.stageId] || {
             state: "NOT_PRESENT",
@@ -1223,41 +1231,136 @@ function queryLab() {
     }
     return host;
   };
+  const stageSummary = (stages, preflightOnly = false) => {
+    const host = el("section", "", { class: "query-stage-summary" });
+    host.append(
+      sectionHeader(
+        "query-stage-title",
+        "Resolved Plan",
+        `${stages.length} 个阶段`,
+      ),
+    );
+    if (!stages.length) {
+      host.append(emptyState("计划无阶段", "服务未返回可执行阶段。"));
+      return host;
+    }
+    for (const stage of stages) {
+      const state = preflightOnly ? "待执行" : statusLabel(stage.state),
+        tone = preflightOnly ? "neutral" : statusTone(stage.state),
+        row = el("article", "", { class: "query-stage-row" }),
+        copy = el("div", "", { class: "query-stage-copy" });
+      copy.append(
+        el("strong", stage.stageKey || stage.stageId || "阶段不可用"),
+        el("span", stage.pluginId || "Plugin 不可用", { class: "muted" }),
+      );
+      row.append(
+        statusTag(state, tone),
+        copy,
+        el(
+          "span",
+          preflightOnly || stage.durationMs == null
+            ? "耗时待定"
+            : `${stage.durationMs} ms`,
+          { class: "query-stage-duration" },
+        ),
+      );
+      host.append(row);
+    }
+    return host;
+  };
+  const planIdentity = (digest, stages) => {
+    const details = el("details", "", { class: "query-plan-identity" });
+    details.append(
+      el("summary", "Plan 与 Artifact 身份"),
+      definitionList([["Plan digest", digest]]),
+      attemptDetails(stages),
+    );
+    return details;
+  };
+  const renderPlan = (digest, stages, preflightOnly = false) => {
+    preview.replaceChildren(
+      stageSummary(stages, preflightOnly),
+      planIdentity(digest, preflightOnly ? [] : stages),
+    );
+  };
+  const stopCommand = (x) => {
+    const stop = button("", async () => {
+      stop.disabled = true;
+      status.textContent = "正在停止 Query Run…";
+      try {
+        await api(`/api/workbench/query-runs/${x.id}/stop`, { method: "POST" });
+        await load();
+      } catch {
+        status.textContent = "停止请求失败，可重试。";
+        stop.disabled = false;
+      }
+    });
+    stop.className = "query-primary-command query-stop-command";
+    stop.append(icon("close"), el("span", "停止"));
+    return stop;
+  };
+  const renderVerification = (details) => {
+    const trace = (details || []).filter(
+        (detail) => detailKind(detail) === "verification",
+      ),
+      host = el("section", "", { class: "verification-band" }),
+      latest = trace.at(-1),
+      head = el("div", "", { class: "verification-summary" });
+    head.append(
+      el("strong", "Verification"),
+      statusTag(
+        latest?.outcome || "不可用",
+        !latest
+          ? "neutral"
+          : String(latest.outcome).includes("pass")
+            ? "success"
+            : /clarification|abstain/.test(String(latest.outcome))
+              ? "warning"
+              : "failure",
+      ),
+      el("span", `${trace.length} 次尝试`, { class: "muted" }),
+    );
+    host.append(head);
+    if (trace.length) {
+      const detailHost = el("details", "", { class: "verification-attempts" });
+      detailHost.append(el("summary", "验证与有限修复详情"));
+      for (const [i, item] of trace.entries()) {
+        const attempt = el("div", "", { class: "verification-attempt" });
+        attempt.append(
+          el("strong", `#${i + 1} · ${item.outcome || "不可用"}`),
+          definitionList([
+            ["Failure codes", identityList(item.failureCodes)],
+            ["Missing citation keys", identityList(item.missingCitationKeys)],
+          ]),
+        );
+        detailHost.append(attempt);
+      }
+      host.append(detailHost);
+    } else host.append(el("span", "运行未返回 VerificationResult。", { class: "muted" }));
+    return host;
+  };
   const renderRun = (x) => {
     clearTimeout(timer);
     last = x;
+    status.setAttribute("role", "status");
+    runButton.hidden = true;
     stopHost.replaceChildren();
+    renderPlan(x.planDigest, x.stages || []);
     retrieval.replaceChildren(
       sectionHeader(
         "query-trace-title",
-        "有序执行 Trace",
-        `${(x.stages || []).length} 个阶段`,
+        "检索诊断",
+        "服务返回",
       ),
     );
-    const stages = (x.stages || []).map((s) => [
-      s.stageKey,
-      `#${s.attempt}`,
-      statusTag(statusLabel(s.state), statusTone(s.state)),
-      s.pluginId || "不可用",
-      s.durationMs == null ? "不可用" : `${s.durationMs} ms`,
-      s.failure?.code || "无",
-    ]);
     retrieval.append(
-      stages.length
-        ? denseTable(
-            ["阶段", "尝试", "状态", "Plugin", "耗时", "失败"],
-            stages,
-            "Query 有序阶段",
-          )
-        : emptyState("没有阶段 Trace", "运行未返回可展示阶段。"),
       renderCandidates(x.candidates || []),
-      el("h3", "决策路径"),
+      sectionHeader("query-decision-title", "Fusion / Rerank / Context", "权威决策路径"),
       decisionPath(x.decisionPath),
-      attemptDetails(x.stages || []),
     );
     const context = contextProjection(x.details);
     retrieval.append(
-      el("h3", "Context Shortage"),
+      sectionHeader("query-shortage-title", "Context Shortage", "上下文充分性"),
       context.shortages.length
         ? definitionList(
             context.shortages.flatMap((shortage, i) => [
@@ -1275,6 +1378,7 @@ function queryLab() {
                 shortage.selected_tokens ?? shortage.selectedTokens,
               ],
             ]),
+            "definition-grid context-shortage",
           )
         : emptyState("没有 Context Shortage", "运行未返回 shortage 状态。"),
     );
@@ -1288,20 +1392,8 @@ function queryLab() {
       const runState = x.terminalState ? statusLabel(x.state) : "正在运行";
       status.textContent = validRequestedRun === x.id ? `Query Run ${x.id} / ${runState}` : `Query Run ${runState}`;
       status.className = "query-status";
-      if (x.actions?.stop && !x.terminalState) {
-        const stop = button("停止", async () => {
-          stop.disabled = true;
-          status.textContent = "正在停止 Query Run…";
-          try {
-            await api(`/api/workbench/query-runs/${x.id}/stop`, { method: "POST" });
-            await load();
-          } catch {
-            status.textContent = "停止请求失败，可重试。";
-            stop.disabled = false;
-          }
-        });
-        stopHost.replaceChildren(stop);
-      }
+      if (x.actions?.stop && !x.terminalState)
+        stopHost.replaceChildren(stopCommand(x));
       if (!x.terminalState && x.state !== "FAILED") timer = setTimeout(load, 1000);
       return;
     }
@@ -1312,12 +1404,13 @@ function queryLab() {
           : final.state === "FAILED"
             ? "failure"
             : "warning",
-      band = el("section", "", { class: `final-state final-${tone}` });
-    band.append(
-      el("span", "权威最终状态", { class: "eyebrow" }),
+      band = el("section", "", { class: `final-state final-${tone}` }),
+      bandHead = el("header", "", { class: "final-state-head" });
+    bandHead.append(
+      el("h2", "答案"),
       statusTag(final.state, tone),
-      el("h2", final.state === "ANSWERED" ? "已验证答案" : "安全结果"),
     );
+    band.append(bandHead);
     if (final.state === "ANSWERED" && final.answer) {
       band.append(el("p", final.answer, { class: "answer-copy" }));
       const citations = el("div", "", { class: "citation-actions" });
@@ -1325,7 +1418,7 @@ function queryLab() {
         const item = (x.evidence || []).find((e) => e.citationKey === key);
         if (item?.sourceArtifactId)
           citations.append(
-            button(key, (e) =>
+            button(`${key} · ${item.locatorLabel || "定位不可用"}`, (e) =>
               inspector(
                 item.sourceArtifactId,
                 e.currentTarget,
@@ -1336,7 +1429,11 @@ function queryLab() {
       }
       band.append(citations);
     } else band.append(el("p", final.action || "结果不可用，未发布答案。"));
-    answer.replaceChildren(band, el("h3", "Evidence"));
+    answer.replaceChildren(
+      band,
+      renderVerification(x.details),
+      sectionHeader("query-evidence-title", "Evidence", "EvidenceSet/v1"),
+    );
     if (!(x.evidence || []).length)
       answer.append(
         emptyState("没有 Evidence", "该最终状态未返回可展示 Evidence。"),
@@ -1348,11 +1445,15 @@ function queryLab() {
         contributors = (item.contributors || []).map(
           (c) =>
             `${c.contributor_id ?? c.contributorId ?? "不可用"} / ${c.safe_score ?? c.safeScore ?? "不可用"}`,
-        );
+        ),
+        facts = el("div", "", { class: "evidence-summary" });
       head.append(
         el("strong", item.citationKey || "不可用"),
         el("span", item.documentLabel || "文档不可用"),
-        statusTag(decision?.reason || "Context 决策不可用", "neutral"),
+        statusTag(
+          decision?.reason || "Context 决策不可用",
+          /included|expanded/.test(String(decision?.reason)) ? "success" : "neutral",
+        ),
       );
       const actions = el("div", "", { class: "evidence-actions" });
       if (item.sourceArtifactId && item.sourceLocator)
@@ -1376,52 +1477,22 @@ function queryLab() {
           ["表格元素", identityList(item.tableElementIds)],
         ]),
       );
-      row.append(
-        head,
-        el("p", item.excerpt || "不可用"),
-        definitionList([
-          ["Locator", item.locatorLabel],
-          ["贡献者", identityList(contributors)],
-          ["决策理由", decision?.reason],
-        ]),
-        actions,
-        details,
+      facts.append(
+        el("span", item.locatorLabel || "定位不可用", { class: "evidence-locator" }),
+        el("span", `贡献 ${identityList(contributors)}`, { class: "muted" }),
+        el("span", `纳入理由 ${decision?.reason || "不可用"}`, { class: "muted" }),
       );
+      row.append(head, el("p", item.excerpt || "不可用"), facts, actions, details);
       answer.append(row);
     }
-    const trace = (x.details || []).filter(
-      (d) => detailKind(d) === "verification",
-    );
-    answer.append(el("h3", "验证与有限修复"));
-    if (trace.length)
-      for (const [i, d] of trace.entries()) {
-        const details = el("details", "", { class: "verification-attempt" });
-        details.append(el("summary", `Verification #${i + 1} / ${d.outcome || "不可用"}`), definitionList([["Failure codes", identityList(d.failureCodes)], ["Missing citation keys", identityList(d.missingCitationKeys)]]));
-        answer.append(details);
-      }
-    else answer.append(emptyState("没有验证详情", "运行未返回 VerificationResult。"));
     const runState = x.terminalState ? statusLabel(x.state) : "正在运行";
     status.textContent =
       validRequestedRun === x.id
         ? `Query Run ${x.id} / ${runState}`
         : `Query Run ${runState}`;
     status.className = "query-status";
-    if (x.actions?.stop && !x.terminalState) {
-      const stop = button("停止", async () => {
-        stop.disabled = true;
-        status.textContent = "正在停止 Query Run…";
-        try {
-          await api(`/api/workbench/query-runs/${x.id}/stop`, {
-            method: "POST",
-          });
-          await load();
-        } catch {
-          status.textContent = "停止请求失败，可重试。";
-          stop.disabled = false;
-        }
-      });
-      stopHost.replaceChildren(stop);
-    }
+    if (x.actions?.stop && !x.terminalState)
+      stopHost.replaceChildren(stopCommand(x));
     if (!x.terminalState && x.state !== "FAILED")
       timer = setTimeout(load, 1000);
   };
@@ -1453,6 +1524,7 @@ function queryLab() {
     const version = ++requestVersion;
     pending = true;
     reset(false);
+    status.setAttribute("role", "status");
     [question, profile, index, runButton].forEach((x) => (x.disabled = true));
     status.textContent = "正在解析 Query Profile…";
     try {
@@ -1466,30 +1538,16 @@ function queryLab() {
         }),
       });
       if (version !== requestVersion) return;
-      const plan = el("section", "", { class: "query-preflight" }),
-        stageRows = (p.stages || []).map((s) => [
-          s.stageId,
-          s.kind,
-          s.pluginId,
-        ]);
-      plan.append(
-        el("h2", "已解析计划"),
-        definitionList([["Plan digest", p.planDigest]]),
-        stageRows.length
-          ? denseTable(
-              ["阶段", "类型", "Plugin"],
-              stageRows,
-              "已解析 Query 计划",
-            )
-          : emptyState("计划无阶段", "服务未返回可执行阶段。"),
-      );
+      const plan = el("section", "", { class: "query-preflight" });
+      runButton.hidden = true;
+      renderPlan(p.planDigest, p.stages || [], true);
       const ack = el("input", "", {
           type: "checkbox",
           "aria-label": "确认外部阶段披露",
         }),
         external = p.disclosure?.externalStages || [],
         submit = button(
-          "创建 Query Run",
+          "",
           async () => {
             const submitVersion = requestVersion;
             submit.disabled = true;
@@ -1514,6 +1572,8 @@ function queryLab() {
           },
           external.length > 0,
         );
+      submit.className = "query-primary-command";
+      submit.append(icon("play"), el("span", "创建 Query Run"));
       if (external.length) {
         const disclose = notice(
           "warning",
@@ -1526,7 +1586,7 @@ function queryLab() {
         plan.append(disclose, label);
       }
       plan.append(submit);
-      preview.replaceChildren(plan);
+      preview.append(plan);
       status.textContent = "预检完成，可创建 Query Run。";
     } catch {
       if (version === requestVersion) {
@@ -1546,17 +1606,15 @@ function queryLab() {
   };
   const controls = el("div", "", { class: "query-control-fields" });
   controls.append(
-    el("label", "问题"),
-    question,
-    el("label", "Query Profile"),
-    profile,
-    el("label", "已索引 Artifact"),
-    index,
-    runButton,
+    el("label", "问题"), question,
+    el("label", "Query Profile"), profile,
+    el("label", "已索引 Artifact"), index,
+    el("div", "", { class: "query-command-host" }),
     status,
     stopHost,
     preview,
   );
+  controls.querySelector(".query-command-host").append(runButton);
   control.append(
     sectionHeader("query-control-title", "执行控制", "服务权威"),
     controls,
