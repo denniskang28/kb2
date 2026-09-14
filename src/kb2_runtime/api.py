@@ -41,8 +41,15 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         # The local runner is a workbench dependency; DeepSeek remains unprobed.
         return await health.report(("runner.container",), probe_external=False)
 
+    async def registry_readiness():
+        report = await overview_health()
+        capabilities = {item.id: item.status == "ready" for item in report.capabilities}
+        runners = {RunnerType.CONTAINER: capabilities.get("runner.container", False)}
+        return capabilities, runners
+
     app.state.workbench_overview = None
     app.state.workbench_studio = None
+    app.state.workbench_registry = None
     app.state.workbench_query_runner = None
     app.state.workbench_documents = None
     app.state.workbench_query = None
@@ -60,13 +67,15 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
                 runs = RunService(repository)
                 executor = PluginExecutor(bootstrap_registry(), {RunnerType.IN_PROCESS: InProcessRunner()}, runs, artifacts)
                 runner = QueryEngine(executor, runs, artifacts)
-            async def registry_readiness():
-                report = await overview_health()
-                capabilities = {item.id: item.status == "ready" for item in report.capabilities}
-                runners = {RunnerType.CONTAINER: capabilities.get("runner.container", False)}
-                return capabilities, runners
             app.state.workbench_studio = StudioService(repository=repository, query_runner=runner, readiness=registry_readiness)
         return app.state.workbench_studio
+
+    async def registry() -> StudioService:
+        # Descriptor inspection is process-local. It must remain available when
+        # the optional Run-history projection cannot connect to PostgreSQL.
+        if app.state.workbench_registry is None:
+            app.state.workbench_registry = StudioService(readiness=registry_readiness)
+        return app.state.workbench_registry
 
     async def documents() -> DocumentWorkbenchService:
         if app.state.workbench_documents is None:
@@ -198,8 +207,12 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
         return JSONResponse(result.model_dump(mode="json"))
 
     @app.get("/api/workbench/plugins")
-    async def workbench_plugins(kind: str | None = Query(default=None, max_length=48), runner: str | None = Query(default=None, pattern="^(in_process|container)$"), readiness: str | None = Query(default=None, pattern="^(available|unavailable)$"), q: str = Query(default="", max_length=64)) -> JSONResponse:
-        return JSONResponse([x.model_dump(mode="json", exclude_none=True) for x in await (await studio()).list_plugins(kind, runner, readiness, q)])
+    async def workbench_plugins(kind: str | None = Query(default=None, max_length=48), runner: str | None = Query(default=None, pattern="^(|in_process|container)$"), readiness: str | None = Query(default=None, pattern="^(|available|unavailable)$"), q: str = Query(default="", max_length=64)) -> JSONResponse:
+        try:
+            items = await (await registry()).list_plugins(kind or None, runner or None, readiness or None, q)
+        except Exception:
+            return problem("PLUGIN_REGISTRY_UNAVAILABLE", 503)
+        return JSONResponse([x.model_dump(mode="json", exclude_none=True) for x in items])
 
     @app.get("/api/workbench/plugins/compatible")
     async def compatible_workbench_plugins(stageKind: str = Query(pattern=r"^[a-z][a-z0-9_.-]{0,47}$")) -> JSONResponse:
@@ -214,7 +227,26 @@ def create_app(settings: Settings | None = None, catalog: CapabilityCatalog | No
 
     @app.get("/api/workbench/plugins/{plugin_id}")
     async def workbench_plugin(plugin_id: str) -> JSONResponse:
-        item = await (await studio()).plugin_detail(plugin_id)
+        try:
+            item = await (await registry()).plugin_detail(plugin_id)
+        except Exception:
+            return problem("PLUGIN_REGISTRY_UNAVAILABLE", 503)
+        if item is not None:
+            repository = None
+            try:
+                repository = await TraceRepository.connect(**runtime_settings.connection_kwargs())
+                enriched = await StudioService(repository=repository, readiness=registry_readiness).plugin_detail(plugin_id)
+                if enriched is not None:
+                    item = enriched
+            except Exception:
+                # Contract metadata remains useful without optional Run history.
+                pass
+            finally:
+                if repository is not None:
+                    try:
+                        await repository.close()
+                    except Exception:
+                        pass
         return JSONResponse(item.model_dump(mode="json", exclude_none=True) if item else {"contractVersion": "workbench-problem/v1", "code": "PLUGIN_NOT_FOUND"}, status_code=200 if item else 404)
 
     @app.get("/api/workbench/query-lab/options")

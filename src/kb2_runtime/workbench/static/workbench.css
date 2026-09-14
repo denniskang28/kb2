@@ -189,7 +189,9 @@ h3 { margin: 13px 0 4px; font-size: 12px; }
 
 /* Existing downstream workbench surfaces retain their selectors and behavior. */
 .empty { padding: 16px; color: var(--color-subtle); }
-.studio-layout, .registry-layout { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); min-height: calc(100vh - 110px); }
+.studio-layout, .registry-layout { display: grid; }
+.studio-layout { grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); min-height: calc(100vh - 110px); }
+.registry-layout { grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); height: calc(100vh - 174px); min-height: 420px; }
 .studio-list, .registry-list { display: flex; flex-direction: column; gap: 6px; padding: 10px; background: var(--color-ground); border-right: 1px solid var(--color-rule); overflow: auto; }
 .studio-list button, .registry-list button { text-align: left; }
 .studio-editor, .registry-detail { padding: 16px; min-width: 0; overflow: auto; }
@@ -204,6 +206,11 @@ h3 { margin: 13px 0 4px; font-size: 12px; }
 .error { color: var(--color-failure); }
 .muted { font-size: 11px; color: var(--color-subtle); }
 .registry-tools { padding: 10px 16px; border-bottom: 1px solid var(--color-rule); }
+.registry-summary { padding: 8px 10px; color: var(--color-subtle); border-bottom: 1px solid var(--color-rule); }
+.registry-list .table-wrap { width: 100%; }
+.registry-list .dense-table { min-width: 560px; }
+.registry-select { border: 0; padding: 0; background: transparent; color: var(--color-link); font: 600 12px ui-monospace, monospace; text-align: left; }
+.registry-select:hover { text-decoration: underline; }
 .document-form, .artifact-panel { padding: 16px; border-bottom: 1px solid var(--color-rule); display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; min-width: 0; }
 .artifact-panel { display: block; }
 .artifact-panel .schema { max-height: 520px; }
@@ -423,6 +430,7 @@ h3 { margin: 13px 0 4px; font-size: 12px; }
   .overview-error-frames { grid-template-columns: 1fr; }
   .overview-error-frames > * + * { border-left: 0; border-top: 1px solid var(--color-rule); }
   .studio-layout, .registry-layout { grid-template-columns: 1fr; }
+  .registry-layout { height: auto; min-height: 0; }
   .studio-list, .registry-list { border-right: 0; border-bottom: 1px solid var(--color-rule); max-height: 220px; }
   .stage-row { flex-wrap: wrap; }
   .registry-detail.inspector-drawer.open { display: block; position: fixed; z-index: 50; inset: 0 0 0 auto; width: min(92vw, 520px); background: var(--color-surface); border-left: 2px solid var(--color-ink); overflow: auto; }
