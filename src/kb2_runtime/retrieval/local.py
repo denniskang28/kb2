@@ -43,25 +43,27 @@ def _lexical_scores(request: RetrieverRequest, documents, hierarchy: bool = Fals
         return {}
     query = Counter(_terms(request.query))
     total = len(documents)
-    lengths = {}
+    lengths, frequencies, document_frequencies = {}, {}, Counter()
     for item in documents:
         _check_active(request)
-        lengths[item.chunk_id] = max(1, len(_terms((" ".join(item.hierarchy_context) + " " if hierarchy else "") + item.keyword_text)))
+        tokens = _terms((" ".join(item.hierarchy_context) + " " if hierarchy else "") + item.keyword_text)
+        item_frequencies = Counter(tokens)
+        lengths[item.chunk_id] = max(1, len(tokens))
+        frequencies[item.chunk_id] = item_frequencies
+        for term in query:
+            if term in item_frequencies:
+                document_frequencies[term] += 1
     average = sum(lengths.values()) / total
     scores: dict[str, float] = {}
     for item in documents:
         _check_active(request)
-        text = (" ".join(item.hierarchy_context) + " " if hierarchy else "") + item.keyword_text
-        frequencies = Counter(_terms(text)); score = 0.0
+        item_frequencies = frequencies[item.chunk_id]
+        score = 0.0
         for term, count in query.items():
             _check_active(request)
-            frequency = frequencies.get(term, 0)
+            frequency = item_frequencies.get(term, 0)
             if frequency:
-                df = 0
-                for candidate in documents:
-                    _check_active(request)
-                    if term in _terms((" ".join(candidate.hierarchy_context) + " " if hierarchy else "") + candidate.keyword_text):
-                        df += 1
+                df = document_frequencies[term]
                 idf = math.log(1 + (total - df + 0.5) / (df + 0.5))
                 score += count * idf * frequency * 2.2 / (frequency + 1.2 * (1 - 0.75 + 0.75 * lengths[item.chunk_id] / average))
         scores[item.chunk_id] = score

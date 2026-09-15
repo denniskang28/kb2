@@ -112,6 +112,21 @@ def test_local_scoring_observes_cancellation_and_deadline_during_work(monkeypatc
     assert raised.value.code is PluginErrorCode.CANCELLED
 
 
+def test_keyword_scoring_tokenizes_each_document_once(monkeypatch) -> None:
+    result = index()
+    calls = 0
+    original_terms = local._terms
+
+    def counted_terms(text: str):
+        nonlocal calls
+        calls += 1
+        return original_terms(text)
+
+    monkeypatch.setattr(local, "_terms", counted_terms)
+    KeywordRetriever().retrieve(request(result, query="revenue metrics"))
+    assert calls == len(result.documents) + 1
+
+
 def test_hierarchy_relation_modes_emit_only_the_declared_linked_chunks() -> None:
     result = index("long-hierarchy-canonical.json")
     parent = HierarchyRetriever().retrieve(
