@@ -534,6 +534,34 @@ def test_plan_metadata_allows_identity_digests_but_not_secrets() -> None:
     assert metadata_contains_sensitive_text({"configuration": {"api_key": CANARY_SECRET}})
 
 
+def test_plan_metadata_allows_registered_provider_labels_only_for_plan_snapshots() -> None:
+    plan = {
+        "plugin_id": "generator.deepseek@1",
+        "configuration": {"model": "deepseek-v4-flash"},
+    }
+    assert metadata_contains_sensitive_text(plan)
+    assert not metadata_contains_sensitive_text(plan, allow_registered_provider_labels=True)
+    assert metadata_contains_sensitive_text(
+        {"configuration": {"provider_response": "deepseek response body"}},
+        allow_registered_provider_labels=True,
+    )
+
+
+def test_repository_persists_plan_with_registered_provider_labels() -> None:
+    async def persist() -> CapturingConnection:
+        connection = CapturingConnection([None])  # type: ignore[list-item]
+        plan = {
+            "plugin_id": "generator.deepseek@1",
+            "configuration": {"model": "deepseek-v4-flash"},
+        }
+        await TraceRepository(connection).create_plan(plan_digest(plan), plan)  # type: ignore[arg-type]
+        return connection
+
+    connection = asyncio.run(persist())
+    assert any("INSERT INTO execution_plan_snapshots" in statement for statement, _ in connection.cursor_instance.executions)
+    assert connection.commits == 1
+
+
 def test_parent_lineage_contract_rejects_duplicates() -> None:
     content = b"x"
     parent = uuid4()

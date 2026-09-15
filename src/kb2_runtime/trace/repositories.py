@@ -32,7 +32,10 @@ class TraceRepository:
             canonical = json.dumps(plan, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
         except (TypeError, ValueError) as exc:
             raise TraceError(TraceErrorCode.PLAN_SNAPSHOT_INVALID) from exc
-        if metadata_contains_sensitive_text(plan) or hashlib.sha256(canonical).hexdigest() != digest:
+        if (
+            metadata_contains_sensitive_text(plan, allow_registered_provider_labels=True)
+            or hashlib.sha256(canonical).hexdigest() != digest
+        ):
             raise TraceError(TraceErrorCode.PLAN_SNAPSHOT_INVALID)
         async with self.connection.cursor() as cursor:
             await cursor.execute("SELECT id, plan_json FROM execution_plan_snapshots WHERE plan_digest = %s", (digest,))

@@ -23,6 +23,9 @@ _SENSITIVE_TEXT = re.compile(
     re.IGNORECASE,
 )
 _DIGEST_FIELDS = frozenset({"implementation_digest", "configuration_digest", "content_digest", "plan_digest"})
+_REGISTERED_PROVIDER_LABEL = re.compile(
+    r"(?:generator\.deepseek(?:-high-precision)?@[1-9][0-9]*|deepseek-v4-(?:flash|pro))"
+)
 
 
 def safe_metadata_text(value: str) -> str:
@@ -33,17 +36,26 @@ def safe_metadata_text(value: str) -> str:
     return normalized
 
 
-def metadata_contains_sensitive_text(value: object) -> bool:
+def metadata_contains_sensitive_text(value: object, *, allow_registered_provider_labels: bool = False) -> bool:
     """Detect unsafe text in resolved-plan JSON, which cannot be redacted without changing its digest."""
     if isinstance(value, str):
+        if allow_registered_provider_labels and _REGISTERED_PROVIDER_LABEL.fullmatch(value):
+            return False
         return safe_metadata_text(value) == "[redacted]"
     if isinstance(value, dict):
         return any(
-            metadata_contains_sensitive_text(key) or (key not in _DIGEST_FIELDS and metadata_contains_sensitive_text(item))
+            metadata_contains_sensitive_text(key, allow_registered_provider_labels=allow_registered_provider_labels)
+            or (
+                key not in _DIGEST_FIELDS
+                and metadata_contains_sensitive_text(item, allow_registered_provider_labels=allow_registered_provider_labels)
+            )
             for key, item in value.items()
         )
     if isinstance(value, (list, tuple)):
-        return any(metadata_contains_sensitive_text(item) for item in value)
+        return any(
+            metadata_contains_sensitive_text(item, allow_registered_provider_labels=allow_registered_provider_labels)
+            for item in value
+        )
     return False
 
 
