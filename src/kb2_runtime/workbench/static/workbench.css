@@ -513,7 +513,7 @@ h3 { margin: 13px 0 4px; font-size: 12px; }
 .studio-dialog-form .dialog-field input { color: var(--color-ink); }
 .dialog-error:empty { display: none; }
 .dialog-error { padding: 7px; border: 1px solid var(--color-failure); background: var(--color-failure-bg); color: var(--color-failure); font-size: 11px; }
-.studio-dialog-form .dialog-actions, .upload-dialog > .dialog-actions { margin: 4px -12px -12px; }
+.studio-dialog-form .dialog-actions { margin: 4px -12px -12px; }
 
 /* S-024 document intake and immutable ingestion trace. */
 .eyebrow { display: block; color: var(--color-accent); font-size: 10px; font-weight: 800; text-transform: uppercase; }
