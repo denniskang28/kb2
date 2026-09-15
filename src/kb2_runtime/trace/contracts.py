@@ -23,6 +23,7 @@ _SENSITIVE_TEXT = re.compile(
     re.IGNORECASE,
 )
 _DIGEST_FIELDS = frozenset({"implementation_digest", "configuration_digest", "content_digest", "plan_digest"})
+_PLAN_IDENTITY_FIELDS = _DIGEST_FIELDS | frozenset({"artifact_id"})
 _REGISTERED_PROVIDER_LABEL = re.compile(
     r"(?:generator\.deepseek(?:-high-precision)?@[1-9][0-9]*|deepseek-v4-(?:flash|pro))"
 )
@@ -46,7 +47,9 @@ def metadata_contains_sensitive_text(value: object, *, allow_registered_provider
         return any(
             metadata_contains_sensitive_text(key, allow_registered_provider_labels=allow_registered_provider_labels)
             or (
-                key not in _DIGEST_FIELDS
+                key not in (
+                    _PLAN_IDENTITY_FIELDS if allow_registered_provider_labels else _DIGEST_FIELDS
+                )
                 and metadata_contains_sensitive_text(item, allow_registered_provider_labels=allow_registered_provider_labels)
             )
             for key, item in value.items()

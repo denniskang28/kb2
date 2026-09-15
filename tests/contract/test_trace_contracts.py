@@ -538,12 +538,16 @@ def test_plan_metadata_allows_registered_provider_labels_only_for_plan_snapshots
     plan = {
         "plugin_id": "generator.deepseek@1",
         "configuration": {"model": "deepseek-v4-flash"},
+        "search_artifact": {"artifact_id": "fa6e7234-f18a-4c46-8c08-5b558ecb4f3a"},
     }
     assert metadata_contains_sensitive_text(plan)
     assert not metadata_contains_sensitive_text(plan, allow_registered_provider_labels=True)
     assert metadata_contains_sensitive_text(
         {"configuration": {"provider_response": "deepseek response body"}},
         allow_registered_provider_labels=True,
+    )
+    assert metadata_contains_sensitive_text(
+        {"summary": "A" * 32}, allow_registered_provider_labels=True
     )
 
 
