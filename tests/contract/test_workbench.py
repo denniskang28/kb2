@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from uuid import UUID
 
@@ -12,6 +13,9 @@ import kb2_runtime.api as api_module
 from kb2_runtime.api import create_app
 from kb2_runtime.config import CapabilityCatalog, Settings
 from kb2_runtime.health.contracts import HealthReport
+from kb2_runtime.trace.contracts import ArtifactManifest
+from kb2_runtime.workbench.contracts import WorkspaceProfileSummary
+from kb2_runtime.workbench.query import QueryWorkbenchService
 from kb2_runtime.workbench.service import WorkbenchOverviewService
 
 
@@ -57,6 +61,99 @@ def test_workbench_shell_and_assets_are_served_for_all_eight_routes(
         font = client.get(f"/workbench/assets/archivo-{weight}.woff2")
         assert font.status_code == 200
         assert font.headers["content-type"] == "font/woff2"
+
+
+def test_query_options_projects_real_profile_datetime_and_ordered_indexes(
+    settings: Settings, catalog: CapabilityCatalog, monkeypatch
+) -> None:
+    now = datetime(2026, 9, 15, 8, 30, tzinfo=timezone.utc)
+    profile = WorkspaceProfileSummary(
+        profileId="text-hybrid",
+        kind="query",
+        stageCount=5,
+        stageSummary="keyword · vector · fusion · context · generation",
+        documentDigest="c" * 64,
+        validationState="VALID",
+        diagnosticCount=0,
+        checkedAt=now,
+        updatedAt=now,
+    )
+    index_ids = (
+        UUID("00000000-0000-0000-0000-000000000102"),
+        UUID("00000000-0000-0000-0000-000000000101"),
+    )
+    indexes = tuple(
+        ArtifactManifest(
+            id=identifier,
+            artifact_type="search.index.result",
+            schema_revision="v1",
+            content_digest=f"{position}" * 64,
+            byte_size=position,
+            storage_locator=f"sha256/fixture/{identifier}",
+            producing_run_id=UUID(int=position + 10),
+            producing_stage_attempt_id=UUID(int=position + 20),
+            producing_plugin_id="index.fixture@1",
+            configuration_digest="d" * 64,
+            summary=f"index {position}",
+        )
+        for position, identifier in enumerate(index_ids, start=1)
+    )
+
+    class Profiles:
+        async def list_profiles(self, kind: str):
+            assert kind == "query"
+            return (profile,)
+
+    class IndexRepository:
+        async def list_artifact_manifests(self, artifact_type: str, schema_revision: str, limit: int):
+            assert (artifact_type, schema_revision, limit) == ("search.index.result", "v1", 100)
+            return indexes
+
+    service = QueryWorkbenchService(
+        Profiles(), None, None, None, SimpleNamespace(repository=IndexRepository())
+    )  # type: ignore[arg-type]
+    service_payload = __import__("asyncio").run(service.options())
+    assert json.loads(json.dumps(service_payload)) == service_payload
+    expected_updated_at = profile.model_dump(mode="json")["updatedAt"]
+    assert service_payload["profiles"] == [{"profileId": "text-hybrid", "updatedAt": expected_updated_at}]
+
+    client = _client(settings, catalog, monkeypatch)
+    client.app.state.workbench_query = service
+    response = client.get("/api/workbench/query-lab/options")
+
+    assert response.status_code == 200
+    assert response.json() == service_payload
+    assert response.json()["contractVersion"] == "workbench-query-options/v1"
+    assert response.json()["profiles"][0]["updatedAt"] == expected_updated_at
+    assert [item["id"] for item in response.json()["indexes"]] == [str(identifier) for identifier in index_ids]
+    assert all(item["artifactType"] == "search.index.result" for item in response.json()["indexes"])
+
+
+def test_query_options_preserves_safe_503_for_genuine_dependency_failure(
+    settings: Settings, catalog: CapabilityCatalog, monkeypatch
+) -> None:
+    class Profiles:
+        async def list_profiles(self, kind: str):
+            assert kind == "query"
+            return ()
+
+    class FailingIndexRepository:
+        async def list_artifact_manifests(self, *_args):
+            raise RuntimeError("fixture catalog unavailable")
+
+    service = QueryWorkbenchService(
+        Profiles(), None, None, None, SimpleNamespace(repository=FailingIndexRepository())
+    )  # type: ignore[arg-type]
+    client = _client(settings, catalog, monkeypatch)
+    client.app.state.workbench_query = service
+
+    response = client.get("/api/workbench/query-lab/options")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "contractVersion": "workbench-problem/v1",
+        "code": "QUERY_OPTIONS_UNAVAILABLE",
+    }
 
 
 def test_overview_uses_non_probing_health_and_keeps_optional_state_separate(

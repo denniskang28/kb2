@@ -4,7 +4,7 @@ import hashlib
 import asyncio
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -354,6 +354,86 @@ def test_document_artifact_manifest_query_consumes_fetched_ids_and_filters_missi
     result, requested = asyncio.run(exercise())
     assert [item.id for item in result] == [requested[0], requested[2]]
     assert len(requested) == 3
+
+
+@pytest.mark.parametrize(
+    ("identifier_values", "missing_values", "expected_values"),
+    (
+        ((), (), ()),
+        ((1,), (), (1,)),
+        ((3, 2, 1), (), (3, 2, 1)),
+        ((3, 2, 1), (2,), (3, 1)),
+    ),
+)
+def test_artifact_manifest_catalog_hydrates_bounded_identifiers_sequentially(
+    identifier_values: tuple[int, ...],
+    missing_values: tuple[int, ...],
+    expected_values: tuple[int, ...],
+) -> None:
+    async def exercise() -> tuple[tuple[ArtifactManifest, ...], list[object], CapturingConnection]:
+        identifiers = tuple(UUID(int=value) for value in identifier_values)
+        missing = {UUID(int=value) for value in missing_values}
+
+        class ResultsCursor(CapturingCursor):
+            open = False
+
+            async def __aenter__(self) -> "ResultsCursor":
+                self.open = True
+                return self
+
+            async def __aexit__(self, *args: object) -> None:
+                self.open = False
+
+            async def fetchall(self) -> list[dict[str, Any]]:
+                return [{"id": identifier} for identifier in identifiers]
+
+        connection = CapturingConnection([])
+        cursor = ResultsCursor([])
+        connection.cursor_instance = cursor
+        producing_run_id, producing_stage_attempt_id = uuid4(), uuid4()
+
+        class Repository(TraceRepository):
+            requested: list[object] = []
+            hydration_active = False
+
+            async def get_artifact_manifest(self, artifact_id):
+                assert not cursor.open
+                assert not self.hydration_active
+                self.hydration_active = True
+                self.requested.append(artifact_id)
+                await asyncio.sleep(0)
+                self.hydration_active = False
+                if artifact_id in missing:
+                    return None
+                return ArtifactManifest(
+                    id=artifact_id,
+                    artifact_type="search.index.result",
+                    schema_revision="v1",
+                    content_digest="a" * 64,
+                    byte_size=1,
+                    storage_locator=f"sha256/aa/{artifact_id}",
+                    producing_run_id=producing_run_id,
+                    producing_stage_attempt_id=producing_stage_attempt_id,
+                    producing_plugin_id="index.fixture@1",
+                    configuration_digest="b" * 64,
+                    summary="fixture index",
+                )
+
+        repository = Repository(connection)  # type: ignore[arg-type]
+        result = await repository.list_artifact_manifests("search.index.result", "v1", 17)
+        return result, repository.requested, connection
+
+    result, requested, connection = asyncio.run(exercise())
+    assert isinstance(result, tuple)
+    assert [item.id.int for item in result] == list(expected_values)
+    assert [identifier.int for identifier in requested] == list(identifier_values)
+    statement, parameters = connection.cursor_instance.executions[0]
+    normalized = " ".join(statement.split())
+    assert normalized == (
+        "SELECT id FROM artifacts WHERE artifact_type=%s AND schema_revision=%s "
+        "ORDER BY id DESC LIMIT %s"
+    )
+    assert parameters == ("search.index.result", "v1", 17)
 
 
 def test_artifact_service_rolls_back_when_document_catalog_insert_fails() -> None:

@@ -2,23 +2,28 @@
 
 ## Status
 
-Approved for Story Pipeline workspace/information-density parity repair.
+Approved for Story Pipeline Query-options manifest-list and serialization
+defect repair.
 
 ## Story Contract Snapshot
 
 - Story: `S-025`, confirmed 2026-09-11 and implemented 2026-09-13.
-- Repair base: `main@aa584cc`; delivery branch
-  `feature/s-025-query-lab-workspace-parity`.
-- Repair target: recompose the delivered Query Lab into the adopted fixed,
-  dense diagnostic workbench hierarchy from UI-008 and UI-013 without changing
-  the Query engine, persisted data, or delivered workbench read projection.
+- Repair base: `main@01c0f58`; delivery branch
+  `feature/s-025-query-options-manifest-list`.
+- Repair target: restore the delivered Query Lab options endpoint by correcting
+  the bounded Artifact-manifest repository iteration defect and projecting the
+  real Studio summary datetime to its existing ISO wire value, without changing
+  product behavior, API shape, UI, query execution, or persisted data.
 - Exact sources checked: the S-025 contract; `docs/ui/reference.md#UI-005`,
   `UI-008`, and `UI-013`; prototype `isQuery` at archive entry line 778 and
   `artOpen` at line 1451; current Query workbench service/client/styles;
   Query/browser tests and S-025 visual manifest; S-024 Inspector behavior;
   S-027 diagnosis-route context; S-028 document-submission persistence; and
   the viewport, pane-scroll, compact-toolbar, and drawer patterns delivered for
-  the current Plugin Registry.
+  the current Plugin Registry. For this defect repair, the exact additional
+  sources are `TraceRepository.list_artifact_manifests()`,
+  `QueryWorkbenchService.options()`, the Query options route, and their focused
+  repository/API regression surfaces.
 - Material decisions requiring approval: None. The user's instruction to apply
   the recommended bounded repair authorizes this design and immediate
   development.
@@ -34,14 +39,15 @@ Approved for Story Pipeline workspace/information-density parity repair.
 | 5 | Keep external generation disclosure visible before the create-Run command whenever preflight returns external stages. Compactness may collapse plan identity and attempt diagnostics only after authority changes; it may not hide an unacknowledged boundary, credentials, provider bodies, paths, raw payloads, or vectors. | Existing preflight disclosure and recursive safe-response tests remain green. Browser geometry checks prove the disclosure, acknowledgement, and blocked create command are simultaneously reachable without overlapping or escaping the control pane. |
 | 6 | On desktop, use a viewport-bound page and approximately `28% / 40% / 32%` control/retrieval/answer tracks with independent vertical scrolling. Remove blanket pane padding in favor of compact ruled bands. Retain below-900 px stacking and document scrolling. Keep the fourteen reviewed 1440/644 goldens, refresh them for the new composition, and add non-golden 1280/900 boundary geometry tests. | Visual comparison retains all fourteen scenario captures. Geometry/accessibility tests cover exact 1440/1280/900 desktop containment and proportions, independent pane scrolling, first-view visibility, scoped table overflow, the 644 stacked order, positive target sizes, and no incoherent overlap or document-level horizontal overflow. |
 
-## Current Code Findings
+## Delivered Workspace-Parity Code Findings
 
 - `QueryWorkbenchService` already owns Profile/index eligibility, rotating
   single-use preflight, external acknowledgement, Run/Stop authority, ordered
   Trace reading, typed Artifact validation, exact pinned-index joins,
   lineage-proven source resolution, final-response validation, and bounded safe
-  projection. No service, API, repository, engine, or durable data change is
-  needed for this repair.
+  projection. No service, API, repository, engine, or durable data change was
+  needed for that presentation repair; the current repository defect is scoped
+  separately below.
 - `workbench-query-run/v1` already returns stage `durationMs`, candidate
   Artifact type and rows, safe document/excerpt/locator display facts, the
   exact server-owned `decisionPath`, Evidence, context/verification detail, and
@@ -73,6 +79,169 @@ Approved for Story Pipeline workspace/information-density parity repair.
   1440 and 644 px. The fixture still exposes route tokens such as
   `fact-answered` in the visible question, provides only one raw Retriever set,
   and does not visually prove simultaneous selected and dropped decision rows.
+
+## Query Options Manifest-List And Serialization Defect Repair
+
+This section is the only new implementation scope for `main@01c0f58`. The
+workspace, read-projection, provenance, final-state, and visual designs below
+remain delivered and unchanged.
+
+### Reproduction And Root Cause
+
+- The running application on port 8010 returns HTTP 503 with
+  `QUERY_OPTIONS_UNAVAILABLE` from `/api/workbench/query-lab/options` even
+  though `/api/workbench/profiles?kind=query` returns the valid `text-hybrid`
+  Query Profile and PostgreSQL contains nine `search.index.result/v1`
+  Artifacts.
+- `QueryWorkbenchService.options()` correctly requests the bounded repository
+  catalog and the API route correctly converts an unexpected exception to its
+  existing safe 503 response.
+- `TraceRepository.list_artifact_manifests()` currently places `await` inside a
+  generator expression and passes that expression to `tuple()`. The expression
+  is therefore an `async_generator`, which synchronous `tuple()` cannot consume,
+  raising `TypeError` before any options response can be built.
+- After that repository defect is corrected, the real endpoint still returns
+  503: Studio `list_profiles()` returns `WorkspaceProfileSummary.updatedAt` as
+  a Python `datetime`, while `QueryWorkbenchService.options()` copies it into a
+  plain dictionary and the route passes that dictionary directly to
+  `JSONResponse`. Starlette's JSON serialization rejects the datetime. Browser
+  fixtures use a preformatted string and therefore did not exercise this real
+  object boundary.
+
+### Minimal Repository Repair
+
+Keep the public method signature and SQL unchanged:
+
+```python
+async def list_artifact_manifests(
+    artifact_type: str,
+    schema_revision: str,
+    limit: int = 100,
+) -> tuple[ArtifactManifest, ...]
+```
+
+The query continues to filter by exact `artifact_type` and `schema_revision`,
+order identifiers by `id DESC`, and apply the caller-supplied SQL `LIMIT` before
+manifest hydration. After the identifier cursor closes, use an explicit
+sequential async loop:
+
+```text
+manifests = []
+for identifier in identifiers, in returned SQL order:
+    manifest = await get_artifact_manifest(identifier)
+    if manifest is not None:
+        append manifest
+return tuple(manifests)
+```
+
+Do not use an async generator, synchronous `tuple()` over awaitable work,
+`asyncio.gather`, a second unbounded catalog query, or a changed ordering.
+Sequential hydration is intentional because the repository owns one async
+connection and because it preserves the exact identifier order. A manifest
+that disappears or otherwise resolves to `None` between the bounded identifier
+read and hydration is skipped; remaining records keep their relative order.
+The observable results are `()` for no identifiers, a one-item tuple for one
+resolved identifier, and an ordered tuple of all non-`None` manifests for
+multiple identifiers.
+
+### JSON-Safe Options Projection
+
+`QueryWorkbenchService.options()` owns the narrow
+`workbench-query-options/v1` projection, so it also owns conversion of the
+selected Studio fields to their wire forms. For each real
+`WorkspaceProfileSummary`, use its Pydantic JSON-mode projection and retain only
+`profileId` and `updatedAt`, for example:
+
+```text
+summary.model_dump(
+    mode="json",
+    include={"profileId", "updatedAt"},
+)
+```
+
+This preserves the existing ISO datetime wire contract using the same Pydantic
+serialization convention as `/api/workbench/profiles`; it does not add summary
+fields or change field names. Keep `QueryWorkbenchService.options()` returning
+an entirely JSON-safe dictionary and leave the route's explicit
+`JSONResponse(await service.options())` unchanged. Do not replace the real
+summary model with a string-bearing fake, manually invent a date format, remove
+`updatedAt`, or broaden the endpoint through an unrelated response schema.
+
+Using `jsonable_encoder()` at the API route would also encode the datetime, but
+it is not selected: the options service already hand-selects its public fields,
+and making that projection JSON-safe keeps serialization ownership local and
+allows direct service tests to catch future non-wire values. No change to
+`ProfileReader`, `WorkspaceProfileSummary`, Studio routes, or shared API encoder
+policy is required.
+
+### Acceptance And Verification Mapping
+
+| Story AC | Repair Evidence | Planned Verification |
+|---|---|---|
+| AC1 | Eligible indexed Artifacts again populate the existing Query Lab selector while valid Query Profiles remain present. | A repository-focused test exercises zero, one, and multiple identifiers, exact order, SQL bound/filter arguments, and a `None` hydration in the middle. Service and API regressions use a real `WorkspaceProfileSummary` with a timezone-aware datetime, receive HTTP 200 and `workbench-query-options/v1`, preserve the ISO `updatedAt` string, and return all resolved index manifests. |
+| AC2-AC6 | No behavior or presentation change; the repaired list only restores already contracted options availability. | Existing Query service, browser, visual, Inspector, and final-state tests remain unchanged and green; no golden update is expected. |
+
+Prefer a fast repository unit regression with a fake async connection/cursor and
+controlled `get_artifact_manifest()` results so the exact previously failing
+method executes without requiring Docker. Cover these cases independently:
+
+- empty identifier result returns `()`;
+- one identifier returns `(manifest,)`;
+- multiple identifiers return manifests in the SQL-returned order;
+- a missing middle manifest is omitted without reordering its neighbors;
+- the executed SQL receives the requested type, revision, and limit.
+
+Add a route-level Query options contract test by installing a real
+`QueryWorkbenchService` with fake Profile/Artifact dependencies into
+`app.state.workbench_query`. The Profile dependency must return an actual
+`WorkspaceProfileSummary` constructed with a timezone-aware `datetime`, not a
+dictionary or string fixture. Assert the service payload is accepted by
+`json.dumps`, and the HTTP response is 200 with the unchanged contract: the
+valid `text-hybrid` Profile, ISO-string `updatedAt`, and multiple
+`search.index.result/v1` indexes in repository order. Keep the existing
+explicit error-path coverage for a genuine options failure. If the PostgreSQL
+integration fixture is available,
+also exercise the real repository with multiple persisted index manifests, but
+the deterministic non-Docker regression is the required gate for this Python
+iteration bug.
+
+Compare the wire timestamp to
+`summary.model_dump(mode="json")["updatedAt"]`, not merely `isinstance(str)`,
+so timezone and UTC rendering cannot silently drift from the Studio contract.
+
+### Repair Implementation Checklist
+
+- [ ] Replace only the async-generator return expression with an explicit
+  sequential await/append loop and return `tuple(manifests)`.
+- [ ] Add deterministic repository tests for empty, single, multiple, and
+  missing-manifest hydration while asserting bound/filter/order preservation.
+- [ ] Add the Query options HTTP 200 regression with one valid Query Profile and
+  multiple valid index manifests; use a real datetime-bearing summary, assert
+  the ISO wire value, and retain the genuine 503 failure test.
+- [ ] Make only the two selected Profile option fields JSON-safe in
+  `QueryWorkbenchService.options()` through Pydantic JSON-mode projection; do
+  not change the route or contract.
+- [ ] Run the focused repository, Query workbench/options, and evaluation
+  diagnosis consumers; run the real PostgreSQL case when the fixture is
+  available.
+
+### Impacts And Risks
+
+- **Upstream/API/UI/product:** None. No PRD, Core Design, Feature, Story, UI
+  reference, endpoint, status semantic, contract version, field, selector, or
+  visual change is required. `updatedAt` remains the same ISO datetime field.
+- **Repository/data:** Implementation-only correction in
+  `TraceRepository.list_artifact_manifests()`; no signature, SQL, table,
+  transaction, migration, or write-path change.
+- **Security:** Storage locations remain private because the existing manifest
+  projection and `_artifact()` response filtering are unchanged.
+- **Shared regression risk:** `list_artifact_manifests()` also serves evaluation
+  diagnosis, so run its focused consumers in addition to S-025. Sequential
+  awaits preserve the former intended semantics and avoid concurrent operations
+  on the shared connection.
+- **Serialization regression risk:** String-only fixtures can mask model-to-wire
+  defects. The required service and HTTP tests must cross the boundary with a
+  real `WorkspaceProfileSummary`; broad route encoding is intentionally avoided.
 
 ## Delivered Diagnostic Projection (Preserved)
 
@@ -601,11 +770,13 @@ None. The authorized Story Pipeline may proceed directly to development.
 
 ## Approval
 
-Approved by the user's 2026-09-15 instruction to execute the recommended S-025
-workspace/information-density repair after synchronizing with `main@aa584cc`.
-This revision changes only Query Lab presentation, styles, fixtures, and tests;
-it introduces no product, engine, API, repository, durable schema, migration,
-security, or external-call decision requiring separate approval.
+Approved by the user's 2026-09-15 instruction to execute the S-025 Query-options
+defect repair on `main@01c0f58`. The current repair changes only the
+implementation of an existing bounded repository read, the JSON safety of the
+existing options projection, and focused regression coverage. It introduces no
+product, Core Design, Feature, Story, UI, API schema, durable schema, migration,
+security, or external-call decision requiring separate approval. The earlier
+workspace repair authorization remains recorded in Change History.
 
 ## Change History
 
@@ -623,3 +794,13 @@ security, or external-call decision requiring separate approval.
   authoritative combined decision table, reference-ordered answer/Evidence,
   natural Chinese fixtures, retained fourteen goldens, and 1280/900 geometry
   coverage. The delivered provenance/read projection remains unchanged.
+- **2026-09-15:** Reproduced the Query options 503 on `main@01c0f58` and
+  approved the minimal manifest-list defect repair: preserve the bounded,
+  ordered SQL and public tuple contract; replace the invalid async-generator
+  conversion with sequential manifest hydration; skip missing manifests; and
+  add empty/single/multiple/missing plus HTTP 200 options regressions.
+- **2026-09-15:** Extended the same bounded repair after the repository fix
+  exposed a second real-endpoint 503: `WorkspaceProfileSummary.updatedAt` is a
+  datetime, so `QueryWorkbenchService.options()` must use the model's JSON-mode
+  projection for the existing ISO wire field. The route and API schema remain
+  unchanged, and the HTTP 200 regression must use the real summary model.

@@ -365,7 +365,12 @@ class TraceRepository:
             await cursor.execute("""SELECT id FROM artifacts WHERE artifact_type=%s AND schema_revision=%s
                                   ORDER BY id DESC LIMIT %s""", (artifact_type, schema_revision, limit))
             identifiers = [row["id"] for row in await cursor.fetchall()]
-        return tuple(item for identifier in identifiers if (item := await self.get_artifact_manifest(identifier)) is not None)
+        manifests = []
+        for identifier in identifiers:
+            manifest = await self.get_artifact_manifest(identifier)
+            if manifest is not None:
+                manifests.append(manifest)
+        return tuple(manifests)
 
     async def get_run_trace(self, run_id: UUID) -> RunTrace | None:
         async with self.connection.cursor() as cursor:

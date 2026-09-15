@@ -273,6 +273,12 @@ change before starting another delivery pipeline.
   answer/Verification/Evidence hierarchy. Fourteen refreshed responsive
   baselines, three desktop geometry widths, independent acceptance, and final
   review passed.
+- **2026-09-15:** S-025 repaired the real Query options catalog path: bounded
+  Artifact manifests now hydrate sequentially with their tuple contract
+  preserved, and Profile timestamps use a JSON-safe ISO projection. A branch
+  server connected to the deployed PostgreSQL data returned the valid
+  `text-hybrid` Profile and nine eligible indexes; independent acceptance and
+  final review passed.
 - **2026-09-15:** S-028 visual parity repair aligned the Documents title,
   truthful summary strip, dense table geometry, document identity hierarchy,
   and diagnostic typography with UI-003 and UI-013 while preserving real

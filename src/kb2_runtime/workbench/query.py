@@ -53,7 +53,7 @@ class QueryWorkbenchService:
         profiles = await self._profiles.list_profiles("query")
         manifests = await self._artifacts.repository.list_artifact_manifests("search.index.result", "v1", 100)
         return {"contractVersion": "workbench-query-options/v1",
-                "profiles": [{"profileId": x.profileId, "updatedAt": x.updatedAt} for x in profiles],
+                "profiles": [x.model_dump(mode="json", include={"profileId", "updatedAt"}) for x in profiles],
                 "indexes": [self._artifact(x) for x in manifests]}
 
     async def preflight(self, question: str, profile_id: str, index_id: UUID) -> dict[str, Any]:

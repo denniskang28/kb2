@@ -111,3 +111,9 @@ None. Exact query controls and renderer integration belong to Story design.
   answer/Verification/Evidence hierarchy. Natural-language fixtures, fourteen
   refreshed desktop/narrow baselines, and 1440/1280/900 geometry checks passed
   independent acceptance and final review.
+- **2026-09-15:** Repaired Query options against the real PostgreSQL catalog by
+  replacing invalid async-generator tuple construction with sequential
+  manifest hydration and projecting real Profile timestamps in JSON mode.
+  Repository boundaries, Query options HTTP behavior, the shared Comparison
+  consumer, and the deployed dataset of one valid Profile plus nine indexes
+  passed independent verification and final review.
